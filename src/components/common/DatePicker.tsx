@@ -1,0 +1,353 @@
+import React, { forwardRef, useRef, useImperativeHandle, useState, useEffect, useCallback } from 'react';
+import { format, isValid } from 'date-fns';
+import { Calendar } from 'lucide-react';
+
+interface DatePickerProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'onChange'> {
+  value?: string | null | any;
+  onChange?: (val: any) => void;
+  onDateChange?: (val: string) => void;
+  className?: string;
+  placeholder?: string;
+}
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTHS: Record<string, number> = {
+  jan: 0, january: 0,
+  feb: 1, february: 1,
+  mar: 2, march: 2,
+  apr: 3, april: 3,
+  may: 4,
+  jun: 5, june: 5,
+  jul: 6, july: 6,
+  aug: 7, august: 7,
+  sep: 8, sept: 8, september: 8,
+  oct: 9, october: 9,
+  nov: 10, november: 10,
+  dec: 11, december: 11,
+};
+
+/** ISO yyyy-MM-dd → display DD/MM/YYYY (e.g. 31/07/2026) */
+function toDisplay(iso: any): string {
+  if (!iso) return '';
+  const strVal = (typeof iso === 'string' ? iso : (iso?.target?.value || String(iso))).trim();
+  if (!strVal || strVal === '[object Object]') return '';
+
+  // If already DD/MM/YYYY
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(strVal)) {
+    return strVal;
+  }
+
+  // If ISO YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}/.test(strVal)) {
+    const [y, m, d] = strVal.slice(0, 10).split('-');
+    return `${d}/${m}/${y}`;
+  }
+
+  try {
+    const d = new Date(strVal);
+    if (!isNaN(d.getTime())) return format(d, 'dd/MM/yyyy');
+  } catch { /* ignore */ }
+  return '';
+}
+
+/** Parse DD/MM/YYYY or DD/MMM/YYYY or DD-MM-YYYY string → ISO yyyy-MM-dd string (or '' if invalid) */
+function parseDateString(text: string, allowTwoDigitYear = false): string {
+  if (!text) return '';
+  const trimmed = text.trim();
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const d = new Date(trimmed);
+    if (isValid(d)) return trimmed;
+  }
+
+  let day: number | undefined;
+  let mon: number | undefined;
+  let year: number | undefined;
+
+  // Pure 8 digits: 31072026
+  if (/^\d{8}$/.test(trimmed)) {
+    day = parseInt(trimmed.slice(0, 2), 10);
+    mon = parseInt(trimmed.slice(2, 4), 10) - 1;
+    year = parseInt(trimmed.slice(4, 8), 10);
+  }
+  // Separated parts: 31/07/2026 or 31/Jul/2026 or 31-07-2026 or 31-jul-2026
+  else {
+    const parts = trimmed.split(/[\/\-\.\s]+/);
+    if (parts.length === 3) {
+      if (/^\d{4}$/.test(parts[0])) {
+        year = parseInt(parts[0], 10);
+        mon = parseInt(parts[1], 10) - 1;
+        day = parseInt(parts[2], 10);
+      } else {
+        day = parseInt(parts[0], 10);
+        const mStr = parts[1].toLowerCase();
+        if (/^\d+$/.test(mStr)) {
+          mon = parseInt(mStr, 10) - 1;
+        } else if (MONTHS[mStr] !== undefined) {
+          mon = MONTHS[mStr];
+        }
+        const yStr = parts[2];
+        if (/^\d{4}$/.test(yStr)) {
+          year = parseInt(yStr, 10);
+        } else if (allowTwoDigitYear && /^\d{2}$/.test(yStr)) {
+          const yNum = parseInt(yStr, 10);
+          const currTwoDigit = new Date().getFullYear() % 100;
+          year = yNum > currTwoDigit ? 1900 + yNum : 2000 + yNum;
+        }
+      }
+    }
+  }
+
+  if (day === undefined || mon === undefined || year === undefined) return '';
+  if (isNaN(day) || isNaN(mon) || isNaN(year)) return '';
+  if (mon < 0 || mon > 11 || day < 1 || day > 31 || year < 1900 || year > 2100) return '';
+
+  const d = new Date(year, mon, day);
+  if (!isValid(d) || d.getFullYear() !== year || d.getMonth() !== mon || d.getDate() !== day) return '';
+
+  return format(d, 'yyyy-MM-dd');
+}
+
+/** Auto-format masked string as user types digits: DD/MM/YYYY */
+function formatMasked(input: string): string {
+  const clean = input.replace(/\D/g, '');
+  if (!clean) return '';
+
+  if (clean.length <= 2) {
+    return clean;
+  }
+  const day = clean.slice(0, 2);
+  if (clean.length <= 4) {
+    const mon = clean.slice(2);
+    return `${day}/${mon}`;
+  }
+  const mon = clean.slice(2, 4);
+  const year = clean.slice(4, 8);
+  return `${day}/${mon}/${year}`;
+}
+
+export const DatePicker = forwardRef<HTMLInputElement, DatePickerProps>(
+  ({ value, onChange, onDateChange, className, placeholder = 'DD/MM/YYYY', disabled, required, ...props }, ref) => {
+    const nativeInputRef = useRef<HTMLInputElement | null>(null);
+    const [isoValue, setIsoValue] = useState(value || '');
+    const [typedText, setTypedText] = useState(toDisplay(value || ''));
+    const [isTyping, setIsTyping] = useState(false);
+
+    useImperativeHandle(ref, () => nativeInputRef.current!);
+
+    // Sync when value prop changes externally
+    useEffect(() => {
+      if (!isTyping) {
+        const display = toDisplay(value || '');
+        setTypedText(display);
+        const iso = parseDateString(display) || (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : '');
+        setIsoValue(iso);
+      }
+    }, [value, isTyping]);
+
+    const setRef = useCallback((node: HTMLInputElement | null) => {
+      nativeInputRef.current = node;
+      if (node) {
+        const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+        if (descriptor?.set) {
+          const originalSet = descriptor.set;
+          Object.defineProperty(node, 'value', {
+            configurable: true,
+            set(val: string) {
+              originalSet.call(this, val);
+              setIsoValue(val);
+              setTypedText(toDisplay(val));
+            },
+            get() {
+              return descriptor.get ? descriptor.get.call(this) : '';
+            },
+          });
+        }
+      }
+    }, []);
+
+    const fireChange = (iso: string) => {
+      if (onDateChange) onDateChange(iso);
+      if (onChange) {
+        const fakeEvent = {
+          target: { value: iso, name: (props as any).name || '' },
+          currentTarget: { value: iso, name: (props as any).name || '' },
+          preventDefault: () => {},
+          stopPropagation: () => {},
+          toString: () => iso,
+          valueOf: () => iso,
+        } as any;
+        try {
+          fakeEvent[Symbol.toPrimitive] = () => iso;
+        } catch {}
+        (onChange as any)(iso, fakeEvent);
+      }
+    };
+
+    const handleTextInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+      setIsTyping(true);
+      const val = e.target.value;
+      const isDeleting = val.length < typedText.length;
+
+      if (isDeleting) {
+        const trimmed = val.endsWith('/') ? val.slice(0, -1) : val;
+        setTypedText(trimmed);
+        const iso = parseDateString(trimmed);
+        if (iso) {
+          setIsoValue(iso);
+          fireChange(iso);
+        } else if (!trimmed.trim()) {
+          setIsoValue('');
+          fireChange('');
+        }
+        return;
+      }
+
+      const formatted = formatMasked(val);
+      setTypedText(formatted);
+
+      const iso = parseDateString(formatted) || parseDateString(val);
+      if (iso) {
+        setIsoValue(iso);
+        fireChange(iso);
+      } else if (!val.trim()) {
+        setIsoValue('');
+        fireChange('');
+      }
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === '/') {
+        e.preventDefault();
+        const parts = typedText.split('/');
+        if (parts.length === 1 && parts[0].length > 0) {
+          const dayPadded = parts[0].padStart(2, '0');
+          setTypedText(dayPadded + '/');
+        } else if (parts.length === 2 && parts[1].length > 0) {
+          const monPadded = parts[1].padStart(2, '0');
+          setTypedText(parts[0] + '/' + monPadded + '/');
+        }
+      }
+    };
+
+    const handleTextBlur = () => {
+      setIsTyping(false);
+      let iso = parseDateString(typedText, true);
+
+      // If typedText has day and month but incomplete year, attempt completing year without wiping selected date
+      if (!iso && typedText.trim()) {
+        const parts = typedText.trim().split(/[\/\-\.\s]+/);
+        if (parts.length >= 2) {
+          const day = parseInt(parts[0], 10);
+          const mStr = parts[1].toLowerCase();
+          const mon = /^\d+$/.test(mStr) ? parseInt(mStr, 10) - 1 : MONTHS[mStr];
+
+          if (!isNaN(day) && mon !== undefined && mon >= 0 && mon <= 11 && day >= 1 && day <= 31) {
+            let fallbackYear = new Date().getFullYear();
+            if (isoValue) {
+              const prevYear = parseInt(isoValue.split('-')[0], 10);
+              if (!isNaN(prevYear)) fallbackYear = prevYear;
+            }
+            const yStr = parts[2] || '';
+            if (yStr.length > 0 && /^\d+$/.test(yStr)) {
+              if (yStr.length === 1) fallbackYear = parseInt(`200${yStr}`, 10);
+              else if (yStr.length === 3) fallbackYear = parseInt(`2${yStr}`, 10);
+            }
+            const testIso = `${fallbackYear}-${String(mon + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+            if (parseDateString(toDisplay(testIso))) {
+              iso = testIso;
+            }
+          }
+        }
+      }
+
+      if (iso) {
+        setTypedText(toDisplay(iso));
+        setIsoValue(iso);
+        fireChange(iso);
+      } else if (!typedText.trim()) {
+        setTypedText('');
+        setIsoValue('');
+        fireChange('');
+      }
+    };
+
+    const handleNativeDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const iso = e.target.value;
+      setIsoValue(iso);
+      setTypedText(toDisplay(iso));
+      setIsTyping(false);
+      fireChange(iso);
+    };
+
+    const handleCalendarClick = (e: React.MouseEvent) => {
+      if (disabled) return;
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        if (nativeInputRef.current && typeof nativeInputRef.current.showPicker === 'function') {
+          nativeInputRef.current.showPicker();
+        } else {
+          nativeInputRef.current?.focus();
+        }
+      } catch {
+        try {
+          nativeInputRef.current?.focus();
+        } catch {}
+      }
+    };
+
+    return (
+      <div className="relative w-full min-w-[130px] flex items-center group">
+        {/* Editable visible input */}
+        <input
+          type="text"
+          value={typedText}
+          placeholder={placeholder}
+          disabled={disabled}
+          required={required}
+          onChange={handleTextInput}
+          onKeyDown={handleKeyDown}
+          onBlur={handleTextBlur}
+          onFocus={() => setIsTyping(true)}
+          className={`${className} cursor-text pl-2.5 pr-8 text-gray-900 text-xs min-w-[130px]`}
+          maxLength={10}
+          autoComplete="off"
+        />
+
+        {/* Calendar icon wrapper with direct native picker overlay */}
+        <div
+          className="absolute right-0 top-0 bottom-0 w-8 flex items-center justify-center cursor-pointer"
+          title="Click to open calendar"
+          onClick={handleCalendarClick}
+        >
+          <Calendar size={14} className="text-gray-400 group-hover:text-blue-600 transition-colors pointer-events-none" />
+          <input
+            type="date"
+            ref={setRef}
+            value={isoValue}
+            onChange={handleNativeDateChange}
+            disabled={disabled}
+            tabIndex={-1}
+            aria-label="Pick date"
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+            onClick={(e) => {
+              if (disabled) {
+                e.preventDefault();
+                return;
+              }
+              try {
+                if (typeof (e.currentTarget as any).showPicker === 'function') {
+                  (e.currentTarget as any).showPicker();
+                }
+              } catch {}
+            }}
+            {...props}
+          />
+        </div>
+      </div>
+    );
+  }
+);
+
+DatePicker.displayName = 'DatePicker';

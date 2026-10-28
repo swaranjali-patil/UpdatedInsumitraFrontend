@@ -1,0 +1,753 @@
+import React, { useState } from 'react';
+import { 
+  ListTodo, Kanban, Plus, Search, Filter, Calendar, 
+  Clock, CheckCircle2, AlertCircle, Ban, RefreshCw, 
+  Pencil, ChevronDown, Check, User, Shield, MessageSquare, 
+  Sparkles, ArrowRight, MoreVertical 
+} from 'lucide-react';
+import { format } from 'date-fns';
+import ExhaustiveTaskActivityModal, { STATUS_CONFIG } from './ExhaustiveTaskActivityModal';
+import TaskActionModal, { TaskActionType } from './TaskActionModal';
+import toast from 'react-hot-toast';
+import clsx from 'clsx';
+
+interface MyTasksPanelProps {
+  tasks: any[];
+  employeesList: any[];
+  onToggleTask?: (taskId: string, currentStatus: string) => void;
+  onAddTask?: (taskPayload: any) => void;
+  isViewOnly?: boolean;
+}
+
+const DEFAULT_MY_TASKS = [
+  {
+    id: 'T1',
+    taskId: 'T1',
+    taskNumber: 'T1',
+    title: 'Follow up with Amit Sharma on Star Comprehensive ₹10L floater',
+    category: 'Sales & Lead Generation',
+    entityType: 'LEAD',
+    entityName: 'Amit Sharma (Lead #LD-4091)',
+    priority: 'CRITICAL',
+    status: 'IN_PROGRESS',
+    dueDate: new Date().toISOString(),
+    timeRequired: '30m',
+    assignedToName: 'Rahul Sharma',
+    comments: [
+      { id: 'c-1', authorId: 'u-1', authorName: 'Rahul Mehta', content: 'Offered 10% multi-year discount', createdAt: new Date().toISOString() }
+    ]
+  },
+  {
+    id: 'T2',
+    taskId: 'T2',
+    taskNumber: 'T2',
+    title: 'Upload medical examination reports for Policy #POL-8902',
+    category: 'Document Collection & KYC',
+    entityType: 'POLICY',
+    entityName: 'Sunita Patil (#POL-8902)',
+    priority: 'HIGH',
+    status: 'UPCOMING',
+    dueDate: new Date(Date.now() + 86400000).toISOString(),
+    timeRequired: '45m',
+    assignedToName: 'Anjali Nair',
+    comments: []
+  },
+  {
+    id: 'T3',
+    taskId: 'T3',
+    taskNumber: 'T3',
+    title: 'Mehta Family Care Supreme Renewal Reminder & Payment Collection',
+    category: 'Renewal Preparation & Follow-up',
+    entityType: 'POLICY',
+    entityName: 'Rajesh Mehta (#POL-4512)',
+    priority: 'HIGH',
+    status: 'PENDING',
+    dueDate: new Date(Date.now() + 86400000 * 2).toISOString(),
+    timeRequired: '20m',
+    assignedToName: 'Rahul Sharma',
+    comments: []
+  },
+  {
+    id: 'T4',
+    taskId: 'T4',
+    taskNumber: 'T4',
+    title: 'Client proposal meeting with Apex Technologies HR Director',
+    category: 'Customer Meeting / Field Visit',
+    entityType: 'CONTACT',
+    entityName: 'Apex Technologies (CON-902)',
+    priority: 'MEDIUM',
+    status: 'ON_HOLD',
+    dueDate: new Date(Date.now() + 86400000 * 3).toISOString(),
+    timeRequired: '60m',
+    assignedToName: 'Vikram Singhania',
+    comments: []
+  },
+  {
+    id: 'T5',
+    taskId: 'T5',
+    taskNumber: 'T5',
+    title: 'Vehicle damage inspection for Bajaj Allianz Motor Claim #CLM-1029',
+    category: 'Claims Assistance & Survey',
+    entityType: 'CLAIM',
+    entityName: 'Vikrant Desai (#CLM-1029)',
+    priority: 'MEDIUM',
+    status: 'DONE',
+    dueDate: new Date(Date.now() - 86400000).toISOString(),
+    timeRequired: '40m',
+    assignedToName: 'Sneha Deshmukh',
+    outcome: 'Survey report approved by surveyor',
+    comments: []
+  },
+  {
+    id: 'T6',
+    taskId: 'T6',
+    taskNumber: 'T6',
+    title: 'Submit monthly agency GST invoice & compliance paperwork',
+    category: 'Administrative & Back Office',
+    entityType: 'GENERAL',
+    entityName: 'Internal Agency Operations',
+    priority: 'LOW',
+    status: 'DONE',
+    dueDate: new Date(Date.now() - 86400000 * 2).toISOString(),
+    timeRequired: '30m',
+    assignedToName: 'Anjali Nair',
+    comments: []
+  },
+  {
+    id: 'T7',
+    taskId: 'T7',
+    taskNumber: 'T7',
+    title: 'Follow up on inactive lead duplicate inquiry',
+    category: 'Sales & Lead Generation',
+    entityType: 'LEAD',
+    entityName: 'Rohan Joshi (Lead #LD-302)',
+    priority: 'LOW',
+    status: 'CANCELLED',
+    dueDate: new Date().toISOString(),
+    timeRequired: '15m',
+    assignedToName: 'Rahul Sharma',
+    cancelReason: 'Duplicate Lead Record',
+    comments: []
+  }
+];
+
+function ensureCleanTaskIds(list: any[]): any[] {
+  return list.map((t, idx) => {
+    const raw = t.taskId || t.taskNumber || t.id;
+    let cleanId = `T${idx + 1}`;
+    if (typeof raw === 'string' && /^T\d+$/i.test(raw.trim())) {
+      cleanId = raw.trim().toUpperCase();
+    }
+    return {
+      ...t,
+      taskId: cleanId,
+      taskNumber: cleanId,
+    };
+  });
+}
+
+export default function MyTasksPanel({
+  tasks,
+  employeesList,
+  onToggleTask,
+  onAddTask,
+  isViewOnly = false
+}: MyTasksPanelProps) {
+  const [viewMode, setViewMode] = useState<'TABLE' | 'KANBAN'>('TABLE');
+  const [taskList, setTaskList] = useState<any[]>(() =>
+    ensureCleanTaskIds(tasks && tasks.length > 0 ? tasks : DEFAULT_MY_TASKS)
+  );
+
+  React.useEffect(() => {
+    if (tasks && tasks.length > 0) {
+      setTaskList(ensureCleanTaskIds(tasks));
+    } else {
+      setTaskList(ensureCleanTaskIds(DEFAULT_MY_TASKS));
+    }
+  }, [tasks]);
+
+  // Filters
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [priorityFilter, setPriorityFilter] = useState('ALL');
+  const [showFilters, setShowFilters] = useState(false);
+
+  const activeFilterCount = (statusFilter !== 'ALL' ? 1 : 0) + (priorityFilter !== 'ALL' ? 1 : 0);
+
+  // Modal States
+  const [editingTask, setEditingTask] = useState<any>(null);
+  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
+  const [isViewMode, setIsViewMode] = useState(false);
+  const [actionModalState, setActionModalState] = useState<{
+    isOpen: boolean;
+    type: TaskActionType;
+    task: any;
+  }>({
+    isOpen: false,
+    type: 'CANCEL',
+    task: null
+  });
+
+  // Filtered List
+  const filteredTasks = taskList.filter(t => {
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      const matchTitle = t.title?.toLowerCase().includes(q);
+      const matchEntity = t.entityName?.toLowerCase().includes(q);
+      const matchCategory = t.category?.toLowerCase().includes(q);
+      if (!matchTitle && !matchEntity && !matchCategory) return false;
+    }
+    if (statusFilter !== 'ALL' && t.status !== statusFilter) return false;
+    if (priorityFilter !== 'ALL' && (t.priority || 'MEDIUM') !== priorityFilter) return false;
+    return true;
+  });
+
+  // Handlers
+  const handleQuickStatusChange = (taskId: string, newStatus: string) => {
+    if (isViewOnly) return;
+    setTaskList(prev => prev.map(t => t.id === taskId ? { ...t, status: newStatus } : t));
+    toast.success(`Task status updated to ${newStatus}`);
+  };
+
+  const handleQuickPriorityChange = (taskId: string, newPriority: string) => {
+    if (isViewOnly) return;
+    setTaskList(prev => prev.map(t => t.id === taskId ? { ...t, priority: newPriority } : t));
+    toast.success(`Priority set to ${newPriority}`);
+  };
+
+  const handleOpenActionModal = (task: any, type: TaskActionType) => {
+    setActionModalState({ isOpen: true, type, task });
+  };
+
+  const handleActionConfirm = (payload: {
+    taskId: string;
+    action: TaskActionType;
+    reason: string;
+    newDueDate?: string;
+    notes?: string;
+  }) => {
+    setTaskList(prev => prev.map(t => {
+      if (t.id === payload.taskId) {
+        return {
+          ...t,
+          status: payload.action === 'CANCEL' ? 'CANCELLED' : 'RESCHEDULED',
+          dueDate: payload.newDueDate || t.dueDate,
+          cancelReason: payload.action === 'CANCEL' ? payload.reason : t.cancelReason,
+          rescheduleReason: payload.action === 'RESCHEDULE' ? payload.reason : t.rescheduleReason,
+          description: payload.notes ? `${t.description || ''}\n[${payload.action} NOTE]: ${payload.notes}` : t.description
+        };
+      }
+      return t;
+    }));
+  };
+
+  const handleSaveTask = (taskPayload: any) => {
+    if (editingTask) {
+      setTaskList(prev => prev.map(t => t.id === taskPayload.id ? { ...t, ...taskPayload } : t));
+    } else {
+      const newTask = {
+        ...taskPayload,
+        id: `t-${Date.now()}`,
+        assignedToName: 'Self'
+      };
+      setTaskList(prev => [newTask, ...prev]);
+    }
+    if (onAddTask) onAddTask(taskPayload);
+  };
+
+  // Kanban Columns
+  const KANBAN_LANES = [
+    { key: 'UPCOMING', title: 'Upcoming', color: 'border-t-blue-500 bg-blue-50/20' },
+    { key: 'IN_PROGRESS', title: 'In Progress', color: 'border-t-indigo-600 bg-indigo-50/20' },
+    { key: 'PENDING', title: 'Pending / On Hold', color: 'border-t-amber-500 bg-amber-50/20', altMatch: ['PENDING', 'ON_HOLD'] },
+    { key: 'DONE', title: 'Done / Completed', color: 'border-t-emerald-500 bg-emerald-50/20' },
+    { key: 'CANCELLED', title: 'Cancelled / Rescheduled', color: 'border-t-rose-500 bg-rose-50/20', altMatch: ['CANCELLED', 'RESCHEDULED'] }
+  ];
+
+  return (
+    <div className="space-y-4">
+      
+      {/* Top Action & Toolbar */}
+      <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        {/* Search Input */}
+        <div className="page-search-wrapper">
+          <Search className="page-search-icon" />
+          <input
+            type="text"
+            placeholder="Search tasks, contacts, policies, categories..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className="page-search-input"
+          />
+        </div>
+
+        {/* View Switcher, Filter Toggle & Action */}
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          {/* Filters Toggle Button */}
+          <button
+            type="button"
+            onClick={() => setShowFilters(!showFilters)}
+            className={`h-9 py-0 px-3 text-xs flex items-center gap-1.5 font-bold cursor-pointer rounded-xl border transition-all ${
+              showFilters 
+                ? 'bg-blue-50 border-blue-300 text-blue-700 shadow-xs' 
+                : 'bg-slate-50 border-gray-200 text-gray-700 hover:bg-gray-100'
+            }`}
+          >
+            <Filter size={13} className={showFilters ? 'text-blue-600' : 'text-gray-500'} />
+            <span>Filters</span>
+            {activeFilterCount > 0 && (
+              <span className="bg-primary-600 text-white text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                {activeFilterCount}
+              </span>
+            )}
+          </button>
+
+          {/* View Switcher: Table vs Kanban */}
+          <div className="flex p-1 bg-slate-100 rounded-xl border border-slate-200 text-xs">
+            <button
+              type="button"
+              onClick={() => setViewMode('TABLE')}
+              className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                viewMode === 'TABLE'
+                  ? 'bg-white text-gray-900 shadow-xs'
+                  : 'text-gray-500 hover:text-gray-800'
+              }`}
+            >
+              <ListTodo className="w-3.5 h-3.5" /> Table
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('KANBAN')}
+              className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                viewMode === 'KANBAN'
+                  ? 'bg-white text-primary-700 shadow-xs'
+                  : 'text-gray-500 hover:text-gray-800'
+              }`}
+            >
+              <Kanban className="w-3.5 h-3.5" /> Kanban
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Expandable Filter Panel (Shown when Filters button is clicked) */}
+      {showFilters && (
+        <div className="bg-slate-50/80 p-4 border border-slate-200 rounded-2xl shadow-xs space-y-3 animate-fade-in">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-gray-700 flex items-center gap-1.5">
+              <Filter className="w-3.5 h-3.5 text-primary-600" /> Filter Tasks
+            </span>
+            {activeFilterCount > 0 && (
+              <button
+                type="button"
+                onClick={() => { setStatusFilter('ALL'); setPriorityFilter('ALL'); }}
+                className="text-[11px] font-bold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+              >
+                Reset Filters
+              </button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+            {/* Status Filter */}
+            <div>
+              <label className="text-[11px] font-bold text-gray-600 block mb-1">Status</label>
+              <select
+                value={statusFilter}
+                onChange={e => setStatusFilter(e.target.value)}
+                className="input w-full p-2 text-xs border border-gray-200 rounded-xl bg-white font-semibold"
+              >
+                <option value="ALL">All Statuses ({taskList.length})</option>
+                <option value="UPCOMING">Upcoming</option>
+                <option value="IN_PROGRESS">In Progress</option>
+                <option value="PENDING">Pending</option>
+                <option value="ON_HOLD">On Hold</option>
+                <option value="DONE">Done</option>
+                <option value="CANCELLED">Cancelled</option>
+                <option value="RESCHEDULED">Rescheduled</option>
+              </select>
+            </div>
+
+            {/* Priority Filter */}
+            <div>
+              <label className="text-[11px] font-bold text-gray-600 block mb-1">Priority</label>
+              <select
+                value={priorityFilter}
+                onChange={e => setPriorityFilter(e.target.value)}
+                className="input w-full p-2 text-xs border border-gray-200 rounded-xl bg-white font-semibold"
+              >
+                <option value="ALL">All Priorities</option>
+                <option value="CRITICAL">🔴 Critical</option>
+                <option value="HIGH">🟠 High</option>
+                <option value="MEDIUM">🟡 Medium</option>
+                <option value="LOW">⚪ Low</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── VIEW 1: TABLE VIEW ────────────────────────────────────── */}
+      {viewMode === 'TABLE' && (
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm flex-1 flex flex-col overflow-hidden">
+          <div className="overflow-x-auto overflow-y-auto custom-scrollbar flex-1 max-h-[calc(100vh-280px)]">
+            <table className="min-w-full text-sm">
+              <thead className="sticky top-0 z-10 shadow-2xs">
+                <tr className="bg-slate-100 border-b border-slate-200/80">
+                  <th className="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-slate-700 whitespace-nowrap select-none border border-slate-200 w-24">
+                    Task ID
+                  </th>
+                  <th className="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-slate-700 whitespace-nowrap select-none border border-slate-200">
+                    Task Title
+                  </th>
+                  <th className="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-slate-700 whitespace-nowrap select-none border border-slate-200">
+                    Linked CRM Entity
+                  </th>
+                  <th className="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-slate-700 whitespace-nowrap select-none border border-slate-200">
+                    Category
+                  </th>
+                  <th className="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-slate-700 whitespace-nowrap select-none border border-slate-200">
+                    Priority
+                  </th>
+                  <th className="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-slate-700 whitespace-nowrap select-none border border-slate-200">
+                    Status
+                  </th>
+                  <th className="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-slate-700 whitespace-nowrap select-none border border-slate-200">
+                    Due Date
+                  </th>
+                  <th className="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-slate-700 whitespace-nowrap select-none border border-slate-200">
+                    Assignee
+                  </th>
+                  <th className="px-4 py-3 text-right text-[11px] font-bold uppercase tracking-wider text-slate-700 whitespace-nowrap select-none border border-slate-200">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100/60 font-medium text-gray-700">
+                {filteredTasks.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="px-5 py-16 text-center border border-slate-200">
+                      <div className="flex flex-col items-center gap-3 text-gray-400">
+                        <div className="h-12 w-12 rounded-xl bg-gray-50 flex items-center justify-center border border-slate-100">
+                          <ListTodo size={20} className="text-gray-300" />
+                        </div>
+                        <p className="text-sm font-medium">No tasks found</p>
+                        {!isViewOnly && (
+                          <button
+                            type="button"
+                            onClick={() => { setEditingTask(null); setIsTaskModalOpen(true); }}
+                            className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer mt-1"
+                          >
+                            Create Task
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredTasks.map((task, idx) => {
+                    const statusCfg = STATUS_CONFIG[task.status] || STATUS_CONFIG.IN_PROGRESS;
+                    const isDone = task.status === 'DONE';
+                    const isCancelled = task.status === 'CANCELLED';
+
+                    return (
+                      <tr
+                        key={task.id}
+                        onClick={() => {
+                          setEditingTask(task);
+                          setIsViewMode(true);
+                          setIsTaskModalOpen(true);
+                        }}
+                        className={clsx(
+                          "transition-colors duration-150 cursor-pointer",
+                          idx % 2 === 1 ? 'bg-slate-50/80' : 'bg-white',
+                          isDone && 'opacity-75',
+                          isCancelled && 'bg-rose-50/20 opacity-65',
+                          'hover:bg-blue-50/60'
+                        )}
+                      >
+                        {/* 1. Dedicated Task ID Column */}
+                        <td className="px-4 py-3 text-gray-700 align-middle text-[13px] font-medium border border-slate-200 whitespace-nowrap">
+                          <span className="font-mono text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded border border-blue-100/80 inline-block shadow-2xs">
+                            {task.taskId || `T${idx + 1}`}
+                          </span>
+                        </td>
+
+                        {/* 2. Task Title */}
+                        <td className="px-4 py-3 text-gray-700 align-middle text-[13px] font-medium border border-slate-200 max-w-sm">
+                          <div>
+                            <p className={clsx("font-semibold text-gray-900 text-[13px] leading-snug group-hover:text-blue-600 transition-colors", isDone && "line-through text-gray-500")}>
+                              {task.title}
+                            </p>
+                            {task.cancelReason && (
+                              <p className="text-[11px] text-rose-600 font-medium mt-0.5">
+                                ❌ Cancelled: {task.cancelReason}
+                              </p>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* 3. Linked CRM Entity */}
+                        <td className="px-4 py-3 text-gray-700 align-middle text-[13px] font-medium border border-slate-200">
+                          {task.entityName ? (
+                            <span className="text-[11px] text-primary-700 font-semibold inline-flex items-center gap-1 bg-primary-50/80 border border-primary-100 px-2 py-0.5 rounded-md">
+                              🔗 {task.entityName}
+                            </span>
+                          ) : (
+                            <span className="text-gray-400 text-xs">—</span>
+                          )}
+                        </td>
+
+                        {/* 4. Category */}
+                        <td className="px-4 py-3 text-gray-700 align-middle text-[13px] font-medium border border-slate-200 whitespace-nowrap">
+                          <span className="text-[11px] font-semibold text-slate-700 bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200/60">
+                            {task.category || 'General'}
+                          </span>
+                        </td>
+
+                        {/* 5. Priority with Quick Change dropdown */}
+                        <td className="px-4 py-3 text-gray-700 align-middle text-[13px] font-medium border border-slate-200 whitespace-nowrap">
+                          <select
+                            disabled={isViewOnly}
+                            value={task.priority || 'MEDIUM'}
+                            onClick={e => e.stopPropagation()}
+                            onChange={e => handleQuickPriorityChange(task.id, e.target.value)}
+                            className={`text-[10px] font-bold px-2 py-1 rounded-full border cursor-pointer ${
+                              task.priority === 'CRITICAL' ? 'bg-rose-50 text-rose-700 border-rose-200' :
+                              task.priority === 'HIGH' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                              task.priority === 'MEDIUM' ? 'bg-blue-50 text-blue-700 border-blue-200' :
+                              'bg-slate-100 text-slate-600 border-slate-200'
+                            }`}
+                          >
+                            <option value="CRITICAL">🔴 Critical</option>
+                            <option value="HIGH">🟠 High</option>
+                            <option value="MEDIUM">🟡 Medium</option>
+                            <option value="LOW">⚪ Low</option>
+                          </select>
+                        </td>
+
+                        {/* 6. Status with Quick Change dropdown */}
+                        <td className="px-4 py-3 text-gray-700 align-middle text-[13px] font-medium border border-slate-200 whitespace-nowrap">
+                          <select
+                            disabled={isViewOnly}
+                            value={task.status}
+                            onClick={e => e.stopPropagation()}
+                            onChange={e => handleQuickStatusChange(task.id, e.target.value)}
+                            className={`text-[10px] font-bold px-2.5 py-1 rounded-full border cursor-pointer ${statusCfg.bg} ${statusCfg.text} ${statusCfg.border}`}
+                          >
+                            <option value="UPCOMING">Upcoming</option>
+                            <option value="IN_PROGRESS">In Progress</option>
+                            <option value="PENDING">Pending</option>
+                            <option value="ON_HOLD">On Hold</option>
+                            <option value="DONE">Done</option>
+                            <option value="CANCELLED">Cancelled</option>
+                            <option value="RESCHEDULED">Rescheduled</option>
+                          </select>
+                        </td>
+
+                        {/* 7. Due Date */}
+                        <td className="px-4 py-3 text-gray-700 align-middle text-[13px] font-medium border border-slate-200 whitespace-nowrap">
+                          <div className="flex flex-col">
+                            <span className="text-[12px] font-semibold text-gray-800 flex items-center gap-1">
+                              <Calendar size={12} className="text-gray-400" />
+                              {task.dueDate ? format(new Date(task.dueDate), 'dd/MMM/yyyy') : '—'}
+                            </span>
+                            {task.timeRequired && (
+                              <span className="text-[10px] text-gray-400">⏱ {task.timeRequired}</span>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* 8. Assignee */}
+                        <td className="px-4 py-3 text-gray-700 align-middle text-[13px] font-medium border border-slate-200 whitespace-nowrap">
+                          <div className="flex items-center gap-1.5">
+                            <div className="w-6 h-6 rounded-full bg-slate-200 flex items-center justify-center text-[10px] font-bold text-slate-600 shrink-0">
+                              {task.assignedToName ? task.assignedToName.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2) : 'U'}
+                            </div>
+                            <span className="text-[12px] text-gray-700 font-medium">{task.assignedToName || 'Self'}</span>
+                          </div>
+                        </td>
+
+                        {/* 9. Actions */}
+                        <td className="px-4 py-3 text-gray-700 align-middle text-[13px] font-medium border border-slate-200 text-right whitespace-nowrap">
+                          <div className="flex items-center justify-end gap-1.5" onClick={e => e.stopPropagation()}>
+                            {!isViewOnly && !isDone && (
+                              <button
+                                type="button"
+                                title="Mark as Done"
+                                onClick={() => handleQuickStatusChange(task.id, 'DONE')}
+                                className="p-1.5 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors cursor-pointer border border-emerald-200/60"
+                              >
+                                <Check className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+
+                            {!isViewOnly && (
+                              <>
+                                <button
+                                  type="button"
+                                  title="Reschedule Task"
+                                  onClick={() => handleOpenActionModal(task, 'RESCHEDULE')}
+                                  className="p-1.5 rounded-lg bg-purple-50 text-purple-700 hover:bg-purple-100 transition-colors cursor-pointer border border-purple-200/60"
+                                >
+                                  <RefreshCw className="w-3.5 h-3.5" />
+                                </button>
+
+                                <button
+                                  type="button"
+                                  title="Cancel Task"
+                                  onClick={() => handleOpenActionModal(task, 'CANCEL')}
+                                  className="p-1.5 rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 transition-colors cursor-pointer border border-rose-200/60"
+                                >
+                                  <Ban className="w-3.5 h-3.5" />
+                                </button>
+                              </>
+                            )}
+
+                            <button
+                              type="button"
+                              title="View & Edit Task Details"
+                              onClick={() => { setEditingTask(task); setIsViewMode(false); setIsTaskModalOpen(true); }}
+                              className="p-1.5 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors cursor-pointer border border-blue-200/80"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── VIEW 2: KANBAN BOARD ──────────────────────────────────── */}
+      {viewMode === 'KANBAN' && (
+        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+          {KANBAN_LANES.map(lane => {
+            const laneTasks = filteredTasks.filter(t => {
+              if (lane.altMatch) {
+                return lane.altMatch.includes(t.status);
+              }
+              return t.status === lane.key;
+            });
+
+            return (
+              <div
+                key={lane.key}
+                className={`bg-slate-50/90 rounded-2xl border border-slate-200 p-3 space-y-3 flex flex-col min-h-[550px] border-t-4 ${lane.color}`}
+              >
+                {/* Lane Header */}
+                <div className="flex items-center justify-between px-1">
+                  <h3 className="text-xs font-bold text-gray-800 uppercase tracking-wider">
+                    {lane.title}
+                  </h3>
+                  <span className="text-[10px] font-bold text-gray-500 bg-white px-2 py-0.5 rounded-full border border-gray-200">
+                    {laneTasks.length}
+                  </span>
+                </div>
+
+                {/* Lane Task Cards */}
+                <div className="space-y-2.5 flex-1 overflow-y-auto custom-scrollbar">
+                  {laneTasks.length === 0 ? (
+                    <div className="h-32 flex items-center justify-center border border-dashed border-gray-200 rounded-xl text-[11px] text-gray-400">
+                      No tasks in this lane
+                    </div>
+                  ) : (
+                    laneTasks.map(task => (
+                      <div
+                        key={task.id}
+                        onClick={() => {
+                          setEditingTask(task);
+                          setIsViewMode(true);
+                          setIsTaskModalOpen(true);
+                        }}
+                        className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-2xs hover:shadow-md hover:border-blue-300 transition-all space-y-2 group cursor-pointer"
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[9px] font-mono font-bold text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded shrink-0">
+                              {task.taskId || 'T1'}
+                            </span>
+                            <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase ${
+                              task.priority === 'CRITICAL' ? 'bg-rose-100 text-rose-700' :
+                              task.priority === 'HIGH' ? 'bg-amber-100 text-amber-700' :
+                              task.priority === 'MEDIUM' ? 'bg-blue-100 text-blue-700' :
+                              'bg-slate-100 text-slate-600'
+                            }`}>
+                              {task.priority || 'MEDIUM'}
+                            </span>
+                          </div>
+
+                          <span className="text-[10px] text-gray-400 flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            {task.timeRequired || '30m'}
+                          </span>
+                        </div>
+
+                        <h4 className="text-xs font-bold text-gray-900 leading-snug group-hover:text-blue-600 transition-colors">
+                          {task.title}
+                        </h4>
+
+                        {task.entityName && (
+                          <p className="text-[11px] text-primary-700 font-semibold truncate">
+                            🔗 {task.entityName}
+                          </p>
+                        )}
+
+                        <div className="flex items-center justify-between pt-2 border-t border-gray-100 text-[10px] text-gray-400" onClick={e => e.stopPropagation()}>
+                          <span className="flex items-center gap-1 font-medium">
+                            <Calendar className="w-3 h-3" />
+                            {task.dueDate ? format(new Date(task.dueDate), 'dd MMM') : '—'}
+                          </span>
+
+                          <div className="flex items-center gap-1">
+                            {task.comments && task.comments.length > 0 && (
+                              <span className="flex items-center gap-0.5 text-primary-700 font-bold">
+                                <MessageSquare className="w-3 h-3" /> {task.comments.length}
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => { setEditingTask(task); setIsViewMode(false); setIsTaskModalOpen(true); }}
+                              className="p-1 rounded text-gray-400 hover:text-primary-600 hover:bg-primary-50 transition-colors cursor-pointer"
+                            >
+                              <Pencil className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Exhaustive Task / Activity Modal */}
+      <ExhaustiveTaskActivityModal
+        isOpen={isTaskModalOpen}
+        onClose={() => { setIsTaskModalOpen(false); setEditingTask(null); }}
+        onSave={handleSaveTask}
+        employeesList={employeesList}
+        initialTask={editingTask}
+        initialIsViewMode={isViewMode}
+      />
+
+      {/* Task Action Modal (Cancel / Reschedule) */}
+      <TaskActionModal
+        isOpen={actionModalState.isOpen}
+        onClose={() => setActionModalState(prev => ({ ...prev, isOpen: false }))}
+        actionType={actionModalState.type}
+        task={actionModalState.task}
+        onConfirm={handleActionConfirm}
+      />
+
+    </div>
+  );
+}

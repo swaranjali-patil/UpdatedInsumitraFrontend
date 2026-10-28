@@ -1,0 +1,2498 @@
+import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { policiesService } from '@api/index';
+import {
+  Download, FileText, Calendar, CheckCircle2, AlertTriangle, TrendingUp,
+  Search, Filter, Plus, Phone, MessageSquare, ExternalLink,
+  ChevronLeft, ChevronRight, Eye, MoreHorizontal, User, Shield,
+  CreditCard, Check, Clock, X, Send, ArrowRight, Info, Award,
+  Sparkles, SlidersHorizontal, Bell, RefreshCw, Layers, LayoutGrid, List, ChevronDown, MessageCircle, ChevronUp,
+  RotateCcw
+} from 'lucide-react';
+import Modal from '@comps/common/Modal';
+import toast from 'react-hot-toast';
+import clsx from 'clsx';
+import { sortData } from '../../utils/sortUtils';
+import { parseExtraNotes } from './index';
+
+// ── Types ──────────────────────────────────────────────────────────────────────
+export interface EmiRecord {
+  id: string;
+  policyNo: string;
+  customerName: string;
+  customerContactNo?: string;
+  insuranceCompanyType?: string;
+  customerTag: string;
+  product: string;
+  insurer: string;
+  loanProvider?: string;
+  emiGateway?: string;
+  downpaymentAmount?: number;
+  totalInstallmentAmount?: number;
+  paidInstallmentsAmount?: number;
+  processingFee?: number;
+  loanAmount?: number;
+  premiumAmount?: number;
+  installmentFrequency?: string;
+  tenure: string;
+  paymentMode: string;
+  totalEmis: number;
+  paidEmis: number;
+  currentEmiNo: number;
+  dueDate: string;
+  amount: number;
+  paidAmountTotal: number;
+  remainingAmountTotal: number;
+  status: 'DUE' | 'PAID' | 'UPCOMING' | 'OVERDUE' | 'MESSAGE SENT' | 'CUSTOMER CONTACTED' | 'PAYMENT FAILED';
+  nextAction: 'Send Reminder' | 'View Receipt' | 'Upcoming' | 'Call Customer' | 'Follow Up';
+  employee: string;
+  history: Array<{ id: string; date: string; type: 'whatsapp' | 'call' | 'payment' | 'note'; note: string; author: string }>;
+  schedule: Array<{ emiNo: number; dueDate: string; rawDueDate?: string; amount: number; status: 'PAID' | 'DUE' | 'UPCOMING' | 'OVERDUE'; paidDate?: string }>;
+  notes?: string;
+}
+
+// ── Initial Mock Data ──────────────────────────────────────────────────────────
+const INITIAL_EMI_DATA: EmiRecord[] = [];
+
+// Helper format function
+const fmtCurr = (n: number) => `₹ ${Number(n).toLocaleString('en-IN')}`;
+
+const MONTH_NAMES_MAP: Record<string, number> = {
+  jan: 0, january: 0,
+  feb: 1, february: 1,
+  mar: 2, march: 2,
+  apr: 3, april: 3,
+  may: 4,
+  jun: 5, june: 5,
+  jul: 6, july: 6,
+  aug: 7, august: 7,
+  sep: 8, sept: 8, september: 8,
+  oct: 9, october: 9,
+  nov: 10, november: 10,
+  dec: 11, december: 11,
+};
+
+export const parseDateSafe = (val?: any): Date | null => {
+  if (!val) return null;
+  if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
+  if (typeof val === 'number') {
+    const d = new Date(val > 1e11 ? val : val * 1000);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  if (typeof val !== 'string') {
+    const d = new Date(val);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  const clean = val.trim();
+  if (!clean || clean === 'N/A' || clean === '—' || clean === '-') return null;
+
+  // 1. Direct ISO / standard parse with timezone preservation
+  if (/^\d{4}-\d{2}-\d{2}T/.test(clean)) {
+    const d = new Date(clean);
+    if (!isNaN(d.getTime())) return d;
+  }
+
+  // 2. YYYY-MM-DD
+  const ymdMatch = clean.match(/^(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})/);
+  if (ymdMatch) {
+    const d = new Date(Number(ymdMatch[1]), Number(ymdMatch[2]) - 1, Number(ymdMatch[3]), 12, 0, 0);
+    if (!isNaN(d.getTime())) return d;
+  }
+
+  // 3. DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY (4-digit year)
+  const dmyMatch = clean.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/);
+  if (dmyMatch) {
+    const d = new Date(Number(dmyMatch[3]), Number(dmyMatch[2]) - 1, Number(dmyMatch[1]), 12, 0, 0);
+    if (!isNaN(d.getTime())) return d;
+  }
+
+  // 4. DD/MM/YY or DD-MM-YY or DD.MM.YY (2-digit year)
+  const dmy2Match = clean.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2})$/);
+  if (dmy2Match) {
+    const yr = Number(dmy2Match[3]);
+    const fullYr = yr < 50 ? 2000 + yr : 1900 + yr;
+    const d = new Date(fullYr, Number(dmy2Match[2]) - 1, Number(dmy2Match[1]), 12, 0, 0);
+    if (!isNaN(d.getTime())) return d;
+  }
+
+  // 5. DD/MMM/YYYY or DD-MMM-YYYY or DD MMM YYYY (e.g. 15/Oct/2026, 15-Oct-2026, 15 Oct 2026)
+  const dMmmYMatch = clean.match(/^(\d{1,2})[\/\-\.\s]+([a-zA-Z]+)[\/\-\.\s]+(\d{2,4})/);
+  if (dMmmYMatch) {
+    const mStr = dMmmYMatch[2].toLowerCase();
+    if (MONTH_NAMES_MAP[mStr] !== undefined) {
+      let yr = Number(dMmmYMatch[3]);
+      if (yr < 100) yr = yr < 50 ? 2000 + yr : 1900 + yr;
+      const d = new Date(yr, MONTH_NAMES_MAP[mStr], Number(dMmmYMatch[1]), 12, 0, 0);
+      if (!isNaN(d.getTime())) return d;
+    }
+  }
+
+  // 6. MMM DD, YYYY or MMM DD YYYY (e.g. Oct 15, 2026)
+  const mmmDYMatch = clean.match(/^([a-zA-Z]+)[\/\-\.\s]+(\d{1,2}),?[\/\-\.\s]+(\d{2,4})/);
+  if (mmmDYMatch) {
+    const mStr = mmmDYMatch[1].toLowerCase();
+    if (MONTH_NAMES_MAP[mStr] !== undefined) {
+      let yr = Number(mmmDYMatch[3]);
+      if (yr < 100) yr = yr < 50 ? 2000 + yr : 1900 + yr;
+      const d = new Date(yr, MONTH_NAMES_MAP[mStr], Number(mmmDYMatch[2]), 12, 0, 0);
+      if (!isNaN(d.getTime())) return d;
+    }
+  }
+
+  // 7. Fallback native Date
+  const parsed = new Date(clean);
+  if (!isNaN(parsed.getTime())) {
+    return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate(), 12, 0, 0);
+  }
+
+  return null;
+};
+
+interface EmiKanbanCardProps {
+  card: EmiRecord;
+  onOpen: (c: EmiRecord) => void;
+  onCall: (c: EmiRecord) => void;
+  onWhatsApp: (c: EmiRecord) => void;
+}
+
+// ── Lead-Style Kanban Card Component ──────────────────────────────────────────
+function EmiKanbanCard({ card, onOpen, onCall, onWhatsApp }: EmiKanbanCardProps) {
+  const initials = card.customerName.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() || 'CU';
+
+  const BORDER_TOP: Record<string, string> = {
+    DUE: 'border-t-4 border-t-amber-500',
+    PAID: 'border-t-4 border-t-emerald-500',
+    UPCOMING: 'border-t-4 border-t-blue-500',
+    'MESSAGE SENT': 'border-t-4 border-t-purple-500',
+    'CUSTOMER CONTACTED': 'border-t-4 border-t-sky-500',
+    OVERDUE: 'border-t-4 border-t-rose-500',
+    'PAYMENT FAILED': 'border-t-4 border-t-amber-600',
+  };
+
+  const AVATAR_BG: Record<string, string> = {
+    DUE: 'bg-amber-500 ring-amber-500/20',
+    PAID: 'bg-emerald-500 ring-emerald-500/20',
+    UPCOMING: 'bg-blue-500 ring-blue-500/20',
+    'MESSAGE SENT': 'bg-purple-500 ring-purple-500/20',
+    'CUSTOMER CONTACTED': 'bg-sky-500 ring-sky-500/20',
+    OVERDUE: 'bg-rose-500 ring-rose-500/20',
+    'PAYMENT FAILED': 'bg-amber-600 ring-amber-600/20',
+  };
+
+  return (
+    <div
+      onClick={() => onOpen(card)}
+      className={clsx(
+        'bg-white rounded-2xl p-3.5 shadow-xs border border-slate-100 hover:-translate-y-0.5 transition-all duration-150 flex flex-col gap-2.5 group relative overflow-hidden cursor-pointer hover:shadow-md hover:border-slate-300',
+        BORDER_TOP[card.status] ?? 'border-t-4 border-t-slate-300'
+      )}
+    >
+      {/* Top Header: Avatar Initials + Policy Number & Tag */}
+      <div className="flex items-center justify-between min-w-0">
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
+          <div className={clsx('h-7 w-7 rounded-full flex items-center justify-center text-[10px] font-extrabold text-white shrink-0 shadow-xs ring-4', AVATAR_BG[card.status] ?? 'bg-slate-500 ring-slate-500/20')}>
+            {initials}
+          </div>
+          <span className="px-1.5 py-0.5 rounded border border-slate-200 text-[9px] font-bold uppercase bg-slate-50 text-slate-600 truncate">
+            {card.customerTag}
+          </span>
+        </div>
+        <span className="text-[10px] font-bold text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200/50">
+          {card.policyNo}
+        </span>
+      </div>
+
+      {/* Title & Customer Name */}
+      <div className="min-w-0">
+        <h4 className="text-[13px] font-bold text-slate-900 leading-snug group-hover:text-blue-600 transition-colors truncate">
+          {card.customerName}
+        </h4>
+        <p className="text-[10px] text-slate-500 font-medium mt-0.5 flex flex-wrap items-center gap-1 truncate">
+          <Shield size={11} className="text-slate-400 shrink-0" />
+          <span>{card.product}</span>
+        </p>
+      </div>
+
+      <div className="border-t border-slate-100/80 my-0.5" />
+
+      {/* EMI Info & Due Date */}
+      <div className="space-y-1.5 text-xs text-slate-700 font-medium">
+        <div className="flex items-center justify-between text-[11px] text-slate-600">
+          <span className="font-semibold text-slate-500">Installment No: <strong className="text-slate-800 font-extrabold">{card.status === 'PAID' || card.paidEmis >= card.totalEmis ? card.totalEmis : card.paidEmis + 1}/{card.totalEmis}</strong></span>
+          <span className={clsx(
+            'text-[10px] font-bold px-1.5 py-0.5 rounded',
+            card.status === 'PAID' ? 'text-emerald-700 bg-emerald-50 border border-emerald-200' : 'text-slate-500 bg-slate-100'
+          )}>
+            {card.status === 'PAID' ? 'Settled' : `Due: ${card.dueDate.split(' ').slice(0, 2).join(' ')}`}
+          </span>
+        </div>
+
+        {/* Amounts Breakdown: Total Premium | Downpayment | Inst. Amount | Pending */}
+        <div className="grid grid-cols-2 gap-1.5 mt-1 text-[10px]">
+          <div className="flex flex-col bg-slate-50 border border-slate-200/80 rounded-xl px-2.5 py-1">
+            <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider">Total Premium</span>
+            <span className="font-extrabold text-slate-800 text-xs">
+              ₹{Number(card.premiumAmount || (card.amount * card.totalEmis)).toLocaleString('en-IN')}
+            </span>
+          </div>
+          <div className="flex flex-col bg-blue-50/80 border border-blue-200/80 rounded-xl px-2.5 py-1">
+            <span className="text-[9px] text-blue-700 font-bold uppercase tracking-wider">Downpayment</span>
+            <span className="font-extrabold text-blue-900 text-xs">
+              ₹{Number(card.downpaymentAmount || 0).toLocaleString('en-IN')}
+            </span>
+          </div>
+          <div className="flex flex-col bg-emerald-50/80 border border-emerald-200/80 rounded-xl px-2.5 py-1">
+            <span className="text-[9px] text-emerald-700 font-bold uppercase tracking-wider">Inst. Amount</span>
+            <span className="font-extrabold text-emerald-900 text-xs">
+              ₹{Number(card.amount).toLocaleString('en-IN')}
+            </span>
+          </div>
+          <div className="flex flex-col bg-amber-50/80 border border-amber-200/80 rounded-xl px-2.5 py-1">
+            <span className="text-[9px] text-amber-700 font-bold uppercase tracking-wider">Pending Amount</span>
+            <span className="font-extrabold text-amber-900 text-xs">
+              ₹{Number(card.remainingAmountTotal).toLocaleString('en-IN')}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Footer: Assignee & Action Buttons */}
+      <div className="flex items-center justify-between border-t border-slate-100 pt-2 mt-0.5 gap-2" onClick={e => e.stopPropagation()}>
+        <div className="flex flex-wrap items-center gap-1 text-slate-500 text-[10px] font-bold truncate">
+          <User size={11} className="text-slate-400 shrink-0" />
+          <span className="truncate">{card.employee}</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button
+            onClick={() => onCall(card)}
+            className="p-1.5 rounded-lg bg-slate-50 border border-slate-200 hover:bg-slate-100 text-slate-600 cursor-pointer transition-colors"
+            title="Call Customer"
+          >
+            <Phone size={11} />
+          </button>
+          <button
+            onClick={() => onWhatsApp(card)}
+            className="p-1.5 rounded-lg bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-600 cursor-pointer transition-colors"
+            title="Send WhatsApp Reminder"
+          >
+            <MessageSquare size={11} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export interface MonthPickerDropdownProps {
+  selectedMonth: string;
+  onChange: (m: string) => void;
+}
+
+// ── Redesigned Interactive 12-Month Calendar Selector Dropdown Component ──────────────
+export function MonthPickerDropdown({ selectedMonth, onChange }: MonthPickerDropdownProps) {
+  const [open, setOpen] = useState(false);
+  const [pickerYear, setPickerYear] = useState(() => new Date().getFullYear());
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (popoverRef.current && !popoverRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleSelectMonth = (m: string) => {
+    onChange(`${m} ${pickerYear}`);
+    setOpen(false);
+  };
+
+  return (
+    <div
+      className="relative"
+      ref={popoverRef}
+
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={clsx(
+          'bg-blue-50/90 hover:bg-blue-100/90 border border-blue-200/90 rounded-2xl px-4 py-2 text-xs font-black text-blue-900 flex items-center gap-2.5 outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer shadow-2xs hover:shadow-xs transition-all',
+          open && 'ring-2 ring-blue-500/30 bg-blue-100/90'
+        )}
+      >
+        <div className="w-5 h-5 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold text-[10px] shrink-0 shadow-xs">
+          <Calendar size={12} />
+        </div>
+        <span className="tracking-tight">{selectedMonth}</span>
+        <ChevronDown size={14} className={clsx('text-blue-500 transition-transform duration-200 ml-1', open && 'rotate-180')} />
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full pt-2.5 z-50">
+        <div className="w-72 bg-white rounded-2xl border border-slate-200/90 shadow-2xl p-4 animate-fadeIn space-y-3.5">
+          {/* Year Header with prev/next arrows */}
+          <div className="bg-slate-50 border border-slate-200/70 rounded-xl p-1.5 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setPickerYear(y => y - 1)}
+              className="p-1 rounded-lg bg-white shadow-xs border border-slate-200 hover:bg-blue-50 text-slate-700 hover:text-blue-600 transition-colors cursor-pointer"
+              title="Previous Year"
+            >
+              <ChevronLeft size={15} />
+            </button>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs font-black text-slate-900 tracking-wide">{pickerYear}</span>
+              <span className="text-[10px] font-bold text-blue-600 uppercase bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100">Year</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setPickerYear(y => y + 1)}
+              className="p-1 rounded-lg bg-white shadow-xs border border-slate-200 hover:bg-blue-50 text-slate-700 hover:text-blue-600 transition-colors cursor-pointer"
+              title="Next Year"
+            >
+              <ChevronRight size={15} />
+            </button>
+          </div>
+
+          {/* 12 Months Grid (3x4) */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            {MONTHS.map(m => {
+              const fullMonthStr = `${m} ${pickerYear}`;
+              const isSelected = selectedMonth === fullMonthStr;
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => handleSelectMonth(m)}
+
+                  className={clsx(
+                    'py-2 px-1 rounded-xl text-xs font-bold transition-all text-center cursor-pointer',
+                    isSelected
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-500/25 font-black scale-[1.02] ring-2 ring-blue-600/20'
+                      : 'bg-slate-50/80 hover:bg-blue-50/90 text-slate-700 hover:text-blue-600 border border-slate-200/60 font-extrabold hover:scale-[1.02]'
+                  )}
+                >
+                  {m.slice(0, 3)}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Quick Select Current Month / All Months */}
+          <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  const curMonth = new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+                  onChange(curMonth);
+                  setPickerYear(new Date().getFullYear());
+                  setOpen(false);
+                }}
+                className="text-[11px] font-bold text-blue-600 hover:text-blue-700 flex flex-wrap items-center gap-1 cursor-pointer bg-blue-50/80 px-2 py-1 rounded-lg border border-blue-100"
+              >
+                <Sparkles size={11} className="text-blue-600" />
+                <span>Current Month</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onChange('All Months');
+                  setOpen(false);
+                }}
+
+                className={clsx(
+                  'text-[11px] font-bold px-2 py-1 rounded-lg border cursor-pointer transition-colors',
+                  selectedMonth === 'All Months'
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'text-slate-600 hover:text-blue-600 bg-slate-50 border-slate-200'
+                )}
+              >
+                All Months
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="text-[11px] font-bold text-slate-400 hover:text-slate-600 cursor-pointer px-2 py-1"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function EmiTrackingView({ selectedMonth }: { selectedMonth: string }) {
+  const [data, setData] = useState<EmiRecord[]>([]);
+  const qc = useQueryClient();
+  const { data: policiesRes, isLoading } = useQuery({
+    queryKey: ['policies-emi-tracking'],
+    queryFn: () => policiesService.list({ limit: 2000 })
+  });
+
+  useEffect(() => {
+    const rawPolicies = Array.isArray(policiesRes?.data) ? policiesRes.data : Array.isArray(policiesRes) ? policiesRes : [];
+    const derivedData = rawPolicies
+      .filter((p: any) => {
+        if (!p) return false;
+        if ((p as any).emiCase === false || (p as any).installmentCase === false) return false;
+        const extra = parseExtraNotes(p.notes);
+        if (extra.emiCase === false) return false;
+        return Boolean(extra.emiCase || (p as any).emiCase || (p as any).installmentCase);
+      })
+      .map((p: any) => {
+        const extra = parseExtraNotes(p.notes);
+        const totalPremiumAmount = Number(p.premiumAmount || 0);
+        const downpaymentAmount = Number(extra.downpaymentAmount || 0);
+
+        // Required 1: Initial Net Installment Balance:
+        // netInstallmentBalance = totalPremium - downpayment
+        const netInstallmentBalance = Math.max(0, totalPremiumAmount - downpaymentAmount);
+
+        const freq = String((extra as any).paymentFrequency || p.paymentFrequency || 'YEARLY').toUpperCase().replace(/[-_\s]/g, '');
+
+        const rawStart = parseDateSafe(p.startDate) || parseDateSafe(extra.firstPremiumDate) || parseDateSafe(extra.firstInstallmentDate) || parseDateSafe(extra.paymentDate) || new Date();
+        const rawEnd = parseDateSafe(p.endDate) || parseDateSafe(p.maturityDate) || parseDateSafe(extra.lastInstallmentDate) || new Date(rawStart.getTime() + 365 * 24 * 3600 * 1000);
+        const tenureYears = Math.max(1, Math.round((rawEnd.getTime() - rawStart.getTime()) / (365.25 * 24 * 3600 * 1000)));
+
+        let expectedCount = extra.noOfInstallments || 0;
+        if (!expectedCount) {
+          if (extra.installmentAmount && extra.installmentAmount > 0 && netInstallmentBalance > 0) {
+            expectedCount = Math.round(netInstallmentBalance / extra.installmentAmount);
+          } else if (freq === 'MONTHLY') expectedCount = 12 * tenureYears;
+          else if (freq === 'QUARTERLY') expectedCount = 4 * tenureYears;
+          else if (freq === 'HALFYEARLY' || freq === 'SEMIANNUAL') expectedCount = 2 * tenureYears;
+          else if (freq === 'SINGLE' || freq === 'FULLPAYMENT') expectedCount = 1;
+          else expectedCount = 1 * tenureYears; // YEARLY
+        }
+        expectedCount = Math.max(1, expectedCount);
+
+        // Validate that: netInstallmentBalance == numberOfInstallments * installmentAmount
+        let expectedInstAmt = extra.installmentAmount;
+        if (!expectedInstAmt || expectedInstAmt <= 0) {
+          expectedInstAmt = expectedCount > 0 ? Math.round(netInstallmentBalance / expectedCount) : netInstallmentBalance;
+        }
+
+        const totalInstallmentAmount = (expectedCount * expectedInstAmt > 0 && Math.abs(expectedCount * expectedInstAmt - netInstallmentBalance) <= 1)
+          ? netInstallmentBalance
+          : (expectedCount * expectedInstAmt > 0 ? expectedCount * expectedInstAmt : netInstallmentBalance);
+
+        const totalPolicyAmount = totalPremiumAmount > 0 ? totalPremiumAmount : (downpaymentAmount + totalInstallmentAmount);
+
+        const hasExplicitPaymentDate = Boolean(extra.paymentDate && extra.paymentDate !== 'N/A');
+
+        const initialPaidDate = parseDateSafe(extra.paymentDate) ||
+          parseDateSafe(extra.firstPremiumDate) ||
+          parseDateSafe(p.startDate) ||
+          rawStart;
+
+        let dbPayments = Array.isArray(p.payments) ? [...p.payments] : [];
+
+        const dbPaidPayments = dbPayments.filter((pmt: any) => pmt.isPaid || pmt.paidDate);
+        const totalDbPaidCount = dbPaidPayments.length;
+
+        // Check if DB payments match this policy's configuration and are not stale/corrupted
+        const isDbPaymentsValid =
+          dbPayments.length === expectedCount &&
+          dbPayments.every((pmt: any) => {
+            if (!pmt.dueDate) return false;
+            const d = parseDateSafe(pmt.dueDate);
+            if (!d) return false;
+            return true;
+          });
+
+        let payments: any[] = [];
+        if (isDbPaymentsValid) {
+          payments = dbPayments.map((pmt: any, idx: number) => {
+            const isPaid = Boolean(
+              pmt.isPaid ||
+              (pmt.paidDate && pmt.paidDate !== 'N/A') ||
+              idx < totalDbPaidCount ||
+              (idx === 0 && hasExplicitPaymentDate)
+            );
+            return {
+              ...pmt,
+              amount: extra.installmentAmount || expectedInstAmt,
+              isPaid,
+              paidDate: pmt.paidDate || (isPaid ? (extra.paymentDate || pmt.updatedAt || initialPaidDate.toISOString()) : undefined),
+            };
+          });
+        } else {
+          // Synthesize / reconcile schedule from policy's real settings
+          let firstDate = parseDateSafe(extra.firstInstallmentDate) ||
+            parseDateSafe(extra.firstPremiumDate) ||
+            parseDateSafe(p.startDate) ||
+            rawStart;
+
+          const instDayMatch = extra.emiDate ? String(extra.emiDate).match(/\d+/) : null;
+          const preferredDay = instDayMatch ? parseInt(instDayMatch[0], 10) : null;
+
+          for (let i = 0; i < expectedCount; i++) {
+            let curDate = new Date(firstDate);
+            if (i > 0) {
+              if (freq === 'MONTHLY' || (extra.emiCase && expectedCount > 1 && freq !== 'QUARTERLY' && freq !== 'HALFYEARLY' && freq !== 'YEARLY')) {
+                curDate.setMonth(curDate.getMonth() + i);
+              } else if (freq === 'QUARTERLY') {
+                curDate.setMonth(curDate.getMonth() + i * 3);
+              } else if (freq === 'HALFYEARLY' || freq === 'SEMIANNUAL') {
+                curDate.setMonth(curDate.getMonth() + i * 6);
+              } else {
+                curDate.setFullYear(curDate.getFullYear() + i);
+              }
+
+              if (preferredDay && preferredDay >= 1 && preferredDay <= 31) {
+                const maxDays = new Date(curDate.getFullYear(), curDate.getMonth() + 1, 0).getDate();
+                curDate.setDate(Math.min(preferredDay, maxDays));
+              }
+
+              if (i === expectedCount - 1 && extra.lastInstallmentDate) {
+                const parsedLast = parseDateSafe(extra.lastInstallmentDate);
+                if (parsedLast) curDate = parsedLast;
+              }
+            } else if (preferredDay && preferredDay >= 1 && preferredDay <= 31) {
+              const maxDays = new Date(curDate.getFullYear(), curDate.getMonth() + 1, 0).getDate();
+              curDate.setDate(Math.min(preferredDay, maxDays));
+            }
+
+            const dbPmt = dbPayments[i];
+            const isMatchingPaidDb = dbPaidPayments.some((pmt: any) => {
+              // Match by dueDate year+month
+              if (pmt.dueDate) {
+                const d = parseDateSafe(pmt.dueDate);
+                if (d && d.getFullYear() === curDate.getFullYear() && d.getMonth() === curDate.getMonth()) return true;
+              }
+              // Also match by paidDate year+month (handles case where dueDate = today but EMI is for this month)
+              if (pmt.paidDate) {
+                const pd = parseDateSafe(pmt.paidDate);
+                if (pd && pd.getFullYear() === curDate.getFullYear() && pd.getMonth() === curDate.getMonth()) return true;
+              }
+              return false;
+            });
+
+            const isPaid = Boolean(
+              dbPmt?.isPaid ||
+              (dbPmt?.paidDate && dbPmt.paidDate !== 'N/A') ||
+              i < totalDbPaidCount ||
+              isMatchingPaidDb ||
+              (i === 0 && hasExplicitPaymentDate)
+            );
+            const paidDate = dbPaidPayments[i]?.paidDate || dbPmt?.paidDate || (isPaid ? (extra.paymentDate || initialPaidDate.toISOString()) : undefined);
+
+            const y = curDate.getFullYear();
+            const m = String(curDate.getMonth() + 1).padStart(2, '0');
+            const day = String(curDate.getDate()).padStart(2, '0');
+            const safeIsoDate = `${y}-${m}-${day}T12:00:00.000Z`;
+
+            payments.push({
+              id: dbPmt?.id || dbPaidPayments[i]?.id || `syn-${p.id}-${i}`,
+              policyId: p.id,
+              amount: expectedInstAmt,
+              dueDate: safeIsoDate,
+              isPaid,
+              paidDate,
+            });
+          }
+        }
+
+        const totalEmis = payments.length || 1;
+        const paidEmis = payments.filter((pmt: any) => pmt.isPaid).length;
+        const isAllPaid = paidEmis >= totalEmis && totalEmis > 0;
+
+        const firstUnpaidIndex = payments.findIndex((pmt: any) => !pmt.isPaid);
+        const currentEmiNo = isAllPaid ? totalEmis : (firstUnpaidIndex !== -1 ? firstUnpaidIndex + 1 : totalEmis);
+
+        const currentPmt = (!isAllPaid && firstUnpaidIndex !== -1)
+          ? payments[firstUnpaidIndex]
+          : (payments[totalEmis - 1] || { amount: expectedInstAmt, dueDate: rawStart.toISOString() });
+
+        // Next Due Date determination:
+        let nextDueDateObj: Date;
+        let displayDueDate: string;
+
+        if (isAllPaid) {
+          const lastPmt = payments[payments.length - 1];
+          nextDueDateObj = parseDateSafe(lastPmt?.paidDate) || parseDateSafe(lastPmt?.dueDate) || rawEnd;
+          displayDueDate = nextDueDateObj ? nextDueDateObj.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'N/A';
+        } else {
+          nextDueDateObj = parseDateSafe(currentPmt.dueDate) || rawStart;
+          displayDueDate = nextDueDateObj ? nextDueDateObj.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'N/A';
+        }
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const dueCheck = parseDateSafe(nextDueDateObj) || (nextDueDateObj instanceof Date ? new Date(nextDueDateObj) : new Date());
+        dueCheck.setHours(0, 0, 0, 0);
+
+        let status: EmiRecord['status'] = 'DUE';
+        if (isAllPaid) {
+          status = 'PAID';
+        } else if (dueCheck.getTime() < today.getTime()) {
+          status = 'OVERDUE';
+        } else if (dueCheck.getTime() === today.getTime()) {
+          status = 'DUE';
+        } else {
+          status = 'UPCOMING';
+        }
+
+        const c = p.contact || {};
+        const plan = p.plan || {};
+        const comp = plan.company || {};
+        const emp = p.assignedEmployee?.employeeProfile || {};
+
+        // Required 2: Total Collected / Paid Amount:
+        // totalPaidAmount = downpayment + (paidInstallmentsCount * installmentAmount)
+        const paidInstallmentsAmount = isAllPaid
+          ? totalInstallmentAmount
+          : payments.filter((pmt: any) => pmt.isPaid).reduce((acc: number, val: any) => acc + (val.amount || expectedInstAmt), 0);
+
+        const paidAmountTotal = (downpaymentAmount > 0 ? downpaymentAmount : 0) + paidInstallmentsAmount;
+
+        // Required 3: Total Pending / Outstanding Amount:
+        // pendingAmount = totalPremium - totalPaidAmount
+        // (or: netInstallmentBalance - (paidInstallmentsCount * installmentAmount))
+        const pendingAmount = isAllPaid ? 0 : Math.max(0, totalPolicyAmount - paidAmountTotal);
+        const remainingAmountTotal = pendingAmount;
+
+        const tenureDisplay = extra.policyTenure || extra.policyTerm || p.tenure || '1 Year';
+        const paymentModeDisplay = extra.paymentMode || p.paymentFrequency || 'ONLINE';
+
+        return {
+          id: p.id,
+          policyNo: p.policyNumber || 'N/A',
+          customerName: `${c.firstName || ''} ${c.lastName || ''}`.trim() || 'No Name',
+          customerContactNo: c.phone || 'N/A',
+          insuranceCompanyType: plan.category || 'N/A',
+          customerTag: `${plan.category || 'N/A'} - ${p.businessType || 'N/A'}`,
+          product: plan.name || 'N/A',
+          insurer: comp.name || 'N/A',
+          loanProvider: extra.emiGateway || (p.notes?.includes('Loan') ? 'FIBE' : 'Direct'),
+          emiGateway: extra.emiGateway || '',
+          downpaymentAmount,
+          totalInstallmentAmount,
+          paidInstallmentsAmount,
+          processingFee: Number(extra.processingFee || 0),
+          loanAmount: Number(extra.loanAmount || 0),
+          premiumAmount: totalPolicyAmount,
+          installmentFrequency: p.paymentFrequency || 'Monthly',
+          tenure: tenureDisplay,
+          paymentMode: paymentModeDisplay,
+          totalEmis,
+          paidEmis,
+          currentEmiNo,
+          dueDate: displayDueDate,
+          amount: expectedInstAmt,
+          paidAmountTotal,
+          remainingAmountTotal,
+          status,
+          nextAction: status === 'PAID' ? 'View Receipt' : status === 'OVERDUE' ? 'Call Customer' : 'Send Reminder',
+          employee: `${emp.firstName || ''} ${emp.lastName || ''}`.trim() || 'Unassigned',
+          history: [],
+          schedule: payments.map((pmt: any, index: number) => {
+            const d = parseDateSafe(pmt.dueDate) || new Date();
+            d.setHours(0, 0, 0, 0);
+            let sStatus: 'PAID' | 'DUE' | 'UPCOMING' | 'OVERDUE' = 'DUE';
+            if (pmt.isPaid) {
+              sStatus = 'PAID';
+            } else if (d.getTime() < today.getTime()) {
+              sStatus = 'OVERDUE';
+            } else if (d.getTime() === today.getTime()) {
+              sStatus = 'DUE';
+            } else {
+              sStatus = 'UPCOMING';
+            }
+            const pmtDueDateObj = parseDateSafe(pmt.dueDate);
+            const pmtPaidDateObj = parseDateSafe(pmt.paidDate) || (pmt.isPaid ? parseDateSafe(pmt.updatedAt || pmt.dueDate) : null);
+            return {
+              emiNo: index + 1,
+              dueDate: pmtDueDateObj ? pmtDueDateObj.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'N/A',
+              rawDueDate: pmtDueDateObj ? pmtDueDateObj.toISOString() : undefined,
+              amount: pmt.amount || expectedInstAmt,
+              status: sStatus,
+              paidDate: pmtPaidDateObj ? pmtPaidDateObj.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : undefined,
+            };
+          }),
+          notes: p.notes || '',
+        };
+      }).filter(Boolean) as EmiRecord[];
+
+    setData(derivedData);
+  }, [policiesRes]);
+  const [statusFilter, setStatusFilter] = useState<string>('All');
+  const [employeeFilter, setEmployeeFilter] = useState<string>('All');
+  const [insurerFilter, setInsurerFilter] = useState<string>('All');
+  const [productFilter, setProductFilter] = useState<string>('All');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [showFilters, setShowFilters] = useState(false);
+  const activeFilterCount = (employeeFilter !== 'All' ? 1 : 0) + (insurerFilter !== 'All' ? 1 : 0) + (productFilter !== 'All' ? 1 : 0);
+  const [drawerRecord, setDrawerRecord] = useState<EmiRecord | null>(null);
+  const [drawerTab, setDrawerTab] = useState<'overview' | 'schedule' | 'communication' | 'notes'>('overview');
+  const [newNoteInput, setNewNoteInput] = useState('');
+  const [statusUpdateOpen, setStatusUpdateOpen] = useState(false);
+  const [selectedRecords, setSelectedRecords] = useState<string[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+
+  const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.checked) {
+      setSelectedRecords(sortedFilteredData.map(r => r.id));
+    } else {
+      setSelectedRecords([]);
+    }
+  };
+
+  const handleSelectRecord = (e: React.ChangeEvent<HTMLInputElement>, id: string) => {
+    e.stopPropagation();
+    if (e.target.checked) {
+      setSelectedRecords(prev => [...prev, id]);
+    } else {
+      setSelectedRecords(prev => prev.filter(rId => rId !== id));
+    }
+  };
+
+  const [sortKey, setSortKey] = useState<string>('');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const availableEmployees = useMemo(() => {
+    const set = new Set<string>();
+    data.forEach(d => { if (d.employee && d.employee !== 'Unassigned') set.add(d.employee); });
+    return Array.from(set).sort();
+  }, [data]);
+
+  const availableInsurers = useMemo(() => {
+    const set = new Set<string>();
+    data.forEach(d => { if (d.insurer && d.insurer !== 'N/A') set.add(d.insurer); });
+    return Array.from(set).sort();
+  }, [data]);
+
+  const availableProducts = useMemo(() => {
+    const set = new Set<string>();
+    data.forEach(d => { if (d.product && d.product !== 'N/A') set.add(d.product); });
+    return Array.from(set).sort();
+  }, [data]);
+
+  // Month-wise filter logic
+  const monthFilteredData = useMemo(() => {
+    if (!selectedMonth || selectedMonth === 'All Months') return data;
+    const MONTHS_FULL = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+    const MONTH_MAP: Record<string, number> = {
+      jan: 0, january: 0,
+      feb: 1, february: 1,
+      mar: 2, march: 2,
+      apr: 3, april: 3,
+      may: 4,
+      jun: 5, june: 5,
+      jul: 6, july: 6,
+      aug: 7, august: 7,
+      sep: 8, sept: 8, september: 8,
+      oct: 9, october: 9,
+      nov: 10, november: 10,
+      dec: 11, december: 11,
+    };
+    const parts = selectedMonth.trim().split(/\s+/);
+    if (parts.length < 2) return data;
+    const targetMonthIdx = MONTHS_FULL.indexOf(parts[0].toLowerCase());
+    const targetYear = parseInt(parts[1], 10);
+    if (targetMonthIdx === -1 || isNaN(targetYear)) return data;
+
+    const isMatch = (dateStr?: string) => {
+      if (!dateStr || dateStr === 'N/A') return false;
+      const cleaned = String(dateStr).trim().replace(/,/g, '');
+      const tokens = cleaned.split(/[\s/\-]+/);
+      if (tokens.length >= 3) {
+        if (MONTH_MAP[tokens[1]?.toLowerCase()] !== undefined) {
+          const mIdx = MONTH_MAP[tokens[1].toLowerCase()];
+          const yr = parseInt(tokens[2], 10);
+          if (mIdx === targetMonthIdx && yr === targetYear) return true;
+        }
+        if (MONTH_MAP[tokens[0]?.toLowerCase()] !== undefined) {
+          const mIdx = MONTH_MAP[tokens[0].toLowerCase()];
+          const yr = parseInt(tokens[tokens.length - 1], 10);
+          if (mIdx === targetMonthIdx && yr === targetYear) return true;
+        }
+        const d1 = parseInt(tokens[0], 10);
+        const m1 = parseInt(tokens[1], 10);
+        const y1 = parseInt(tokens[2], 10);
+        if (!isNaN(d1) && !isNaN(m1) && !isNaN(y1)) {
+          if (tokens[0].length === 4) {
+            if (d1 === targetYear && m1 - 1 === targetMonthIdx) return true;
+          } else if (tokens[2].length === 4) {
+            if (y1 === targetYear && m1 - 1 === targetMonthIdx) return true;
+          }
+        }
+      }
+      const d = new Date(dateStr);
+      if (!isNaN(d.getTime())) {
+        return d.getMonth() === targetMonthIdx && d.getFullYear() === targetYear;
+      }
+      return false;
+    };
+
+    const now = new Date();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const isCurrentMonthView = targetMonthIdx === now.getMonth() && targetYear === now.getFullYear();
+
+    return data
+      .map(item => {
+        // 1. Check if an installment was paid in this selected month
+        const paidThisMonth = item.schedule.find(sc => sc.status === 'PAID' && isMatch(sc.paidDate));
+        if (paidThisMonth) {
+          return {
+            ...item,
+            dueDate: paidThisMonth.paidDate || paidThisMonth.dueDate || item.dueDate,
+            amount: paidThisMonth.amount || item.amount,
+            currentEmiNo: paidThisMonth.emiNo,
+            status: 'PAID' as const,
+          };
+        }
+
+        // 2. Schedule entry with due date matching this selected month
+        const matchedSchedule = item.schedule.find(sc => isMatch(sc.dueDate));
+        if (matchedSchedule) {
+          const scDate = parseDateSafe(matchedSchedule.dueDate);
+          let scStatus = matchedSchedule.status;
+          if (scStatus !== 'PAID') {
+            if (scDate) {
+              scDate.setHours(0, 0, 0, 0);
+              scStatus = scDate.getTime() < today.getTime() ? 'OVERDUE' : scDate.getTime() === today.getTime() ? 'DUE' : 'UPCOMING';
+            } else {
+              scStatus = 'DUE';
+            }
+          }
+          return {
+            ...item,
+            dueDate: matchedSchedule.dueDate,
+            amount: matchedSchedule.amount || item.amount,
+            currentEmiNo: matchedSchedule.emiNo,
+            status: scStatus,
+          };
+        }
+
+        // 3. Direct due date match
+        if (isMatch(item.dueDate)) {
+          const itemDate = parseDateSafe(item.dueDate);
+          let itemStatus = item.status;
+          if (itemStatus !== 'PAID') {
+            if (itemDate) {
+              itemDate.setHours(0, 0, 0, 0);
+              itemStatus = itemDate.getTime() < today.getTime() ? 'OVERDUE' : itemDate.getTime() === today.getTime() ? 'DUE' : 'UPCOMING';
+            } else {
+              itemStatus = 'DUE';
+            }
+          }
+          return {
+            ...item,
+            status: itemStatus,
+          };
+        }
+
+        // 4. If viewing current month, retain overdue unpaid installments
+        const overdueSchedule = item.schedule.find(sc => sc.status === 'OVERDUE');
+        if (isCurrentMonthView && (item.status === 'OVERDUE' || overdueSchedule)) {
+          return {
+            ...item,
+            dueDate: overdueSchedule ? overdueSchedule.dueDate : item.dueDate,
+            amount: overdueSchedule ? (overdueSchedule.amount || item.amount) : item.amount,
+            currentEmiNo: overdueSchedule ? overdueSchedule.emiNo : item.currentEmiNo,
+            status: 'OVERDUE' as const,
+          };
+        }
+
+        return null;
+      })
+      .filter(Boolean) as EmiRecord[];
+  }, [data, selectedMonth]);
+
+  // Filter logic
+  const filteredData = useMemo(() => {
+    return monthFilteredData.filter(item => {
+      if (statusFilter !== 'All') {
+        if (statusFilter === 'Due' && item.status === 'PAID') return false;
+        if (statusFilter === 'Paid' && item.status !== 'PAID') return false;
+      }
+      if (employeeFilter !== 'All' && item.employee !== employeeFilter) return false;
+      if (insurerFilter !== 'All' && item.insurer !== insurerFilter) return false;
+      if (productFilter !== 'All' && item.product !== productFilter) return false;
+
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchName = item.customerName.toLowerCase().includes(q);
+        const matchPol = item.policyNo.toLowerCase().includes(q);
+        const matchProd = item.product.toLowerCase().includes(q);
+        if (!matchName && !matchPol && !matchProd) return false;
+      }
+      return true;
+    });
+  }, [monthFilteredData, statusFilter, employeeFilter, insurerFilter, productFilter, searchQuery]);
+
+  const sortedFilteredData = useMemo(() => {
+    let result = [...filteredData];
+    if (!sortKey) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      result.sort((a, b) => {
+        const getGroup = (item: any) => {
+          if (item.status === 'PAID') return 3; // Paid
+          const itemDate = parseDateSafe(item.dueDate);
+          if (itemDate) itemDate.setHours(0, 0, 0, 0);
+          return (itemDate && itemDate.getTime() < today.getTime()) || item.status === 'OVERDUE' ? 1 : 2; // 1 = Overdue, 2 = Due
+        };
+
+        const aGroup = getGroup(a);
+        const bGroup = getGroup(b);
+
+        if (aGroup !== bGroup) return aGroup - bGroup; // Overdue -> Due -> Paid
+
+        // Within each status group, sort by due date closest to today
+        const aDate = parseDateSafe(a.dueDate) || new Date(a.dueDate);
+        aDate.setHours(0, 0, 0, 0);
+        const bDate = parseDateSafe(b.dueDate) || new Date(b.dueDate);
+        bDate.setHours(0, 0, 0, 0);
+
+        const aDist = Math.abs(aDate.getTime() - today.getTime());
+        const bDist = Math.abs(bDate.getTime() - today.getTime());
+
+        return aDist - bDist;
+      });
+    } else {
+      result = sortData(result, sortKey, sortDir, (row: any, key: string) => {
+        if (key === 'EMI (x/y)') return row.paidEmis / row.totalEmis;
+        return row[key];
+      });
+    }
+    return result;
+  }, [filteredData, sortKey, sortDir]);
+  const rowsPerPage = 10;
+  const totalPages = Math.max(1, Math.ceil(sortedFilteredData.length / rowsPerPage));
+  const paginatedData = useMemo(
+    () => sortedFilteredData.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage),
+    [sortedFilteredData, currentPage],
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [statusFilter, employeeFilter, insurerFilter, productFilter, searchQuery, selectedMonth]);
+
+  useEffect(() => {
+    setCurrentPage(page => Math.min(page, totalPages));
+  }, [totalPages]);
+
+  const exportEmiToExcel = () => {
+    const headers = ['Customer Name', 'Policy Number', 'Tag', 'Product', 'Insurer', 'Due Date', 'Amount', 'Paid EMIs', 'Total EMIs', 'Status', 'Assigned To'];
+    const rows = sortedFilteredData.map((r: any) => [
+      `"${(r.customerName || '').replace(/"/g, '""')}"`,
+      `"${(r.policyNo || '').replace(/"/g, '""')}"`,
+      `"${(r.customerTag || '').replace(/"/g, '""')}"`,
+      `"${(r.product || '').replace(/"/g, '""')}"`,
+      `"${(r.insurer || '').replace(/"/g, '""')}"`,
+      `"${(r.dueDate || '').replace(/"/g, '""')}"`,
+      r.amount ?? '',
+      r.paidEmis ?? '',
+      r.totalEmis ?? '',
+      `"${(r.status || '').replace(/"/g, '""')}"`,
+      `"${(r.employee || '').replace(/"/g, '""')}"`
+    ].join(',').replace(/\r?\n/g, ' ')).join('\n');
+    
+    const content = headers.join(',') + '\n' + rows;
+    const blob = new Blob(['\uFEFF' + content], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `emi_installments_export_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success('EMI Installments exported to Excel successfully');
+  };
+
+  const exportEmiToPdf = () => {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      toast.error('Pop-up blocked. Please allow pop-ups to print PDF');
+      return;
+    }
+    
+    const rowsHtml = sortedFilteredData.map((r: any) => `
+      <tr style="border-bottom: 1px solid #e2e8f0; font-size: 11px;">
+        <td style="padding: 8px;">${r.customerName || 'N/A'}</td>
+        <td style="padding: 8px; font-weight: 600;">${r.policyNo || 'N/A'}</td>
+        <td style="padding: 8px;">${r.product || 'N/A'}</td>
+        <td style="padding: 8px; text-align: center;">${r.dueDate || 'N/A'}</td>
+        <td style="padding: 8px; text-align: right;">₹${r.amount?.toLocaleString() || 0}</td>
+        <td style="padding: 8px; text-align: center;">${r.paidEmis} / ${r.totalEmis}</td>
+        <td style="padding: 8px; text-align: center;"><span style="padding: 2px 6px; border-radius: 4px; background: ${r.status === 'PAID' ? '#def7ec; color: #03543f;' : r.status === 'DUE' ? '#feecdc; color: #b43c08;' : '#fde8e8; color: #9b1c1c;'} font-size: 10px; font-weight: bold;">${r.status}</span></td>
+        <td style="padding: 8px;">${r.employee || 'N/A'}</td>
+      </tr>
+    `).join('');
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>EMI Installments Report</title>
+          <style>
+            body { font-family: system-ui, -apple-system, sans-serif; color: #1e293b; padding: 24px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th { background: #f8fafc; border-bottom: 2px solid #e2e8f0; padding: 10px 8px; text-align: left; font-size: 11px; font-weight: bold; text-transform: uppercase; color: #64748b; }
+            .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #3b82f6; padding-bottom: 12px; }
+            .title { font-size: 20px; font-weight: 800; color: #1e3a8a; }
+            .meta { font-size: 11px; color: #64748b; text-align: right; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div>
+              <div class="title">INSU-MITRA</div>
+              <div style="font-size: 12px; color: #475569; font-weight: 600;">EMI Installments Export Report</div>
+            </div>
+            <div class="meta">
+              <div>Date: ${new Date().toLocaleString()}</div>
+              <div>Record Count: ${sortedFilteredData.length}</div>
+            </div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 20%;">Customer Name</th>
+                <th style="width: 15%;">Policy No</th>
+                <th style="width: 20%;">Product</th>
+                <th style="width: 10%; text-align: center;">Due Date</th>
+                <th style="width: 10%; text-align: right;">Amount</th>
+                <th style="width: 10%; text-align: center;">EMIs</th>
+                <th style="width: 10%; text-align: center;">Status</th>
+                <th style="width: 15%;">Assigned To</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
+          </table>
+          <script>
+            window.onload = function() {
+              window.print();
+              setTimeout(() => { window.close(); }, 500);
+            };
+          </script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
+  // Handler for Mark as Paid
+  const handleMarkAsPaid = async (recordId: string) => {
+    try {
+      const rec = data.find(r => r.id === recordId) || drawerRecord;
+      if (rec) {
+        const nextPaidEmis = rec.paidEmis + 1;
+        const isAll = nextPaidEmis >= rec.totalEmis;
+
+        if (isAll) {
+          await policiesService.markAllPaymentsPaid(recordId);
+        } else {
+          const nextUnpaid = rec.schedule.find(sc => sc.status !== 'PAID') || rec.schedule[rec.paidEmis];
+          const parsedDue = nextUnpaid?.rawDueDate ? parseDateSafe(nextUnpaid.rawDueDate) : (nextUnpaid?.dueDate ? parseDateSafe(nextUnpaid.dueDate) : null);
+          const safeIsoDueDate = parsedDue && !isNaN(parsedDue.getTime()) ? parsedDue.toISOString() : new Date().toISOString();
+          await policiesService.recordPayment(recordId, {
+            amount: nextUnpaid?.amount || rec.amount || (rec.premiumAmount ? Math.round(rec.premiumAmount / rec.totalEmis) : 0),
+            isPaid: true,
+            dueDate: safeIsoDueDate,
+            paidDate: new Date().toISOString(),
+          });
+        }
+        qc.invalidateQueries({ queryKey: ['policies-emi-tracking'] });
+        qc.invalidateQueries({ queryKey: ['policies'] });
+      }
+    } catch {
+      // ignore
+    }
+
+    const todayStr = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+
+    setData(prev => prev.map(rec => {
+      if (rec.id === recordId) {
+        const newPaidEmis = Math.min(rec.totalEmis, rec.paidEmis + 1);
+        const isAll = newPaidEmis >= rec.totalEmis;
+        const instAmt = rec.amount > 0 ? rec.amount : (rec.totalInstallmentAmount && rec.totalEmis ? Math.round(rec.totalInstallmentAmount / rec.totalEmis) : 0);
+        const newHistory = [
+          ...rec.history,
+          {
+            id: `h-${Date.now()}`,
+            date: `${todayStr}, ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+            type: 'payment' as const,
+            note: `Installment #${newPaidEmis} Payment Confirmed`,
+            author: 'by Admin'
+          }
+        ];
+        // Required 2: Total Collected / Paid Amount:
+        // totalPaidAmount = downpayment + (paidInstallmentsCount * installmentAmount)
+        const newPaidInstAmt = newPaidEmis * instAmt;
+        const newPaidTotal = (rec.downpaymentAmount || 0) + newPaidInstAmt;
+        // Required 3: Total Pending / Outstanding Amount:
+        // pendingAmount = totalPremium - totalPaidAmount
+        const newRemainingTotal = isAll ? 0 : Math.max(0, (rec.premiumAmount || 0) - newPaidTotal);
+        const nextSchedule = rec.schedule.map((sc, idx) => idx < newPaidEmis ? { ...sc, status: 'PAID' as const, paidDate: sc.paidDate || todayStr } : sc);
+        const nextDueItem = nextSchedule.find(s => s.status !== 'PAID');
+
+        let nextStatus: EmiRecord['status'] = 'DUE';
+        if (isAll) {
+          nextStatus = 'PAID';
+        } else if (nextDueItem?.dueDate) {
+          const nextDueD = parseDateSafe(nextDueItem.dueDate);
+          const tDay = new Date();
+          tDay.setHours(0, 0, 0, 0);
+          if (nextDueD && nextDueD.getTime() < tDay.getTime()) {
+            nextStatus = 'OVERDUE';
+          } else {
+            nextStatus = 'DUE';
+          }
+        }
+
+        return {
+          ...rec,
+          amount: instAmt,
+          status: nextStatus,
+          nextAction: isAll ? ('View Receipt' as const) : nextStatus === 'OVERDUE' ? ('Call Customer' as const) : ('Send Reminder' as const),
+          paidEmis: newPaidEmis,
+          paidInstallmentsAmount: newPaidInstAmt,
+          paidAmountTotal: newPaidTotal,
+          remainingAmountTotal: newRemainingTotal,
+          dueDate: isAll ? rec.dueDate : (nextDueItem?.dueDate || rec.dueDate),
+          history: newHistory,
+          schedule: nextSchedule,
+        };
+      }
+      return rec;
+    }));
+
+    if (drawerRecord && drawerRecord.id === recordId) {
+      setDrawerRecord(prev => {
+        if (!prev) return null;
+        const newPaidEmis = Math.min(prev.totalEmis, prev.paidEmis + 1);
+        const isAll = newPaidEmis >= prev.totalEmis;
+        const instAmt = prev.amount > 0 ? prev.amount : (prev.totalInstallmentAmount && prev.totalEmis ? Math.round(prev.totalInstallmentAmount / prev.totalEmis) : 0);
+        const newPaidInstAmt = newPaidEmis * instAmt;
+        const newPaidTotal = (prev.downpaymentAmount || 0) + newPaidInstAmt;
+        const newRemainingTotal = isAll ? 0 : Math.max(0, (prev.premiumAmount || 0) - newPaidTotal);
+        const nextSchedule = prev.schedule.map((sc, idx) => idx < newPaidEmis ? { ...sc, status: 'PAID' as const, paidDate: sc.paidDate || todayStr } : sc);
+        const nextDueItem = nextSchedule.find(s => s.status !== 'PAID');
+
+        let nextStatus: EmiRecord['status'] = 'DUE';
+        if (isAll) {
+          nextStatus = 'PAID';
+        } else if (nextDueItem?.dueDate) {
+          const nextDueD = parseDateSafe(nextDueItem.dueDate);
+          const tDay = new Date();
+          tDay.setHours(0, 0, 0, 0);
+          if (nextDueD && nextDueD.getTime() < tDay.getTime()) {
+            nextStatus = 'OVERDUE';
+          } else {
+            nextStatus = 'DUE';
+          }
+        }
+
+        return {
+          ...prev,
+          amount: instAmt,
+          status: nextStatus,
+          nextAction: isAll ? ('View Receipt' as const) : nextStatus === 'OVERDUE' ? ('Call Customer' as const) : ('Send Reminder' as const),
+          paidEmis: newPaidEmis,
+          paidInstallmentsAmount: newPaidInstAmt,
+          paidAmountTotal: newPaidTotal,
+          remainingAmountTotal: newRemainingTotal,
+          dueDate: isAll ? prev.dueDate : (nextDueItem?.dueDate || prev.dueDate),
+          schedule: nextSchedule,
+        };
+      });
+    }
+    toast.success(`Installment for ${drawerRecord?.customerName || 'Customer'} marked as Paid!`);
+  };
+
+  // Handler for Send Reminder
+  const handleSendReminder = (record: EmiRecord) => {
+    toast.success(`WhatsApp EMI Payment Reminder sent to ${record.customerName}!`);
+    setData(prev => prev.map(rec => {
+      if (rec.id === record.id) {
+        return {
+          ...rec,
+          status: rec.status === 'PAID' ? 'PAID' : 'MESSAGE SENT',
+          history: [
+            ...rec.history,
+            {
+              id: `h-${Date.now()}`,
+              date: `${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}, ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+              type: 'whatsapp',
+              note: 'Reminder Sent (WhatsApp)',
+              author: 'by Amit Sharma'
+            }
+          ]
+        };
+      }
+      return rec;
+    }));
+  };
+
+  // Handler for Call Customer
+  const handleCallCustomer = (record: EmiRecord) => {
+    toast.success(`Initiating call with ${record.customerName}...`);
+  };
+
+  // Handler for Status Update
+  const handleUpdateStatus = async (recordId: string, newStatus: EmiRecord['status']) => {
+    if (newStatus === 'PAID') {
+      try {
+        await policiesService.markAllPaymentsPaid(recordId);
+        qc.invalidateQueries({ queryKey: ['policies-emi-tracking'] });
+        qc.invalidateQueries({ queryKey: ['policies'] });
+      } catch {
+        // ignore
+      }
+    }
+    setData(prev => prev.map(rec => {
+      if (rec.id === recordId) {
+        if (newStatus === 'PAID') {
+          return {
+            ...rec,
+            status: 'PAID',
+            paidEmis: rec.totalEmis,
+            paidAmountTotal: rec.premiumAmount || (rec.amount * rec.totalEmis),
+            remainingAmountTotal: 0,
+            schedule: rec.schedule.map(sc => ({
+              ...sc,
+              status: 'PAID',
+              paidDate: sc.paidDate || new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+            })),
+          };
+        }
+        return { ...rec, status: newStatus };
+      }
+      return rec;
+    }));
+    if (drawerRecord && drawerRecord.id === recordId) {
+      setDrawerRecord(prev => {
+        if (!prev) return null;
+        if (newStatus === 'PAID') {
+          return {
+            ...prev,
+            status: 'PAID',
+            paidEmis: prev.totalEmis,
+            paidAmountTotal: prev.premiumAmount || (prev.amount * prev.totalEmis),
+            remainingAmountTotal: 0,
+            schedule: prev.schedule.map(sc => ({
+              ...sc,
+              status: 'PAID',
+              paidDate: sc.paidDate || new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+            })),
+          };
+        }
+        return { ...prev, status: newStatus };
+      });
+    }
+    setStatusUpdateOpen(false);
+    toast.success(`Status updated to ${newStatus}`);
+  };
+
+  // Handler to Add History Note
+  const handleAddNote = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newNoteInput.trim() || !drawerRecord) return;
+    const noteObj = {
+      id: `h-${Date.now()}`,
+      date: `${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}, ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+      type: 'note' as const,
+      note: newNoteInput.trim(),
+      author: 'by Amit Sharma'
+    };
+    setData(prev => prev.map(r => r.id === drawerRecord.id ? { ...r, history: [...r.history, noteObj] } : r));
+    setDrawerRecord(prev => prev ? { ...prev, history: [...prev.history, noteObj] } : null);
+    setNewNoteInput('');
+    toast.success('Note added');
+  };
+
+  // Dynamic KPIs Computed from filteredData (respects all active filters)
+  const kpiTotalDueList = filteredData.filter(r => r.status !== 'PAID');
+  const kpiTotalDueCount = kpiTotalDueList.length;
+  // Total pending balance across all policies:
+  const kpiTotalPendingAmount = filteredData.reduce((acc, r) => acc + (r.remainingAmountTotal || 0), 0);
+
+  const kpiDueTodayList = filteredData.filter(r => r.status === 'DUE');
+  const kpiDueTodayCount = kpiDueTodayList.length;
+  const kpiDueTodayAmount = kpiDueTodayList.reduce((acc, r) => acc + (r.amount > 0 ? r.amount : 0), 0);
+
+  const kpiOverdueList = filteredData.filter(r => r.status === 'OVERDUE');
+  const kpiOverdueCount = kpiOverdueList.length;
+  const kpiOverdueAmount = kpiOverdueList.reduce((acc, r) => acc + (r.remainingAmountTotal > 0 ? (r.amount > 0 ? r.amount : r.remainingAmountTotal) : 0), 0);
+
+  const kpiPaidList = filteredData.filter(r => r.status === 'PAID');
+  const kpiPaidCount = kpiPaidList.length;
+  // Total collected amount across all policies (including downpayments and paid EMIs):
+  const kpiTotalCollectedAmount = filteredData.reduce((acc, r) => acc + (r.paidAmountTotal || 0), 0);
+  
+  const totalBookedPremium = filteredData.reduce((acc, r) => acc + (r.premiumAmount || 0), 0);
+  const paymentTargetStr = totalBookedPremium > 0 ? Math.min(100, Math.round((kpiTotalCollectedAmount / totalBookedPremium) * 100)) : 0;
+
+  return (
+    <div className="space-y-5 animate-fadeIn font-sans pb-10">
+      
+      {/* ── Summary KPI Cards Row (4 Cards) ────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+        
+        {/* Card 1: Total Installments Due */}
+        <div className="bg-white rounded-2xl p-4 border border-blue-100/80 shadow-xs flex flex-wrap items-center gap-3.5 hover:shadow-md transition-all">
+          <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 border border-blue-100">
+            <FileText size={22} />
+          </div>
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Total Pending Installments</span>
+            <div className="flex items-baseline gap-2 mt-0.5">
+              <span className="text-2xl font-black text-slate-900">{kpiTotalDueCount}</span>
+            </div>
+            <span className="text-xs font-bold text-slate-500 block">{fmtCurr(kpiTotalPendingAmount)} Pending</span>
+          </div>
+        </div>
+
+        {/* Card 2: Due Today */}
+        <div className="bg-white rounded-2xl p-4 border border-amber-100/80 shadow-xs flex flex-wrap items-center gap-3.5 hover:shadow-md transition-all">
+          <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0 border border-amber-100">
+            <Calendar size={22} />
+          </div>
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Due This Week</span>
+            <div className="flex items-baseline gap-2 mt-0.5">
+              <span className="text-2xl font-black text-slate-900">{kpiDueTodayCount}</span>
+            </div>
+            <span className="text-xs font-bold text-slate-500 block">{fmtCurr(kpiDueTodayAmount)}</span>
+          </div>
+        </div>
+
+        {/* Card 3: Pending / Overdue */}
+        <div className="bg-white rounded-2xl p-4 border border-rose-100/80 shadow-xs flex flex-wrap items-center gap-3.5 hover:shadow-md transition-all">
+          <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0 border border-rose-100">
+            <AlertTriangle size={22} />
+          </div>
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Overdue Installments</span>
+            <div className="flex items-baseline gap-2 mt-0.5">
+              <span className="text-2xl font-black text-slate-900">{kpiOverdueCount}</span>
+            </div>
+            <span className="text-xs font-bold text-slate-500 block">{fmtCurr(kpiOverdueAmount)} Overdue</span>
+          </div>
+        </div>
+
+        {/* Card 4: Paid & Collection */}
+        <div className="bg-emerald-50/60 rounded-2xl p-4 border border-emerald-100 shadow-xs flex flex-col justify-between hover:shadow-md transition-all">
+          <div>
+            <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="w-6 h-6 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
+                  <CheckCircle2 size={14} />
+                </div>
+                <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-800">Total Collected</span>
+              </div>
+              <span className="text-[10px] font-black text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-md">{kpiPaidCount} Settled</span>
+            </div>
+            <div className="mt-2.5 flex items-baseline justify-between">
+              <span className="text-xl font-black text-emerald-950 block">{fmtCurr(kpiTotalCollectedAmount)}</span>
+              <span className="text-[10px] font-black text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-md">{paymentTargetStr}% Collected</span>
+            </div>
+          </div>
+          <div className="w-full bg-emerald-200/80 h-2 rounded-full mt-2.5 overflow-hidden">
+            <div className="bg-emerald-600 h-full rounded-full transition-all duration-500" style={{ width: `${paymentTargetStr}%` }} />
+          </div>
+        </div>
+
+      </div>
+
+      {/* ── Filter Bar ────────────────────────────────────────────────────────────────── */}
+      <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          
+          {/* Left Side: Search Box & Status Filter Pills */}
+          <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+            <div className="relative w-full sm:w-80 lg:w-64">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Search Customer / Policy / Installment"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-xs font-semibold text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:bg-white transition-all shadow-2xs"
+              />
+            </div>
+
+            {/* Quick Filters Inline Pills (matching Claims page UI) */}
+            <div className="flex flex-wrap items-center gap-1.5 overflow-x-auto custom-scrollbar py-0.5 min-w-0">
+              <span className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wider mr-0.5 flex items-center gap-1 shrink-0">
+                <Filter size={13} className="text-blue-500" /> Quick:
+              </span>
+              {[
+                { key: 'All', label: 'All Installments' },
+                { key: 'Due', label: 'Due / Overdue', icon: '⏳' },
+                { key: 'Paid', label: 'Paid', icon: '✅' },
+              ].map(q => {
+                const isSelected = statusFilter === q.key;
+                return (
+                  <button
+                    key={q.key}
+                    type="button"
+                    onClick={() => setStatusFilter(q.key)}
+                    className={clsx(
+                      'inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer border shadow-2xs whitespace-nowrap shrink-0',
+                      isSelected
+                        ? 'bg-blue-600 text-white border-blue-600 shadow-sm scale-105'
+                        : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900'
+                    )}
+                  >
+                    {q.icon && <span>{q.icon}</span>}
+                    <span>{q.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+  
+          {/* Right Side: Filters Toggle Button (Matching Policies UI style) */}
+          <div className="flex flex-wrap items-center gap-2.5 justify-end">
+            <button
+              type="button"
+              onClick={() => setShowFilters(prev => !prev)}
+              className={clsx(
+                "p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-500 hover:text-slate-700 cursor-pointer shadow-2xs transition-all flex items-center gap-1.5 text-xs font-bold bg-white",
+                showFilters && "bg-blue-50 border-blue-200 text-blue-600"
+              )}
+              title="Advanced Filters"
+            >
+              <Filter size={14} className={showFilters || activeFilterCount > 0 ? "text-blue-600" : "text-slate-500"} />
+              <span className="hidden sm:inline">Filters</span>
+              {activeFilterCount > 0 && (
+                <span className="px-1.5 py-0.5 text-[10px] bg-blue-600 text-white rounded-full font-black leading-none">
+                  {activeFilterCount}
+                </span>
+              )}
+            </button>
+          </div>
+      </div>
+
+      {/* Active Filter Badges Bar (Matching Policies Page UI) */}
+      {activeFilterCount > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 bg-blue-50/60 p-2.5 rounded-2xl border border-blue-100/90 shadow-2xs animate-fadeIn">
+          <span className="text-[11px] font-extrabold text-blue-800 mr-1 flex items-center gap-1">
+            <Filter size={13} className="text-blue-600" /> Active Filters ({activeFilterCount}):
+          </span>
+          {employeeFilter !== 'All' && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-bold bg-white text-blue-700 border border-blue-200 shadow-2xs">
+              Employee: {employeeFilter}
+              <button type="button" onClick={() => setEmployeeFilter('All')} className="hover:text-red-500 font-bold ml-1 cursor-pointer">×</button>
+            </span>
+          )}
+          {insurerFilter !== 'All' && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-bold bg-white text-blue-700 border border-blue-200 shadow-2xs">
+              Insurer: {insurerFilter}
+              <button type="button" onClick={() => setInsurerFilter('All')} className="hover:text-red-500 font-bold ml-1 cursor-pointer">×</button>
+            </span>
+          )}
+          {productFilter !== 'All' && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-bold bg-white text-blue-700 border border-blue-200 shadow-2xs">
+              Product: {productFilter}
+              <button type="button" onClick={() => setProductFilter('All')} className="hover:text-red-500 font-bold ml-1 cursor-pointer">×</button>
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => { setEmployeeFilter('All'); setInsurerFilter('All'); setProductFilter('All'); }}
+            className="text-[11px] font-bold text-red-600 hover:underline ml-2 cursor-pointer"
+          >
+            Clear All
+          </button>
+        </div>
+      )}
+
+      {/* ── Collapsible Advanced Filter Panel ────────────────────────────────────────── */}
+      {showFilters && (
+        <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex flex-wrap items-center gap-3 animate-in fade-in slide-in-from-top-1 duration-150">
+          <div className="flex flex-col gap-1 min-w-[150px] flex-1">
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Employee</label>
+            <select
+              value={employeeFilter}
+              onChange={e => setEmployeeFilter(e.target.value)}
+              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer"
+            >
+              <option value="All">Employee: All</option>
+              {availableEmployees.map(emp => (
+                <option key={emp} value={emp}>{emp}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex flex-col gap-1 min-w-[150px] flex-1">
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Insurer</label>
+            <select
+              value={insurerFilter}
+              onChange={e => setInsurerFilter(e.target.value)}
+              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer"
+            >
+              <option value="All">Insurer: All</option>
+              {availableInsurers.map(ins => (
+                <option key={ins} value={ins}>{ins}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex flex-col gap-1 min-w-[150px] flex-1">
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Product</label>
+            <select
+              value={productFilter}
+              onChange={e => setProductFilter(e.target.value)}
+              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer"
+            >
+              <option value="All">Product: All</option>
+              {availableProducts.map(prd => (
+                <option key={prd} value={prd}>{prd}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex flex-col gap-1 min-w-[180px]">
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Export Installments</label>
+            <div className="flex items-center gap-1.5 pt-0.5">
+              <button
+                type="button"
+                onClick={exportEmiToExcel}
+                className="px-3 py-1.5 rounded-xl border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 cursor-pointer shadow-2xs transition-all flex items-center gap-1.5 text-xs font-bold"
+                title="Export to Excel"
+              >
+                <Download size={14} className="text-emerald-600" />
+                <span>Excel</span>
+              </button>
+              <button
+                type="button"
+                onClick={exportEmiToPdf}
+                className="px-3 py-1.5 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 cursor-pointer shadow-2xs transition-all flex items-center gap-1.5 text-xs font-bold"
+                title="Export to PDF"
+              >
+                <FileText size={14} className="text-red-500" />
+                <span>PDF</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="flex items-end self-end">
+            <button
+              type="button"
+              onClick={() => {
+                setEmployeeFilter('All');
+                setInsurerFilter('All');
+                setProductFilter('All');
+              }}
+              className="text-xs font-bold text-slate-500 hover:text-slate-800 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 transition-all cursor-pointer"
+            >
+              Reset Filters
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Table Section (List View) ────────────────────────────────────────────────── */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 bg-slate-50/50">
+          <h3 className="font-extrabold text-sm text-slate-900 tracking-tight">EMI Due List – {selectedMonth}</h3>
+          <span className="text-xs text-slate-400 font-bold">
+            Showing {sortedFilteredData.length === 0 ? 0 : (currentPage - 1) * rowsPerPage + 1}–{Math.min(currentPage * rowsPerPage, sortedFilteredData.length)} of {sortedFilteredData.length} records
+          </span>
+        </div>
+
+        <div className="max-h-[420px] overflow-auto custom-scrollbar overscroll-contain">
+          <table className="w-full text-left text-xs">
+            <thead className="sticky top-0 z-10">
+              <tr className="bg-slate-50/80 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                {[
+                  { key: 'select', label: '' },
+                  { key: 'customerName', label: 'Customer Name' },
+                  { key: 'customerContactNo', label: 'Contact No.' },
+                  { key: 'insuranceCompanyType', label: 'Insurance Type' },
+                  { key: 'insurer', label: 'Insurer' },
+                  { key: 'product', label: 'Product Name' },
+                  { key: 'policyNo', label: 'Policy No.' },
+                  { key: 'loanProvider', label: 'Loan / EMI Gateway' },
+                  { key: 'premiumAmount', label: 'Total Premium' },
+                  { key: 'downpaymentAmount', label: 'Downpayment' },
+                  { key: 'remainingAmountTotal', label: 'Pending Amount' },
+                  { key: 'amount', label: 'Inst. Amount' },
+                  { key: 'installmentFrequency', label: 'Frequency' },
+                  { key: 'EMI (x/y)', label: 'No. of Inst.' },
+                  { key: 'dueDate', label: 'Due Date' },
+                  { key: 'status', label: 'Status' },
+                  { key: 'employee', label: 'Assigned Employee' },
+                  { key: 'Actions', label: 'Actions', align: 'right' }
+                ].map(h => (
+                  <th key={h.key} 
+                    className={clsx(`px-4 py-3 border border-slate-200 select-none ${h.align === 'right' ? 'text-right' : ''}`, h.key !== 'Actions' && h.key !== 'select' && 'cursor-pointer hover:text-slate-900')}
+                    onClick={() => {
+                      if (h.key === 'Actions' || h.key === 'select') return;
+                      if (sortKey === h.key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+                      else { setSortKey(h.key); setSortDir('asc'); }
+                    }}
+                  >
+                    {h.key === 'select' ? (
+                      <input type="checkbox" onChange={handleSelectAll} checked={sortedFilteredData.length > 0 && selectedRecords.length === sortedFilteredData.length} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                    ) : (
+                      <span className={clsx("inline-flex items-center gap-1", h.align === 'right' && "justify-end w-full")}>
+                        {h.label}
+                        {h.key !== 'Actions' && (
+                          <span className="text-slate-400">
+                            {sortKey === h.key
+                              ? sortDir === 'asc' ? <ChevronUp size={13} className="text-slate-900 stroke-[3]" /> : <ChevronDown size={13} className="text-slate-900 stroke-[3]" />
+                              : <ChevronUp size={13} className="text-slate-500 stroke-[2.5]" />}
+                          </span>
+                        )}
+                      </span>
+                    )}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 font-medium">
+              {sortedFilteredData.length === 0 ? (
+                <tr>
+                  <td colSpan={18} className="px-5 py-12 text-center text-slate-400 font-semibold">
+                    No EMI records match the selected filters.
+                  </td>
+                </tr>
+              ) : (
+                paginatedData.map((r, idx) => (
+                  <tr
+                    key={r.id}
+                    onClick={() => setDrawerRecord(r)}
+                    className={clsx(
+                      "transition-colors cursor-pointer group",
+                      idx % 2 === 1 ? 'bg-slate-50/80' : 'bg-white',
+                      selectedRecords.includes(r.id) && 'bg-blue-50/50'
+                    )}
+                  >
+                    <td className="px-4 py-3.5 border border-slate-200" onClick={e => e.stopPropagation()}>
+                      <input type="checkbox" checked={selectedRecords.includes(r.id)} onChange={(e) => handleSelectRecord(e, r.id)} className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+                    </td>
+                    <td className="px-4 py-3.5 border border-slate-200">
+                      <span className="font-extrabold text-slate-900 text-xs hover:text-blue-600 transition-colors">
+                        {r.customerName}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3.5 border border-slate-200 font-bold text-slate-800 text-xs whitespace-nowrap">{r.customerContactNo}</td>
+                    <td className="px-4 py-3.5 border border-slate-200">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase bg-slate-100 text-slate-800 border border-slate-200">
+                        {r.insuranceCompanyType}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3.5 border border-slate-200 font-extrabold text-slate-900 text-xs">{r.insurer}</td>
+                    <td className="px-4 py-3.5 border border-slate-200 font-extrabold text-blue-900 text-xs">{r.product}</td>
+                    <td className="px-4 py-3.5 border border-slate-200">
+                      <span className="font-black text-slate-900 text-xs tracking-tight bg-slate-50 px-2 py-0.5 rounded border border-slate-200/60">
+                        {r.policyNo}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3.5 border border-slate-200 font-bold text-slate-800 text-xs">{r.loanProvider}</td>
+                    <td className="px-4 py-3.5 border border-slate-200 font-extrabold text-slate-900 text-xs whitespace-nowrap">{r.premiumAmount ? fmtCurr(r.premiumAmount) : '-'}</td>
+                    <td className="px-4 py-3.5 border border-slate-200 font-extrabold text-blue-800 text-xs whitespace-nowrap">{r.downpaymentAmount && r.downpaymentAmount > 0 ? fmtCurr(r.downpaymentAmount) : '₹ 0'}</td>
+                    <td className="px-4 py-3.5 border border-slate-200 font-extrabold text-amber-700 text-xs whitespace-nowrap">{fmtCurr(r.remainingAmountTotal)}</td>
+                    <td className="px-4 py-3.5 border border-slate-200 font-black text-slate-900 text-xs whitespace-nowrap">{fmtCurr(r.amount)}</td>
+                    <td className="px-4 py-3.5 border border-slate-200 font-bold text-slate-800 text-xs">{r.installmentFrequency}</td>
+                    <td className="px-4 py-3.5 border border-slate-200 font-bold text-slate-800 text-xs">{r.paidEmis}/{r.totalEmis}</td>
+                    <td className="px-4 py-3.5 border border-slate-200 font-bold text-slate-800 text-xs whitespace-nowrap">{r.dueDate}</td>
+                    <td className="px-4 py-3.5 border border-slate-200">
+                      <span
+                        className={clsx(
+                          'inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black tracking-wider uppercase border whitespace-nowrap',
+                          r.status === 'DUE' && 'bg-amber-50 text-amber-600 border-amber-200',
+                          r.status === 'PAID' && 'bg-emerald-50 text-emerald-600 border-emerald-200',
+                          r.status === 'UPCOMING' && 'bg-blue-50 text-blue-600 border-blue-200',
+                          r.status === 'OVERDUE' && 'bg-rose-50 text-rose-600 border-rose-200',
+                          r.status === 'MESSAGE SENT' && 'bg-purple-50 text-purple-600 border-purple-200',
+                          r.status === 'CUSTOMER CONTACTED' && 'bg-sky-50 text-sky-600 border-sky-200',
+                          r.status === 'PAYMENT FAILED' && 'bg-gray-100 text-gray-600 border-gray-200'
+                        )}
+                      >
+                        {r.status}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3.5 border border-slate-200 font-bold text-slate-800 text-xs whitespace-nowrap">{r.employee}</td>
+                    
+                    <td className="px-4 py-3.5 border border-slate-200 text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
+                      <button
+                        onClick={() => setDrawerRecord(r)}
+                        className="px-2.5 py-1 rounded-lg text-xs font-bold text-slate-600 hover:bg-slate-100 border border-slate-200/70 transition-all cursor-pointer"
+                      >
+                        Actions ▾
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+            </table>
+          </div>
+
+          {/* Table Pagination */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-5 py-3 border-t border-slate-100 bg-slate-50/50">
+            <span className="text-sm text-slate-500 font-medium">
+              Showing <strong className="font-extrabold text-slate-800">{sortedFilteredData.length === 0 ? 0 : (currentPage - 1) * rowsPerPage + 1}–{Math.min(currentPage * rowsPerPage, sortedFilteredData.length)}</strong>
+              {' '}of <strong className="font-extrabold text-slate-800">{sortedFilteredData.length}</strong> records
+            </span>
+            <div className="flex flex-wrap items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setCurrentPage(page => Math.max(1, page - 1))}
+                disabled={currentPage === 1}
+                className="p-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              ><ChevronLeft size={15} /></button>
+              {Array.from({ length: Math.min(totalPages, 5) }, (_, index) => {
+                const firstPage = Math.max(1, Math.min(currentPage - 2, totalPages - 4));
+                const page = firstPage + index;
+                return (
+                  <button
+                    key={page}
+                    type="button"
+                    onClick={() => setCurrentPage(page)}
+                    className={clsx(
+                      'min-w-[30px] h-7 px-2 rounded-lg text-sm font-extrabold transition-all border',
+                      currentPage === page
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50',
+                    )}
+                  >{page}</button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => setCurrentPage(page => Math.min(totalPages, page + 1))}
+                disabled={currentPage === totalPages}
+                className="p-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              ><ChevronRight size={15} /></button>
+            </div>
+          </div>
+        </div>
+
+      {/* ── NEW EMI Details Popup Modal UI (matching Add New Contact popup design) ───────── */}
+      <Modal
+        open={Boolean(drawerRecord)}
+        onClose={() => setDrawerRecord(null)}
+        title="Installment Details"
+        subtitle={`View installment schedule, collections, and customer follow-ups for ${drawerRecord?.customerName || ''}`}
+        size="2xl"
+        actions={
+          <div className="flex flex-wrap items-center gap-2 mr-1">
+            {drawerRecord && (
+              <button
+                type="button"
+                onClick={() => handleMarkAsPaid(drawerRecord.id)}
+                disabled={drawerRecord.status === 'PAID'}
+                className={clsx(
+                  'px-3.5 py-1.5 text-xs font-bold rounded-lg cursor-pointer shadow-xs transition-all',
+                  drawerRecord.status === 'PAID'
+                    ? 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
+                    : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white shadow-blue-500/20 hover:scale-[1.02]'
+                )}
+              >
+                {drawerRecord.status === 'PAID' ? 'Already Paid' : 'Mark as Paid'}
+              </button>
+            )}
+          </div>
+        }
+      >
+        {drawerRecord && (
+          <div className="space-y-3">
+            {/* Customer Profile Banner Card */}
+            <div className="p-3 bg-slate-50 border border-slate-200/80 rounded-xl space-y-2.5 shadow-2xs">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
+                  <User size={16} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-bold text-xs text-slate-900 truncate">{drawerRecord.customerName}</h3>
+                    <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200">
+                      {drawerRecord.customerTag}
+                    </span>
+                  </div>
+                  <p className="text-[11px] font-semibold text-slate-500">Policy: {drawerRecord.policyNo}</p>
+                </div>
+              </div>
+
+              {/* Sub details grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-200/60 text-xs">
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Insurer</span>
+                  <span className="font-bold text-slate-800 text-[11px] truncate block">{drawerRecord.insurer}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">EMI Gateway / Mode</span>
+                  <span className="font-bold text-slate-800 text-[11px] truncate block">
+                    {drawerRecord.emiGateway || drawerRecord.loanProvider || drawerRecord.paymentMode || 'Direct'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Downpayment</span>
+                  <span className="font-bold text-slate-800 text-[11px] truncate block">
+                    {drawerRecord.downpaymentAmount && drawerRecord.downpaymentAmount > 0 ? fmtCurr(drawerRecord.downpaymentAmount) : '₹ 0'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Installment Plan</span>
+                  <span className="font-bold text-slate-800 text-[11px] truncate block">
+                    {drawerRecord.totalEmis} × {fmtCurr(drawerRecord.amount)}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal sub-navigation tabs (styled like Add New Contact modal tabs) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 bg-slate-200/60 p-1.5 rounded-xl gap-2 border border-slate-200/80 shadow-2xs">
+              {[
+                { key: 'overview', label: 'Installment Overview' },
+                { key: 'schedule', label: 'Installment Schedule' },
+                { key: 'communication', label: 'Communication' },
+                { key: 'notes', label: 'Notes' },
+              ].map(tb => (
+                <button
+                  key={tb.key}
+                  type="button"
+                  onClick={() => setDrawerTab(tb.key as any)}
+                  className={clsx(
+                    'w-full py-1.5 px-2 rounded-lg text-xs font-bold tracking-wide transition-all cursor-pointer truncate text-center select-none',
+                    drawerTab === tb.key
+                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
+                  )}
+                >
+                  {tb.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Modal Fixed Height Scroll Content */}
+            <div className="h-[410px] overflow-y-auto pr-1.5 custom-scrollbar space-y-3.5">
+              {/* TAB 1: OVERVIEW */}
+              {drawerTab === 'overview' && (() => {
+                const isAllPaid = drawerRecord.paidEmis >= drawerRecord.totalEmis;
+                const dueCount = isAllPaid ? 0 : 1;
+                const dueAmount = isAllPaid ? 0 : drawerRecord.amount;
+                const remainingCount = Math.max(0, drawerRecord.totalEmis - drawerRecord.paidEmis - dueCount);
+                const remainingAmount = remainingCount * drawerRecord.amount;
+
+                return (
+                <div className="space-y-3.5 animate-fadeIn">
+                  {/* Summary Bar: Total Amount | Downpayment | Total Paid | Pending */}
+                  <div className="bg-slate-100/90 border border-slate-200/90 rounded-xl px-3.5 py-2.5 flex items-center justify-between text-xs font-bold text-slate-700 shadow-2xs">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Total Amount:</span>
+                      <span className="text-slate-900 font-extrabold">{fmtCurr(drawerRecord.premiumAmount || (drawerRecord.amount * drawerRecord.totalEmis))}</span>
+                    </div>
+                    {Boolean(drawerRecord.downpaymentAmount && drawerRecord.downpaymentAmount > 0) && (
+                      <>
+                        <div className="h-3.5 w-px bg-slate-300" />
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] uppercase tracking-wider text-blue-700 font-bold">Downpayment:</span>
+                          <span className="text-blue-800 font-extrabold">{fmtCurr(drawerRecord.downpaymentAmount || 0)}</span>
+                        </div>
+                      </>
+                    )}
+                    <div className="h-3.5 w-px bg-slate-300" />
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] uppercase tracking-wider text-emerald-700 font-bold">Total Paid:</span>
+                      <span className="text-emerald-800 font-extrabold">{fmtCurr(drawerRecord.paidAmountTotal)}</span>
+                    </div>
+                    <div className="h-3.5 w-px bg-slate-300" />
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] uppercase tracking-wider text-amber-700 font-bold">Pending Amount:</span>
+                      <span className="text-amber-800 font-extrabold">{fmtCurr(drawerRecord.remainingAmountTotal)}</span>
+                    </div>
+                  </div>
+
+                  {/* Installment Progress */}
+                  <div className="space-y-1.5 bg-white p-3 border border-slate-200/80 rounded-xl shadow-2xs">
+                    <div className="flex items-center justify-between text-xs font-bold">
+                      <span className="text-slate-700">Installment Progress</span>
+                      <span className="text-slate-900">{drawerRecord.paidEmis} / {drawerRecord.totalEmis} Paid</span>
+                      <span className="text-slate-400 font-semibold">{((drawerRecord.paidEmis / (drawerRecord.totalEmis || 1)) * 100).toFixed(2)}%</span>
+                    </div>
+                    <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                      <div
+                        className="bg-emerald-500 h-full rounded-full transition-all duration-500"
+                        style={{ width: `${Math.min(100, (drawerRecord.paidEmis / (drawerRecord.totalEmis || 1)) * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Stat Cards 3 Columns */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div className="bg-emerald-50/60 border border-emerald-100 p-2.5 rounded-lg text-center">
+                      <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider block">Total Collected</span>
+                      <span className="text-xs font-extrabold text-emerald-900 block mt-0.5">{drawerRecord.paidEmis} / {drawerRecord.totalEmis} Paid</span>
+                      <span className="text-[10px] font-bold text-emerald-700 block">
+                        {fmtCurr(drawerRecord.paidAmountTotal)}
+                      </span>
+                    </div>
+
+                    <div className="bg-amber-50/60 border border-amber-100 p-2.5 rounded-lg text-center">
+                      <span className="text-[10px] font-bold text-amber-700 uppercase tracking-wider block">Current Due</span>
+                      <span className="text-xs font-extrabold text-amber-900 block mt-0.5">{dueCount}</span>
+                      <span className="text-[10px] font-bold text-amber-700 block">{fmtCurr(dueAmount)}</span>
+                    </div>
+
+                    <div className="bg-sky-50/60 border border-sky-100 p-2.5 rounded-lg text-center">
+                      <span className="text-[10px] font-bold text-sky-700 uppercase tracking-wider block">Pending / Outstanding</span>
+                      <span className="text-xs font-extrabold text-sky-900 block mt-0.5">{remainingCount} Left</span>
+                      <span className="text-[10px] font-bold text-sky-700 block">{fmtCurr(drawerRecord.remainingAmountTotal)}</span>
+                    </div>
+                  </div>
+
+                  {/* Current Installment Due / Latest Box */}
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/80 space-y-1.5">
+                    <span className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block">
+                      Current Installment ({isAllPaid ? 'Settled' : 'Due'})
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs items-center">
+                      <div>
+                        <span className="text-[10px] font-bold text-slate-400 block">Installment No.</span>
+                        <span className="font-bold text-slate-800 text-[11px]">{isAllPaid ? drawerRecord.totalEmis : drawerRecord.paidEmis + 1} of {drawerRecord.totalEmis}</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-bold text-slate-400 block">{isAllPaid ? 'Next Renewal Due' : 'Due Date'}</span>
+                        <span className="font-bold text-slate-800 text-[11px]">{drawerRecord.dueDate}</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-bold text-slate-400 block">Amount</span>
+                        <span className="font-extrabold text-slate-900 text-[11px]">{fmtCurr(isAllPaid ? (drawerRecord.schedule[drawerRecord.totalEmis - 1]?.amount || drawerRecord.premiumAmount || 0) : drawerRecord.amount)}</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-bold text-slate-400 block">Status</span>
+                        <span className={clsx(
+                          'px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase',
+                          drawerRecord.status === 'PAID' ? 'bg-emerald-100 text-emerald-700' :
+                          drawerRecord.status === 'OVERDUE' ? 'bg-rose-100 text-rose-700' :
+                          'bg-amber-100 text-amber-700'
+                        )}>
+                          {drawerRecord.status}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Quick Actions */}
+                  <div className="space-y-1.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Quick Actions</span>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleSendReminder(drawerRecord)}
+                        className="w-full py-2 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer truncate"
+                      >
+                        <MessageSquare size={13} className="shrink-0" />
+                        <span>Send Reminder</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleCallCustomer(drawerRecord)}
+                        className="w-full py-2 px-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer truncate"
+                      >
+                        <Phone size={13} className="shrink-0" />
+                        <span>Call Customer</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setStatusUpdateOpen(!statusUpdateOpen)}
+                        className="w-full py-2 px-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer truncate"
+                      >
+                        <span>Update Status</span>
+                      </button>
+                    </div>
+
+                    {statusUpdateOpen && (
+                      <div className="p-2.5 bg-white border border-slate-200 rounded-lg shadow-md space-y-1.5 text-xs">
+                        <p className="font-bold text-slate-600 text-[10px] uppercase">Select New Status</p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+                          {['DUE', 'PAID', 'OVERDUE', 'MESSAGE SENT', 'CUSTOMER CONTACTED'].map(st => (
+                            <button
+                              key={st}
+                              type="button"
+                              onClick={() => handleUpdateStatus(drawerRecord.id, st as any)}
+                              className="px-2 py-1 text-left text-[10px] font-bold rounded border hover:bg-blue-50 text-slate-700"
+                            >
+                              {st}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Communication History Timeline */}
+                  <div className="space-y-2 pt-1">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">Communication History</span>
+                    <div className="space-y-2 text-xs border-l-2 border-slate-200 pl-2.5">
+                      {drawerRecord.history.map((h, i) => (
+                        <div key={h.id || i} className="relative group">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-slate-800 text-[11px]">{h.date}</span>
+                            <span className="text-[9px] text-slate-400 font-semibold">{h.author}</span>
+                          </div>
+                          <p className="text-slate-600 mt-0.5 font-medium text-[11px]">{h.note}</p>
+                        </div>
+                      ))}
+                      {drawerRecord.history.length === 0 && (
+                        <p className="text-xs text-slate-400 font-medium">No history logged yet.</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                );
+              })()}
+
+              {/* TAB 2: SCHEDULE */}
+              {drawerTab === 'schedule' && (
+                <div className="space-y-2.5 text-xs animate-fadeIn">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                    Installment Payment Schedule ({drawerRecord.totalEmis} {drawerRecord.installmentFrequency || 'Installments'})
+                  </span>
+                  <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg overflow-hidden">
+                    {Boolean(drawerRecord.downpaymentAmount && drawerRecord.downpaymentAmount > 0) && (
+                      <div className="p-2.5 flex items-center justify-between bg-blue-50/60 hover:bg-blue-50">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-900 block text-[11px]">Downpayment (Upfront)</span>
+                            <span className="text-[9px] font-bold text-emerald-700 bg-emerald-100/80 px-1.5 py-0.5 rounded border border-emerald-200">
+                              Paid on Policy Issuance
+                            </span>
+                          </div>
+                          <span className="text-slate-500 text-[10px]">Payment Mode: {drawerRecord.paymentMode || 'ONLINE'}</span>
+                        </div>
+                        <div className="text-right">
+                          <span className="font-bold text-slate-900 block text-[11px]">{fmtCurr(drawerRecord.downpaymentAmount || 0)}</span>
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase bg-emerald-100 text-emerald-700">
+                            PAID
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                    {drawerRecord.schedule.map(sc => (
+                      <div key={sc.emiNo} className="p-2.5 flex items-center justify-between bg-white hover:bg-slate-50">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-900 block text-[11px]">Installment #{sc.emiNo}</span>
+                            {sc.paidDate && (
+                              <span className="text-[9px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">
+                                Paid on {sc.paidDate}
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-slate-400 text-[10px]">Due: {sc.dueDate}</span>
+                        </div>
+                        <div className="text-right">
+                          <span className="font-bold text-slate-900 block text-[11px]">{fmtCurr(sc.amount)}</span>
+                          <span className={clsx(
+                            'px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase',
+                            sc.status === 'PAID' ? 'bg-emerald-100 text-emerald-700' :
+                            sc.status === 'OVERDUE' ? 'bg-rose-100 text-rose-700' :
+                            sc.status === 'UPCOMING' ? 'bg-blue-100 text-blue-700' :
+                            'bg-amber-100 text-amber-700'
+                          )}>
+                            {sc.status}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 3: COMMUNICATION */}
+              {drawerTab === 'communication' && (
+                <div className="bg-slate-50/90 rounded-2xl border border-slate-200/70 p-4 space-y-3 shadow-xs animate-fadeIn">
+                  {/* Header */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="w-6 h-6 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
+                        <MessageCircle size={13} />
+                      </div>
+                      <h4 className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider">
+                        Consultation Comments & Communication Logs
+                      </h4>
+                    </div>
+                    {drawerRecord.history.length > 0 && (
+                      <span className="text-[10px] font-extrabold bg-slate-200/70 text-slate-600 px-2 py-0.5 rounded-full">
+                        {drawerRecord.history.length} {drawerRecord.history.length === 1 ? 'Comment' : 'Comments'}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Timeline List */}
+                  <div className="max-h-56 overflow-y-auto space-y-2.5 custom-scrollbar pr-0.5">
+                    {drawerRecord.history.length === 0 ? (
+                      <div className="bg-white/60 rounded-xl border border-dashed border-slate-200 p-4 text-center">
+                        <p className="text-xs text-slate-400 font-medium italic">No comments yet. Add the first summary below.</p>
+                      </div>
+                    ) : (
+                      drawerRecord.history.map((cmt, ci) => (
+                        <div key={cmt.id || ci} className="bg-white rounded-xl border border-slate-200/80 p-3 shadow-2xs hover:shadow-xs hover:border-blue-200 transition-all space-y-1.5 relative overflow-hidden group">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="inline-flex flex-wrap items-center gap-1 text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-lg shadow-2xs">
+                              <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+                              {cmt.author}
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-semibold flex flex-wrap items-center gap-1">
+                              {cmt.date}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-700 font-medium leading-relaxed whitespace-pre-wrap pl-0.5">
+                            {cmt.note}
+                          </p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  {/* Add Call Summary & Consultation Comment Box */}
+                  <form onSubmit={handleAddNote} className="bg-white rounded-xl border-2 border-blue-200/90 p-3 space-y-2 shadow-2xs focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 transition-all mt-1">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] font-extrabold text-blue-700 uppercase tracking-wider flex flex-wrap items-center gap-1.5">
+                        <MessageCircle size={12} className="text-blue-600" />
+                        Add Call Summary / Comment
+                      </label>
+                      <span className="text-[9px] text-slate-400 font-semibold italic">Communication Log</span>
+                    </div>
+                    <textarea
+                      rows={2}
+                      className="w-full text-xs p-2.5 bg-slate-50/70 border border-slate-200 rounded-lg text-slate-800 placeholder-slate-400 font-medium focus:bg-white focus:border-blue-400 outline-none resize-y transition-all"
+                      placeholder="Type call summary, client discussion details, or follow-up notes..."
+                      value={newNoteInput}
+                      onChange={e => setNewNoteInput(e.target.value)}
+                    />
+                    <div className="flex justify-end pt-1">
+                      <button
+                        type="submit"
+                        className="px-3.5 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-lg font-extrabold text-[11px] shadow-xs cursor-pointer transition-all hover:scale-[1.02] flex flex-wrap items-center gap-1.5"
+                      >
+                        <Send size={12} />
+                        <span>Add Comment</span>
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
+
+              {/* TAB 4: NOTES */}
+              {drawerTab === 'notes' && (
+                <div className="space-y-2.5 text-xs animate-fadeIn">
+                  <label className="font-bold text-slate-700 block">Policy Notes</label>
+                  <textarea
+                    rows={6}
+                    defaultValue={drawerRecord.notes || ''}
+                    placeholder="Add internal notes for this policy installment..."
+                    className="w-full p-2.5 border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:ring-2 focus:ring-blue-500/20 outline-none text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => toast.success('Notes saved successfully!')}
+                    className="py-2 px-4 bg-slate-800 text-white font-bold rounded-lg hover:bg-slate-900 cursor-pointer text-xs transition-all hover:scale-[1.01]"
+                  >
+                    Save Notes
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* ── OLD EMI Details Side Drawer Panel UI (Commented out for comparison) ───────── */}
+      {/* 
+      {drawerRecord && (
+        <div className="fixed inset-0 z-50 overflow-hidden bg-slate-900/40 backdrop-blur-xs flex justify-end animate-fadeIn">
+          <div className="w-full sm:w-[480px] lg:w-[520px] max-w-full bg-white h-full shadow-2xl flex flex-col justify-between border-l border-slate-200 animate-slideLeft">
+            <div className="flex flex-col flex-1 min-h-0">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 shrink-0">
+                <h2 className="text-lg font-black text-slate-900 tracking-tight">EMI Details</h2>
+                <button
+                  onClick={() => setDrawerRecord(null)}
+                  className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="p-5 bg-slate-50/70 border-b border-slate-100 space-y-4 shrink-0">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-slate-200/80 text-slate-600 flex items-center justify-center font-extrabold text-base shrink-0 border border-slate-300/60">
+                    <User size={22} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-extrabold text-base text-slate-900 truncate">{drawerRecord.customerName}</h3>
+                      <span className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        {drawerRecord.customerTag}
+                      </span>
+                    </div>
+                    <p className="text-xs font-semibold text-slate-500">{drawerRecord.policyNo}</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 border-t border-slate-200/60 text-xs">
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Insurer</span>
+                    <span className="font-bold text-slate-800 text-xs truncate block">{drawerRecord.insurer}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Policy Tenure</span>
+                    <span className="font-bold text-slate-800 text-xs truncate block">{drawerRecord.tenure}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Payment Mode</span>
+                    <span className="font-bold text-slate-800 text-xs truncate block">{drawerRecord.paymentMode}</span>
+                  </div>
+                </div>
+              </div>
+              <div className="flex border-b border-slate-100 px-5 text-xs font-bold shrink-0">
+                {[
+                  { key: 'overview', label: 'EMI Overview' },
+                  { key: 'schedule', label: 'EMI Schedule' },
+                  { key: 'communication', label: 'Communication' },
+                  { key: 'notes', label: 'Notes' },
+                ].map(tb => (
+                  <button
+                    key={tb.key}
+                    onClick={() => setDrawerTab(tb.key as any)}
+                    className={clsx(
+                      'py-3 mr-4 border-b-2 transition-all cursor-pointer',
+                      drawerTab === tb.key
+                        ? 'border-blue-600 text-blue-600 font-extrabold'
+                        : 'border-transparent text-slate-400 hover:text-slate-700'
+                    )}
+                  >
+                    {tb.label}
+                  </button>
+                ))}
+              </div>
+              <div className="p-5 flex-1 overflow-y-auto space-y-5">
+                {drawerTab === 'overview' && (
+                  <>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs font-extrabold">
+                        <span className="text-slate-700">EMI Progress</span>
+                        <span className="text-slate-900">{drawerRecord.paidEmis} / {drawerRecord.totalEmis} Paid</span>
+                        <span className="text-slate-400 font-semibold">{((drawerRecord.paidEmis / drawerRecord.totalEmis) * 100).toFixed(2)}%</span>
+                      </div>
+                      <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
+                        <div
+                          className="bg-emerald-500 h-full rounded-full transition-all duration-500"
+                          style={{ width: `${(drawerRecord.paidEmis / drawerRecord.totalEmis) * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <div className="bg-emerald-50/60 border border-emerald-100 p-2.5 rounded-xl text-center">
+                        <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider block">Paid</span>
+                        <span className="text-sm font-extrabold text-emerald-900 block mt-0.5">{drawerRecord.paidEmis}</span>
+                        <span className="text-[11px] font-bold text-emerald-700 block">{fmtCurr(drawerRecord.paidAmountTotal)}</span>
+                      </div>
+                      <div className="bg-amber-50/60 border border-amber-100 p-2.5 rounded-xl text-center">
+                        <span className="text-[10px] font-bold text-amber-700 uppercase tracking-wider block">Due</span>
+                        <span className="text-sm font-extrabold text-amber-900 block mt-0.5">1</span>
+                        <span className="text-[11px] font-bold text-amber-700 block">{fmtCurr(drawerRecord.amount)}</span>
+                      </div>
+                      <div className="bg-sky-50/60 border border-sky-100 p-2.5 rounded-xl text-center">
+                        <span className="text-[10px] font-bold text-sky-700 uppercase tracking-wider block">Remaining</span>
+                        <span className="text-sm font-extrabold text-sky-900 block mt-0.5">{drawerRecord.totalEmis - drawerRecord.paidEmis - 1}</span>
+                        <span className="text-[11px] font-bold text-sky-700 block">{fmtCurr(drawerRecord.remainingAmountTotal)}</span>
+                      </div>
+                    </div>
+                    <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80 space-y-2">
+                      <span className="text-[11px] font-extrabold text-slate-800 uppercase tracking-wider block">Current EMI (Due)</span>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs items-center">
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-400 block">EMI No.</span>
+                          <span className="font-bold text-slate-800">{drawerRecord.status === 'PAID' || drawerRecord.paidEmis >= drawerRecord.totalEmis ? drawerRecord.totalEmis : drawerRecord.paidEmis + 1} of {drawerRecord.totalEmis}</span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-400 block">Due Date</span>
+                          <span className="font-bold text-slate-800">{drawerRecord.dueDate}</span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-400 block">Amount</span>
+                          <span className="font-extrabold text-slate-900">{fmtCurr(drawerRecord.status === 'PAID' ? 0 : drawerRecord.amount)}</span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-400 block">Status</span>
+                          <span className={clsx(
+                            'px-2 py-0.5 rounded-full text-[10px] font-black uppercase',
+                            drawerRecord.status === 'PAID' ? 'bg-emerald-100 text-emerald-700' :
+                            drawerRecord.status === 'OVERDUE' ? 'bg-rose-100 text-rose-700' :
+                            'bg-amber-100 text-amber-700'
+                          )}>
+                            {drawerRecord.status}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Quick Actions</span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          onClick={() => handleSendReminder(drawerRecord)}
+                          className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm shadow-emerald-500/20 cursor-pointer"
+                        >
+                          <MessageSquare size={14} />
+                          Send Reminder
+                        </button>
+                        <button
+                          onClick={() => handleCallCustomer(drawerRecord)}
+                          className="flex-1 py-2 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm shadow-blue-500/20 cursor-pointer"
+                        >
+                          <Phone size={14} />
+                          Call Customer
+                        </button>
+                        <button
+                          onClick={() => setStatusUpdateOpen(!statusUpdateOpen)}
+                          className="py-2 px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs flex items-center justify-center gap-1 cursor-pointer"
+                        >
+                          Update Status
+                        </button>
+                      </div>
+                      {statusUpdateOpen && (
+                        <div className="p-3 bg-white border border-slate-200 rounded-xl shadow-lg space-y-2 text-xs">
+                          <p className="font-bold text-slate-600 text-[10px] uppercase">Select New Status</p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                            {['DUE', 'PAID', 'UPCOMING', 'OVERDUE', 'MESSAGE SENT', 'CUSTOMER CONTACTED'].map(st => (
+                              <button
+                                key={st}
+                                onClick={() => handleUpdateStatus(drawerRecord.id, st as any)}
+                                className="px-2 py-1 text-left text-[11px] font-bold rounded-lg border hover:bg-blue-50 text-slate-700"
+                              >
+                                {st}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="space-y-3 pt-2">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">Communication History</span>
+                      <div className="space-y-3 text-xs border-l-2 border-slate-200 pl-3">
+                        {drawerRecord.history.map((h, i) => (
+                          <div key={h.id || i} className="relative group">
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-slate-800">{h.date}</span>
+                              <span className="text-[10px] text-slate-400 font-semibold">{h.author}</span>
+                            </div>
+                            <p className="text-slate-600 mt-0.5 font-medium">{h.note}</p>
+                          </div>
+                        ))}
+                        {drawerRecord.history.length === 0 && (
+                          <p className="text-xs text-slate-400 font-medium">No history logged yet.</p>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+                {drawerTab === 'schedule' && (
+                  <div className="space-y-3 text-xs">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">EMI Payment Schedule ({drawerRecord.totalEmis} Months)</span>
+                    <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden">
+                      {drawerRecord.schedule.map(sc => (
+                        <div key={sc.emiNo} className="p-3 flex items-center justify-between bg-white hover:bg-slate-50">
+                          <div>
+                            <span className="font-extrabold text-slate-900 block">EMI #{sc.emiNo}</span>
+                            <span className="text-slate-400 text-[11px]">Due: {sc.dueDate}</span>
+                          </div>
+                          <div className="text-right">
+                            <span className="font-extrabold text-slate-900 block">{fmtCurr(sc.amount)}</span>
+                            <span className={clsx(
+                              'px-2 py-0.5 rounded-full text-[9px] font-black uppercase',
+                              sc.status === 'PAID' ? 'bg-emerald-100 text-emerald-700' :
+                              sc.status === 'OVERDUE' ? 'bg-rose-100 text-rose-700' :
+                              sc.status === 'UPCOMING' ? 'bg-blue-100 text-blue-700' :
+                              'bg-amber-100 text-amber-700'
+                            )}>
+                              {sc.status}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {drawerTab === 'communication' && (
+                  <div className="space-y-4">
+                    <form onSubmit={handleAddNote} className="space-y-2">
+                      <label className="text-xs font-bold text-slate-700">Add Log / Communication Note</label>
+                      <textarea
+                        rows={3}
+                        value={newNoteInput}
+                        onChange={e => setNewNoteInput(e.target.value)}
+                        placeholder="Enter details of customer call, WhatsApp response or note..."
+                        className="w-full p-2.5 border border-slate-200 rounded-xl text-xs bg-slate-50 focus:bg-white focus:ring-2 focus:ring-blue-500/20 outline-none"
+                      />
+                      <button type="submit" className="w-full py-2 bg-blue-600 text-white rounded-xl font-bold text-[10px] sm:text-xs hover:bg-blue-700 shadow-xs cursor-pointer">
+                        Add Communication Log
+                      </button>
+                    </form>
+                    <div className="space-y-3 text-xs pt-2">
+                      {drawerRecord.history.map(h => (
+                        <div key={h.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200/70 space-y-1">
+                          <div className="flex justify-between text-[11px] font-bold text-slate-500">
+                            <span>{h.date}</span>
+                            <span>{h.author}</span>
+                          </div>
+                          <p className="font-semibold text-slate-800">{h.note}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {drawerTab === 'notes' && (
+                  <div className="space-y-3 text-xs">
+                    <label className="font-bold text-slate-700 block">Policy Notes</label>
+                    <textarea
+                      rows={6}
+                      defaultValue={drawerRecord.notes || ''}
+                      placeholder="Add internal notes for this policy EMI..."
+                      className="w-full p-3 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white focus:ring-2 focus:ring-blue-500/20 outline-none"
+                    />
+                    <button
+                      onClick={() => toast.success('Notes saved successfully!')}
+                      className="py-2 px-4 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-900 cursor-pointer"
+                    >
+                      Save Notes
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="p-5 border-t border-slate-100 bg-white shrink-0">
+              <button
+                onClick={() => handleMarkAsPaid(drawerRecord.id)}
+                disabled={drawerRecord.status === 'PAID'}
+                className={clsx(
+                  'w-full py-3 rounded-xl font-black text-sm flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer',
+                  drawerRecord.status === 'PAID'
+                    ? 'bg-slate-100 text-slate-400 cursor-not-allowed shadow-none border border-slate-200'
+                    : 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-500/20'
+                )}
+              >
+                <CheckCircle2 size={18} />
+                {drawerRecord.status === 'PAID' ? 'Already Paid' : 'Mark as Paid'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      */}
+
+    </div>
+  );
+}

@@ -1,0 +1,7333 @@
+import { useState, useRef, useEffect, useMemo } from 'react';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
+import {
+  Plus, X, User, FileText, Pencil, Trash2, Upload, Search, Filter, Download,
+  MessageCircle, Calendar, Shield, Heart, MapPin, Briefcase, UserCircle2,
+  FileCheck2, ShieldCheck, Clock, ChevronDown, LayoutGrid, List, Eye, History, AlertTriangle, Users, CalendarDays
+} from 'lucide-react';
+import { useClaims, useCreateClaim, useUpdateClaimStatus, useDeleteClaim } from '@hooks/useClaims';
+import { usePolicies } from '@hooks/usePolicies';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { contactsService, policiesService, claimsService, documentsService } from '@api/index';
+import DataTable, { Column } from '@comps/common/DataTable';
+import ActivityTimeline from '@comps/common/ActivityTimeline';
+import ImportFormatModal from '@comps/common/ImportFormatModal';
+import * as XLSX from 'xlsx';
+import ClaimPolicyDetailsTab from './components/ClaimPolicyDetailsTab';
+
+export function getPolicyYearString(p: any): string {
+  if (!p) return '';
+
+  const parseYear = (val: any): number | null => {
+    if (!val) return null;
+    const d = new Date(val);
+    if (!isNaN(d.getTime())) return d.getFullYear();
+    const strMatch = String(val).match(/(\d{4})/);
+    return strMatch ? parseInt(strMatch[1], 10) : null;
+  };
+
+  const startYear = parseYear(p.startDate) || parseYear(p.firstPremiumDate) || parseYear(p.createdAt);
+  const endYear = parseYear(p.endDate) || parseYear(p.maturityDate) || parseYear(p.lastPremiumDate);
+
+  if (startYear) {
+    if (endYear && endYear > startYear) {
+      return `${startYear}-${String(endYear).slice(-2)}`;
+    }
+    return `${startYear}-${String(startYear + 1).slice(-2)}`;
+  }
+
+  if (typeof p.notes === 'string') {
+    const spanMatch = p.notes.match(/(\d{4})[–\-](\d{2,4})/);
+    if (spanMatch) {
+      return `${spanMatch[1]}-${spanMatch[2].slice(-2)}`;
+    }
+    const singleYearMatch = p.notes.match(/\b(20\d{2})\b/);
+    if (singleYearMatch) {
+      const y = parseInt(singleYearMatch[1], 10);
+      return `${y}-${String(y + 1).slice(-2)}`;
+    }
+  }
+
+  return '';
+}
+
+import Modal from '@comps/common/Modal';
+import { useForm } from 'react-hook-form';
+import { z } from 'zod';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { format } from 'date-fns';
+
+const formatBytes = (bytes?: number | null) => {
+  if (bytes == null) return '';
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+import toast from 'react-hot-toast';
+import { DatePicker } from '@comps/common/DatePicker';
+import { useLookupStore } from '@store/lookup.store';
+import clsx from 'clsx';
+import { useAuthStore } from '@store/auth.store';
+import { deletionRequestsService } from '@api/deletionRequestsService';
+import { sortData } from '../../utils/sortUtils';
+import { insuranceService } from '@api/index';
+
+import CustomSelect from '@comps/common/CustomSelect';
+import { getActiveDropdownOptions, getModuleCustomDropdowns } from '../../utils/masterDropdowns';
+import { isFieldRequired as isFieldRequiredHelper, COMPULSORY_RULES_UPDATED_EVENT } from '../../utils/compulsoryFieldRules';
+
+const DEFAULT_CLAIM_TYPES_OPTIONS = [
+  'Cashless',
+  'Reimbursement',
+  'Pre-Post Hospitalization',
+  'Accident',
+  'Death Claim',
+  'Other'
+];
+
+const DEFAULT_CLAIM_STATUS_OPTIONS = [
+  'Intimated',
+  'Discharge Done',
+  'Pending Documents from Hospital/Customer',
+  'Documents Collected from Hospital/Customer',
+  'Submitted to Company',
+  'Pending for approval',
+  'Query Raised',
+  'Query Resolved',
+  'Partially Approved',
+  'Approved',
+  'Settled',
+  'Rejected',
+  'No Response from Customer',
+  'Pre-Authorisation Approved',
+  'Pre-Authorisation Rejected',
+  'Enhancement Approved',
+  'Enhancement Rejected',
+  'Interim Authorisation Approved',
+  'Interim Authorisation Rejected',
+  'Final Authorisation Approved',
+  'Final Authorisation Rejected',
+  'Advised to go for Reimbursement',
+  'Treatment Cancelled/Changed'
+];
+
+export const CLAIM_TYPES_OPTIONS = DEFAULT_CLAIM_TYPES_OPTIONS;
+export const CLAIM_STATUS_OPTIONS = DEFAULT_CLAIM_STATUS_OPTIONS;
+
+interface Claim {
+  id: string; claimNumber: string; status: string; claimType: string;
+  claimAmount: number; intimatedAt: string;
+  approvedAmount?: number; rejectionReason?: string;
+  contact?: { id: string; firstName: string; lastName: string; phone: string; email?: string };
+  policy?: { id: string; policyNumber: string; plan?: { name: string } };
+  assignedEmployeeId?: string | null;
+  notes?: string | null;
+}
+
+const STATUS_BADGE: Record<string, string> = {
+  INTIMATED: 'bg-blue-50 text-blue-700 border-blue-200',
+  DOC_COLLECTION: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+  FILED: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+  IN_REVIEW: 'bg-amber-50 text-amber-700 border-amber-200',
+  APPROVED: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  SETTLED: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  REJECTED: 'bg-red-50 text-red-700 border-red-200',
+  Pending: 'bg-blue-50 text-blue-700 border-blue-200',
+  'In Progress': 'bg-amber-50 text-amber-700 border-amber-200',
+  Approved: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  Settled: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  Rejected: 'bg-red-50 text-red-700 border-red-200',
+};
+
+const UI_STATUSES = ["Pending", "In Progress", "Approved", "Settled", "Rejected"];
+
+const BACKEND_TO_UI: Record<string, string> = {
+  INTIMATED: 'Pending',
+  DOC_COLLECTION: 'Pending',
+  FILED: 'Pending',
+  IN_REVIEW: 'In Progress',
+  APPROVED: 'Approved',
+  REJECTED: 'Rejected',
+  SETTLED: 'Settled',
+};
+
+const UI_TO_BACKEND: Record<string, string> = {
+  Pending: 'FILED',
+  'In Progress': 'IN_REVIEW',
+  Approved: 'APPROVED',
+  Rejected: 'REJECTED',
+  Settled: 'SETTLED',
+};
+
+export function getClaimUiStatus(c: any): 'Pending' | 'In Progress' | 'Approved' | 'Settled' | 'Rejected' {
+  if (!c) return 'Pending';
+  const notes = getClaimNotesData(c.notes);
+  const rawUi = (notes.uiClaimStatus || notes.statusOverride || '').trim();
+
+  // 1. Direct check on rawUi if user selected from CLAIM_STATUS_OPTIONS or custom UI status
+  if (rawUi) {
+    const s = rawUi.toLowerCase();
+    if (s === 'approved' || s.includes('approved')) return 'Approved';
+    if (s === 'rejected' || s.includes('rejected') || s.includes('cancelled')) return 'Rejected';
+    if (s === 'settled' || s.includes('settled')) return 'Settled';
+    if (
+      s === 'in progress' ||
+      s.includes('progress') ||
+      s.includes('query') ||
+      s.includes('submitted') ||
+      s.includes('discharge') ||
+      s.includes('collected') ||
+      s.includes('review') ||
+      s.includes('reimbursement') ||
+      s.includes('approval')
+    ) {
+      return 'In Progress';
+    }
+    if (s === 'pending' || s === 'intimated' || s.includes('pending documents')) {
+      return 'Pending';
+    }
+  }
+
+  // 2. Fallback to c.status (Prisma enum or raw string)
+  const rawStatus = (c.status || '').trim();
+  if (BACKEND_TO_UI[rawStatus]) {
+    return BACKEND_TO_UI[rawStatus] as any;
+  }
+  const statusUpper = rawStatus.toUpperCase();
+  if (BACKEND_TO_UI[statusUpper]) {
+    return BACKEND_TO_UI[statusUpper] as any;
+  }
+  if (statusUpper.includes('APPROV')) return 'Approved';
+  if (statusUpper.includes('REJECT')) return 'Rejected';
+  if (statusUpper.includes('SETTLE')) return 'Settled';
+  if (statusUpper.includes('REVIEW') || statusUpper.includes('PROGRESS')) return 'In Progress';
+
+  return 'Pending';
+}
+
+export function getBackendStatusFromUi(uiStatus?: string | null): string {
+  if (!uiStatus) return 'INTIMATED';
+  const s = uiStatus.trim().toLowerCase();
+  if (s === 'approved' || s.includes('approved')) return 'APPROVED';
+  if (s === 'rejected' || s.includes('rejected') || s.includes('cancelled')) return 'REJECTED';
+  if (s === 'settled' || s.includes('settled')) return 'SETTLED';
+  if (
+    s === 'in progress' ||
+    s.includes('progress') ||
+    s.includes('query') ||
+    s.includes('submitted') ||
+    s.includes('discharge') ||
+    s.includes('collected') ||
+    s.includes('review') ||
+    s.includes('reimbursement') ||
+    s.includes('approval')
+  ) {
+    return 'IN_REVIEW';
+  }
+  return 'INTIMATED';
+}
+
+const CLAIM_DOC_TYPES = [
+  { value: 'CLAIM_FORM',              label: 'Claim Form' },
+  { value: 'DISCHARGE_SUMMARY',       label: 'Discharge Summary' },
+  { value: 'OT_NOTES_IPD_PAPERS',     label: 'OT Notes / IPD Papers' },
+  { value: 'HOSPITAL_BILL',           label: 'Hospital Bill / Breakup Bill' },
+  { value: 'PHARMACY_MEDICINES_BILL', label: 'Pharmacy / Medicines Bill' },
+  { value: 'INVESTIGATION_LAB_BILL',  label: 'Investigation / Lab Bill' },
+  { value: 'BLOOD_ANESTHESIA_BILL',   label: 'Blood / Anesthesia Bill' },
+  { value: 'IMPORTANT_LAB_REPORTS',   label: 'Important Lab Reports' },
+  { value: 'IMP_BILLS',               label: 'Imp Bills' },
+  { value: 'OTHER_IMP_DOCS',          label: 'Other Imp Documents' },
+  { value: 'QUERY_LETTER',            label: 'Claim Query Letter' },
+  { value: 'REPLY_DOCS',              label: 'Reply Documents' },
+  { value: 'SETTLEMENT_LETTER',       label: 'Claim Settlement Letter' },
+  { value: 'REJECTION_LETTER',        label: 'Rejection Letter' },
+  { value: 'OTHER',                   label: 'Other' },
+];
+
+export function formatDateForInput(dateVal?: string | null | Date): string {
+  if (!dateVal) return '';
+  if (typeof dateVal === 'string') {
+    const trimmed = dateVal.trim();
+    if (!trimmed) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+    if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) return trimmed.slice(0, 10);
+    const ddmmyyyy = trimmed.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+    if (ddmmyyyy) {
+      const day = ddmmyyyy[1].padStart(2, '0');
+      const month = ddmmyyyy[2].padStart(2, '0');
+      const year = ddmmyyyy[3];
+      return `${year}-${month}-${day}`;
+    }
+    const d = new Date(trimmed);
+    if (!isNaN(d.getTime())) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+    return trimmed.slice(0, 10);
+  }
+  if (dateVal instanceof Date && !isNaN(dateVal.getTime())) {
+    const y = dateVal.getFullYear();
+    const m = String(dateVal.getMonth() + 1).padStart(2, '0');
+    const day = String(dateVal.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+  return '';
+}
+
+export function getClaimNotesData(notesField?: string | null) {
+  const defaultNotes = { 
+    diagnosis: '', hospital: '', hospitalAddress: '', patientName: '', deductionsNotes: '', admissionAt: '', dischargeAt: '', notes: '', statusOverride: '', amtHospital: 0, amtMedicine: 0, amtLab: 0, amtPreHosp: 0, amtPostHosp: 0, amtOthers: 0, subClaimNo: '', uiClaimStatus: '', comment: '', insuranceCompanyCategory: '', insuranceCompany: '', insuranceProductName: '', agentName: '',
+    deathAdmissionDate: '', causeOfDeath: '', dateOfOccurance: '', dateOfDeath: '', wasInComa: '', deathSumInsured: '', deathTotalClaimedAmount: '', deathComment: '', nominees: '[]',
+    hospitalName: '', hospitalState: '', hospitalCity: '', hospitalPincode: '', hospitalContactNo: '', hospitalEmail: '', hospitalRating: '', hospitalType: '', claimsPerson1Name: '', claimsPerson1Contact: '', claimsPerson2Name: '', claimsPerson2Contact: '', hospitalComment: '', hospitalDoctors: '[]',
+    diagnosisSimple: '', roomCategory: '', typeOfManagement: '', typeOfAdmission: '', isMedicoLegalCase: '', isFirLegalDocAvailable: '', hospitalisationComment: '', amtAnesthesia: 0, billingComment: '',
+    amtFinalBill: 0, amtNonPayables: 0, amtCopay: 0, amtDeductible: 0, amtBalanceEMIs: 0, amtNcdRecovery: 0, amtExcessSumInsured: 0, amtExcessAilmentLimit: 0, amtHigherRoomRent: 0, amtReasonableCost: 0, amtOtherRecoveries: 0, amtPatientToPay: 0, amtExcessAgreedPackage: 0, amtNetworkDiscount: 0, amtNotCollected: 0, amtPayableToInsured: 0, approvalComment: '', fileUploadComment: ''
+  };
+  if (!notesField) return defaultNotes;
+  try {
+    if (notesField.trim().startsWith('{')) {
+      const parsed = JSON.parse(notesField);
+      return {
+        ...defaultNotes,
+        diagnosis: parsed.diagnosis || parsed.diagnosisExact || '',
+        hospital: parsed.hospital || parsed.hospitalName || '',
+        hospitalAddress: parsed.hospitalAddress || '',
+        patientName: parsed.patientName || '',
+        deductionsNotes: parsed.deductionsNotes || '',
+        admissionAt: parsed.admissionAt || parsed.dateOfAdmission || parsed.admissionDate || parsed.deathAdmissionDate || '',
+        dischargeAt: parsed.dischargeAt || parsed.dateOfDischarge || parsed.dischargeDate || '',
+        notes: parsed.notes || '',
+        statusOverride: parsed.statusOverride || '',
+        amtHospital: Number(parsed.amtHospital || 0),
+        amtMedicine: Number(parsed.amtMedicine || 0),
+        amtLab: Number(parsed.amtLab || 0),
+        amtPreHosp: Number(parsed.amtPreHosp || 0),
+        amtPostHosp: Number(parsed.amtPostHosp || 0),
+        amtOthers: Number(parsed.amtOthers || 0),
+        subClaimNo: parsed.subClaimNo || '',
+        uiClaimStatus: parsed.uiClaimStatus || '',
+        comment: parsed.comment || '',
+        insuranceCompanyCategory: parsed.insuranceCompanyCategory || '',
+        insuranceCompany: parsed.insuranceCompany || '',
+        insuranceProductName: parsed.insuranceProductName || '',
+        agentName: parsed.agentName || '',
+        deathAdmissionDate: parsed.deathAdmissionDate || parsed.admissionAt || '',
+        causeOfDeath: parsed.causeOfDeath || '',
+        dateOfOccurance: parsed.dateOfOccurance || '',
+        dateOfDeath: parsed.dateOfDeath || '',
+        wasInComa: parsed.wasInComa || '',
+        deathSumInsured: parsed.deathSumInsured || '',
+        deathTotalClaimedAmount: parsed.deathTotalClaimedAmount || '',
+        deathComment: parsed.deathComment || '',
+        nominees: parsed.nominees || '[]',
+        hospitalName: parsed.hospitalName || parsed.hospital || '',
+        hospitalState: parsed.hospitalState || '',
+        hospitalCity: parsed.hospitalCity || '',
+        hospitalPincode: parsed.hospitalPincode || '',
+        hospitalContactNo: parsed.hospitalContactNo || '',
+        hospitalEmail: parsed.hospitalEmail || '',
+        hospitalRating: parsed.hospitalRating || '',
+        hospitalType: parsed.hospitalType || '',
+        claimsPerson1Name: parsed.claimsPerson1Name || '',
+        claimsPerson1Contact: parsed.claimsPerson1Contact || '',
+        claimsPerson2Name: parsed.claimsPerson2Name || '',
+        claimsPerson2Contact: parsed.claimsPerson2Contact || '',
+        hospitalComment: parsed.hospitalComment || '',
+        hospitalDoctors: parsed.hospitalDoctors || '[]',
+        diagnosisSimple: parsed.diagnosisSimple || parsed.diagnosisInSimpleWords || '',
+        roomCategory: parsed.roomCategory || '',
+        typeOfManagement: parsed.typeOfManagement || '',
+        typeOfAdmission: parsed.typeOfAdmission || '',
+        isMedicoLegalCase: parsed.isMedicoLegalCase || '',
+        isFirLegalDocAvailable: parsed.isFirLegalDocAvailable || '',
+        hospitalisationComment: parsed.hospitalisationComment || '',
+        amtAnesthesia: Number(parsed.amtAnesthesia || 0),
+        billingComment: parsed.billingComment || '',
+        amtFinalBill: Number(parsed.amtFinalBill || 0),
+        amtNonPayables: Number(parsed.amtNonPayables || 0),
+        amtCopay: Number(parsed.amtCopay || 0),
+        amtDeductible: Number(parsed.amtDeductible || 0),
+        amtBalanceEMIs: Number(parsed.amtBalanceEMIs || 0),
+        amtNcdRecovery: Number(parsed.amtNcdRecovery || 0),
+        amtExcessSumInsured: Number(parsed.amtExcessSumInsured || 0),
+        amtExcessAilmentLimit: Number(parsed.amtExcessAilmentLimit || 0),
+        amtHigherRoomRent: Number(parsed.amtHigherRoomRent || 0),
+        amtReasonableCost: Number(parsed.amtReasonableCost || 0),
+        amtOtherRecoveries: Number(parsed.amtOtherRecoveries || 0),
+        amtPatientToPay: Number(parsed.amtPatientToPay || 0),
+        amtExcessAgreedPackage: Number(parsed.amtExcessAgreedPackage || 0),
+        amtNetworkDiscount: Number(parsed.amtNetworkDiscount || 0),
+        amtNotCollected: Number(parsed.amtNotCollected || 0),
+        amtPayableToInsured: Number(parsed.amtPayableToInsured || 0),
+        approvalComment: parsed.approvalComment || '',
+        fileUploadComment: parsed.fileUploadComment || ''
+      };
+    }
+  } catch (e) {
+    // ignore
+  }
+  return { ...defaultNotes, notes: notesField };
+}
+
+export function serializeNotes(data: any) {
+  return JSON.stringify(data);
+}
+
+const getTodayDateInputValue = () => {
+  const today = new Date();
+  today.setMinutes(today.getMinutes() - today.getTimezoneOffset());
+  return today.toISOString().slice(0, 10);
+};
+
+export const claimFormSchema = z.object({
+  policyId: z.string().min(1, 'Please select a Policy from Claim Details'),
+  contactId: z.string().min(1, 'Please select a Customer / Proposer from Claim Details'),
+  claimNumber: z.string().min(1, 'Claim Number is required in Claim Details'),
+  claimType: z.string().min(1, 'Please select a Claim Type'),
+  claimAmount: z.coerce.number().min(0),
+  intimatedAt: z.string()
+    .min(1, 'Intimation Date is required')
+    .refine(value => !value || value <= getTodayDateInputValue(), 'Intimation Date cannot be in the future'),
+  assignedEmployeeId: z.string().optional().or(z.literal('')),
+  diagnosis: z.string().optional(),
+  hospital: z.string().optional(),
+  hospitalAddress: z.string().optional(),
+  patientName: z.string().optional(),
+  admissionAt: z.string().optional(),
+  dischargeAt: z.string().optional(),
+  amtHospital: z.coerce.number().default(0),
+  amtMedicine: z.coerce.number().default(0),
+  amtLab: z.coerce.number().default(0),
+  amtPreHosp: z.coerce.number().default(0),
+  amtPostHosp: z.coerce.number().default(0),
+  amtOthers: z.coerce.number().default(0),
+  notes: z.string().optional(),
+  approvedAmount: z.coerce.number().optional().default(0),
+  deductionsNotes: z.string().optional(),
+  subClaimNo: z.string().optional(),
+  uiClaimStatus: z.string().optional(),
+  comment: z.string().optional(),
+  insuranceCompanyCategory: z.string().optional(),
+  insuranceCompany: z.string().optional(),
+  insuranceProductName: z.string().optional(),
+  agentName: z.string().optional(),
+  deathAdmissionDate: z.string().optional(),
+  causeOfDeath: z.string().optional(),
+  dateOfOccurance: z.string().optional(),
+  dateOfDeath: z.string().optional(),
+  wasInComa: z.string().optional(),
+  deathSumInsured: z.string().optional(),
+  deathTotalClaimedAmount: z.string().optional(),
+  deathComment: z.string().optional(),
+  hospitalName: z.string().optional(),
+  hospitalState: z.string().optional(),
+  hospitalCity: z.string().optional(),
+  hospitalPincode: z.string().optional(),
+  hospitalContactNo: z.string().optional(),
+  hospitalEmail: z.string().optional(),
+  hospitalRating: z.string().optional(),
+  hospitalType: z.string().optional(),
+  claimsPerson1Name: z.string().optional(),
+  claimsPerson1Contact: z.string().optional(),
+  claimsPerson2Name: z.string().optional(),
+  claimsPerson2Contact: z.string().optional(),
+  hospitalComment: z.string().optional(),
+  diagnosisSimple: z.string().optional(),
+  roomCategory: z.string().optional(),
+  typeOfManagement: z.string().optional(),
+  typeOfAdmission: z.string().optional(),
+  isMedicoLegalCase: z.string().optional(),
+  isFirLegalDocAvailable: z.string().optional(),
+  hospitalisationComment: z.string().optional(),
+  amtAnesthesia: z.coerce.number().default(0),
+  billingComment: z.string().optional(),
+  amtFinalBill: z.coerce.number().default(0),
+  amtNonPayables: z.coerce.number().default(0),
+  amtCopay: z.coerce.number().default(0),
+  amtDeductible: z.coerce.number().default(0),
+  amtBalanceEMIs: z.coerce.number().default(0),
+  amtNcdRecovery: z.coerce.number().default(0),
+  amtExcessSumInsured: z.coerce.number().default(0),
+  amtExcessAilmentLimit: z.coerce.number().default(0),
+  amtHigherRoomRent: z.coerce.number().default(0),
+  amtReasonableCost: z.coerce.number().default(0),
+  amtOtherRecoveries: z.coerce.number().default(0),
+  amtPatientToPay: z.coerce.number().default(0),
+  amtExcessAgreedPackage: z.coerce.number().default(0),
+  amtNetworkDiscount: z.coerce.number().default(0),
+  amtNotCollected: z.coerce.number().default(0),
+  amtPayableToInsured: z.coerce.number().default(0),
+  approvalComment: z.string().optional(),
+  fileUploadComment: z.string().optional()
+});
+const schema = claimFormSchema;
+type Form = z.infer<typeof schema>;
+
+// Aligned edit form with automatic calculations
+const formatPreview = (dateStr?: string) => {
+  if (!dateStr) return '';
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '';
+    return format(d, 'dd/MMM/yyyy');
+  } catch {
+    return '';
+  }
+};
+
+const isFieldRequired = (_key: string, defaultRequired: boolean = false) => defaultRequired;
+
+export interface ConnectedPersonOption {
+  name: string;
+  relationship: string;
+  phone: string;
+  dob: string;
+  percentage?: string | number;
+  comment?: string;
+  source: 'policy_nominee' | 'policy_connected' | 'contact_family';
+}
+
+export function extractConnectedPersonsAndNominees(policy?: any, contact?: any): ConnectedPersonOption[] {
+  const result: ConnectedPersonOption[] = [];
+  const seenNames = new Set<string>();
+
+  const addPerson = (person: {
+    name?: string;
+    relationship?: string;
+    phone?: string;
+    dob?: string;
+    percentage?: string | number;
+    comment?: string;
+    source: ConnectedPersonOption['source'];
+  }) => {
+    const cleanName = (person.name || '').trim();
+    if (!cleanName || cleanName.toLowerCase() === 'n/a') return;
+    const lowerKey = `${cleanName.toLowerCase()}_${(person.relationship || '').toLowerCase()}`;
+    if (seenNames.has(lowerKey)) return;
+    seenNames.add(lowerKey);
+
+    let cleanDob = '';
+    if (person.dob) {
+      cleanDob = formatDateForInput(person.dob);
+    }
+
+    result.push({
+      name: cleanName,
+      relationship: (person.relationship || '').trim(),
+      phone: (person.phone || '').replace(/\D/g, '').slice(0, 10),
+      dob: cleanDob,
+      percentage: person.percentage !== undefined && person.percentage !== null && person.percentage !== '' ? person.percentage : '',
+      comment: person.comment || '',
+      source: person.source,
+    });
+  };
+
+  // 1. Extract from policy notes (Connected Person lines and Nominee Details lines)
+  if (policy?.notes && typeof policy.notes === 'string') {
+    const lines = policy.notes.split(/\r?\n/);
+    lines.forEach((line: string) => {
+      if (line.includes('Nominee Details') || line.startsWith('Nominee:')) {
+        const nameM = line.match(/Name:\s*([^,]+)/i) || line.match(/Nominee:\s*([^,\n\r]+)/i);
+        const relM = line.match(/Relationship:\s*([^,]+)/i);
+        const contactM = line.match(/Contact:\s*([^,]+)/i);
+        const dobM = line.match(/DoB:\s*([^,]+)/i);
+        const shareM = line.match(/Share:\s*([0-9.]+)%/i);
+        if (nameM) {
+          addPerson({
+            name: nameM[1],
+            relationship: relM ? relM[1] : 'Nominee',
+            phone: contactM ? contactM[1] : '',
+            dob: dobM && dobM[1].trim() !== 'N/A' ? dobM[1] : '',
+            percentage: shareM ? shareM[1] : '',
+            source: 'policy_nominee',
+          });
+        }
+      }
+      if (line.includes('Connected Person')) {
+        const nameM = line.match(/Name:\s*([^,]+)/i);
+        const relM = line.match(/Relationship:\s*([^,]+)/i);
+        const contactM = line.match(/Contact:\s*([^,]+)/i);
+        const dobM = line.match(/DoB:\s*([^,]+)/i);
+        if (nameM) {
+          addPerson({
+            name: nameM[1],
+            relationship: relM ? relM[1] : '',
+            phone: contactM ? contactM[1] : '',
+            dob: dobM && dobM[1].trim() !== 'N/A' ? dobM[1] : '',
+            source: 'policy_connected',
+          });
+        }
+      }
+    });
+  }
+
+  // 2. Extract from policy.nominees
+  let pNominees: any[] = [];
+  if (Array.isArray(policy?.nominees)) {
+    pNominees = policy.nominees;
+  } else if (typeof policy?.nominees === 'string') {
+    try { pNominees = JSON.parse(policy.nominees); } catch {}
+  }
+  pNominees.forEach((n: any) => {
+    addPerson({
+      name: n.name || n.nomineeName || n.fullName || (n.firstName ? `${n.firstName || ''} ${n.lastName || ''}`.trim() : ''),
+      relationship: n.relationship || n.relationshipType || n.relation || '',
+      phone: n.phone || n.contactNo || n.mobile || n.contact || '',
+      dob: n.dob || n.dateOfBirth || '',
+      percentage: n.percentage ?? n.sharePercent ?? n.share ?? '',
+      comment: n.comment || '',
+      source: 'policy_nominee',
+    });
+  });
+
+  // 3. Extract from policy.connectedPersons
+  let pConnected: any[] = [];
+  if (Array.isArray(policy?.connectedPersons)) {
+    pConnected = policy.connectedPersons;
+  } else if (typeof policy?.connectedPersons === 'string') {
+    try { pConnected = JSON.parse(policy.connectedPersons); } catch {}
+  }
+  pConnected.forEach((n: any) => {
+    addPerson({
+      name: n.name || n.nomineeName || n.fullName || (n.firstName ? `${n.firstName || ''} ${n.lastName || ''}`.trim() : ''),
+      relationship: n.relationship || n.relationshipType || n.relation || '',
+      phone: n.phone || n.contactNo || n.mobile || n.contact || '',
+      dob: n.dob || n.dateOfBirth || '',
+      percentage: n.percentage ?? n.sharePercent ?? n.share ?? '',
+      comment: n.comment || '',
+      source: 'policy_connected',
+    });
+  });
+
+  // 4. Extract from policy.members
+  let pMembers: any[] = [];
+  if (Array.isArray(policy?.members)) {
+    pMembers = policy.members;
+  } else if (typeof policy?.members === 'string') {
+    try { pMembers = JSON.parse(policy.members); } catch {}
+  }
+  pMembers.forEach((m: any) => {
+    addPerson({
+      name: m.name || m.fullName || [m.firstName, m.middleName, m.lastName].filter(Boolean).join(' ').trim(),
+      relationship: m.relationship || m.relation || m.relationshipType || '',
+      phone: m.phone || m.contactNo || m.mobile || '',
+      dob: m.dob || m.dateOfBirth || '',
+      source: 'policy_connected',
+    });
+  });
+
+  // 5. Extract from contact.relationships (Family in Contact section)
+  if (Array.isArray(contact?.relationships)) {
+    contact.relationships.forEach((r: any) => {
+      const c = r.relatedContact || r.contact || {};
+      const fullName = [c.firstName, c.middleName, c.lastName].filter(Boolean).join(' ').trim() || c.name || '';
+      addPerson({
+        name: fullName,
+        relationship: r.relationshipType || r.relation || r.relationship || '',
+        phone: c.phone || c.mobile || '',
+        dob: c.dateOfBirth || c.dob || '',
+        source: 'contact_family',
+      });
+    });
+  }
+
+  // 6. Extract from contact.familyMembers
+  if (Array.isArray(contact?.familyMembers)) {
+    contact.familyMembers.forEach((m: any) => {
+      const fullName = [m.firstName, m.middleName, m.lastName].filter(Boolean).join(' ').trim() || m.name || '';
+      addPerson({
+        name: fullName,
+        relationship: m.relation || m.relationship || m.relationshipType || '',
+        phone: m.phone || m.contactNo || m.mobile || '',
+        dob: m.dob || m.dateOfBirth || '',
+        source: 'contact_family',
+      });
+    });
+  }
+
+  // 7. Extract from contact.connectedPersons
+  if (Array.isArray(contact?.connectedPersons)) {
+    contact.connectedPersons.forEach((m: any) => {
+      const fullName = [m.firstName, m.middleName, m.lastName].filter(Boolean).join(' ').trim() || m.name || '';
+      addPerson({
+        name: fullName,
+        relationship: m.relation || m.relationship || m.relationshipType || '',
+        phone: m.phone || m.contactNo || m.mobile || '',
+        dob: m.dob || m.dateOfBirth || '',
+        source: 'contact_family',
+      });
+    });
+  }
+
+  return result;
+}
+
+function ClaimEditForm({ initial, isPending, onSave, onCancel, employees }: {
+  initial: Claim; isPending: boolean;
+  onSave: (body: any, files?: any) => void; onCancel: () => void;
+  employees: any[];
+}) {
+  const user = useAuthStore(s => s.user);
+  const notesData = getClaimNotesData(initial.notes);
+
+  const { data: compulsoryRulesRes } = useQuery({
+    queryKey: ['compulsory-rules'],
+    queryFn: () => insuranceService.getCompulsoryRules(),
+  });
+  const compulsoryRules = useMemo(() => compulsoryRulesRes?.data ?? [], [compulsoryRulesRes]);
+
+  const { data: hospitalsRes } = useQuery({
+    queryKey: ['hospitals'],
+    queryFn: () => insuranceService.listHospitals().catch(() => ({ data: [] })),
+  });
+  const hospitals = hospitalsRes?.data ?? [];
+
+  const isFieldRequired = (key: string, defaultRequired: boolean) => {
+    return isFieldRequiredHelper(compulsoryRules, 'Claim', key, defaultRequired);
+  };
+  const [claimType, setClaimType] = useState((initial as any).claimType ?? 'HEALTH');
+  const [claimNumber, setClaimNumber] = useState(initial.claimNumber || (notesData as any).claimNumber || '');
+  const [intimatedAt, setIntimatedAt] = useState(
+    formatDateForInput(initial.intimatedAt || (notesData as any).intimatedAt || (initial as any).createdAt) || getTodayDateInputValue()
+  );
+  const [claimAmount, setClaimAmount] = useState(String((initial as any).claimAmount ?? ''));
+  const [approvedAmount, setApprovedAmount] = useState(String((initial as any).approvedAmount ?? ''));
+  const [rejectionReason, setRejectionReason] = useState((initial as any).rejectionReason ?? '');
+  const [assignedEmployeeId, setAssignedEmployeeId] = useState((initial as any).assignedEmployeeId ?? '');
+  const [activeClaimTab, setActiveClaimTab] = useState('Claim Details');
+  const claimHistoryContactId = initial.contact?.id || (initial as any).contactId;
+  const {
+    data: claimHistoryRes,
+    isLoading: claimHistoryLoading,
+    isError: claimHistoryError,
+  } = useQuery({
+    queryKey: ['contact-activity', claimHistoryContactId],
+    queryFn: () => contactsService.activity(claimHistoryContactId!, { page: 1, limit: 100 }),
+    enabled: !!claimHistoryContactId && activeClaimTab === 'History',
+  });
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({
+    proposer: false,
+    claim: false,
+    death: false,
+    nominee: false,
+    amounts: false,
+    documents: false,
+    hospital: false,
+    hospitalisation: false,
+    billing: false,
+    claimApproval: false,
+  });
+  const toggleCollapse = (sec: string) => setCollapsedSections(prev => ({ ...prev, [sec]: !prev[sec] }));
+
+  const linkedPolicyId = initial.policy?.id || (initial as any).policyId;
+  const linkedContactId = initial.contact?.id || (initial as any).contactId;
+
+  const { data: fullPolicyRes } = useQuery({
+    queryKey: ['claim-edit-linked-policy', linkedPolicyId],
+    queryFn: () => policiesService.get(linkedPolicyId!),
+    enabled: Boolean(linkedPolicyId),
+  });
+  const linkedPolicy = fullPolicyRes?.data || fullPolicyRes || initial.policy;
+
+  const { data: fullContactRes } = useQuery({
+    queryKey: ['claim-edit-linked-contact', linkedContactId],
+    queryFn: () => contactsService.get(linkedContactId!),
+    enabled: Boolean(linkedContactId),
+  });
+  const linkedContact = fullContactRes?.data || fullContactRes || initial.contact;
+
+  const availableConnectedPersons = useMemo(() => {
+    return extractConnectedPersonsAndNominees(linkedPolicy, linkedContact);
+  }, [linkedPolicy, linkedContact]);
+
+  // Nominee array state for edit form
+  const [nominees, setNominees] = useState<any[]>(() => {
+    try {
+      const parsed = JSON.parse(notesData.nominees || '[]');
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    } catch {
+      // fallback
+    }
+    return [];
+  });
+
+  // Auto-populate nominees if empty and connected persons become available
+  useEffect(() => {
+    if (availableConnectedPersons.length === 0) return;
+    setNominees(prev => {
+      const hasValid = prev.some(n => (n?.name || '').trim() !== '');
+      if (hasValid) return prev;
+      return availableConnectedPersons.map(p => ({
+        name: p.name,
+        relationship: p.relationship,
+        phone: p.phone,
+        dob: p.dob,
+        percentage: p.percentage || (availableConnectedPersons.length === 1 ? '100' : ''),
+        comment: p.comment || '',
+      }));
+    });
+  }, [availableConnectedPersons]);
+
+  const addNewNomineeRow = () => setNominees([...nominees, { name: '', relationship: '', phone: '', dob: '', percentage: '', comment: '' }]);
+  const removeNominee = (index: number) => setNominees(nominees.filter((_, i) => i !== index));
+  const handleNomineeChange = (index: number, field: string, val: string) => {
+    const updated = [...nominees];
+    updated[index][field] = val;
+    setNominees(updated);
+  };
+
+  // Doctors array state for edit form
+  const [doctors, setDoctors] = useState<any[]>(() => {
+    try { return JSON.parse(notesData.hospitalDoctors || '[]'); } catch { return []; }
+  });
+  const addNewDoctorRow = () => setDoctors([...doctors, { name: '', degree: '', contactNo: '', speciality: '' }]);
+  const removeDoctor = (index: number) => setDoctors(doctors.filter((_, i) => i !== index));
+  const handleDoctorChange = (index: number, field: string, val: string) => {
+    const updated = [...doctors];
+    updated[index][field] = val;
+    setDoctors(updated);
+  };
+
+  // Document files state
+  const [claimFormFile, setClaimFormFile] = useState<File | null>(null);
+  const [dischargeSummaryFile, setDischargeSummaryFile] = useState<File | null>(null);
+  const [otNotesFile, setOtNotesFile] = useState<File | null>(null);
+  const [hospitalBillFile, setHospitalBillFile] = useState<File | null>(null);
+  const [pharmacyBillFile, setPharmacyBillFile] = useState<File | null>(null);
+  const [investigationBillFile, setInvestigationBillFile] = useState<File | null>(null);
+  const [bloodBagsBillFile, setBloodBagsBillFile] = useState<File | null>(null);
+  const [labReportsFile, setLabReportsFile] = useState<File | null>(null);
+  const [billsFile, setBillsFile] = useState<File | null>(null);
+  const [otherImpDocsFile, setOtherImpDocsFile] = useState<File | null>(null);
+  const [queryLetterFile, setQueryLetterFile] = useState<File | null>(null);
+  const [replyDocsFile, setReplyDocsFile] = useState<File | null>(null);
+  const [settlementLetterFile, setSettlementLetterFile] = useState<File | null>(null);
+  const [rejectionLetterFile, setRejectionLetterFile] = useState<File | null>(null);
+  const [fileUploadComment, setFileUploadComment] = useState(notesData.fileUploadComment || '');
+  const [uploading, setUploading] = useState(false);
+
+  const [docUploadOpen, setDocUploadOpen] = useState(false);
+  const [docPreviewModal, setDocPreviewModal] = useState<{ open: boolean; title: string; url: string }>({ open: false, title: '', url: '' });
+  const [docUploadFields, setDocUploadFields] = useState<{ type: string; title: string; description: string; file: File | null }>({
+    type: 'CLAIM_FORM', title: '', description: '', file: null,
+  });
+  const [editDocsList, setEditDocsList] = useState<{ type: string; title: string; description: string; file: File }[]>([]);
+
+  // Split expense charges
+  const [amtHospital, setAmtHospital] = useState<number | string>(notesData.amtHospital ? notesData.amtHospital : '');
+  const [amtMedicine, setAmtMedicine] = useState<number | string>(notesData.amtMedicine ? notesData.amtMedicine : '');
+  const [amtLab, setAmtLab] = useState<number | string>(notesData.amtLab ? notesData.amtLab : '');
+  const [amtPreHosp, setAmtPreHosp] = useState<number | string>(notesData.amtPreHosp ? notesData.amtPreHosp : '');
+  const [amtPostHosp, setAmtPostHosp] = useState<number | string>(notesData.amtPostHosp ? notesData.amtPostHosp : '');
+  const [amtOthers, setAmtOthers] = useState<number | string>(notesData.amtOthers ? notesData.amtOthers : '');
+
+  const [diagnosis, setDiagnosis] = useState(notesData.diagnosis || (initial as any).diagnosis || '');
+  const [patientName, setPatientName] = useState(notesData.patientName || (initial as any).patientName || '');
+  const [hospital, setHospital] = useState(notesData.hospital || (initial as any).hospital || '');
+  const [admissionAt, setAdmissionAt] = useState(formatDateForInput(notesData.admissionAt || (initial as any).admissionAt || (initial as any).dateOfAdmission || (initial as any).admissionDate));
+  const [dischargeAt, setDischargeAt] = useState(formatDateForInput(notesData.dischargeAt || (initial as any).dischargeAt || (initial as any).dateOfDischarge || (initial as any).dischargeDate));
+  const [notesText, setNotesText] = useState(notesData.notes || (initial as any).notes || '');
+  const [subClaimNo, setSubClaimNo] = useState(notesData.subClaimNo || '');
+  const [uiClaimStatus, setUiClaimStatus] = useState(
+    notesData.uiClaimStatus || (initial.status && BACKEND_TO_UI[initial.status] ? (initial.status === 'APPROVED' ? 'Approved' : initial.status === 'REJECTED' ? 'Rejected' : initial.status === 'SETTLED' ? 'Approved' : 'Intimated') : '')
+  );
+  const [comment, setComment] = useState(notesData.comment || '');
+  const [insuranceCompanyCategory, setInsuranceCompanyCategory] = useState(notesData.insuranceCompanyCategory || '');
+  const [insuranceCompany, setInsuranceCompany] = useState(notesData.insuranceCompany || '');
+  const [insuranceProductName, setInsuranceProductName] = useState(notesData.insuranceProductName || '');
+  const [agentName, setAgentName] = useState(notesData.agentName || '');
+
+  // Death claim state
+  const [deathAdmissionDate, setDeathAdmissionDate] = useState(formatDateForInput(notesData.deathAdmissionDate || (initial as any).deathAdmissionDate || notesData.admissionAt));
+  const [causeOfDeath, setCauseOfDeath] = useState(notesData.causeOfDeath || '');
+  const [dateOfOccurance, setDateOfOccurance] = useState(formatDateForInput(notesData.dateOfOccurance || (initial as any).dateOfOccurance));
+  const [dateOfDeath, setDateOfDeath] = useState(formatDateForInput(notesData.dateOfDeath || (initial as any).dateOfDeath));
+  const [wasInComa, setWasInComa] = useState(notesData.wasInComa || '');
+  const [deathSumInsured, setDeathSumInsured] = useState(
+    notesData.deathSumInsured ||
+    String((initial as any).policy?.sumInsured || (initial as any).policy?.sumAssured || (initial as any).policy?.plan?.sumInsured || '')
+  );
+  const [deathTotalClaimedAmount, setDeathTotalClaimedAmount] = useState(notesData.deathTotalClaimedAmount || '');
+  const [deathComment, setDeathComment] = useState(notesData.deathComment || '');
+
+  // Hospital Details state
+  const [hospitalName, setHospitalName] = useState(notesData.hospitalName || notesData.hospital || (initial as any).hospitalName || '');
+  const [hospitalAddress, setHospitalAddress] = useState(notesData.hospitalAddress || (initial as any).hospitalAddress || '');
+  const [hospitalState, setHospitalState] = useState(notesData.hospitalState || '');
+  const [hospitalCity, setHospitalCity] = useState(notesData.hospitalCity || '');
+  const [hospitalPincode, setHospitalPincode] = useState(notesData.hospitalPincode || '');
+  const [hospitalContactNo, setHospitalContactNo] = useState(notesData.hospitalContactNo || '');
+  const [hospitalEmail, setHospitalEmail] = useState(notesData.hospitalEmail || '');
+  const initialHospitalType = notesData.hospitalType || '';
+  const isInitialCustomHospitalType = Boolean(initialHospitalType && !['Network', 'Non-Network', 'Blacklisted'].includes(initialHospitalType));
+  const [hospitalRating, setHospitalRating] = useState(notesData.hospitalRating || '');
+  const [hospitalType, setHospitalType] = useState(initialHospitalType);
+  const [isCustomHospitalType, setIsCustomHospitalType] = useState(isInitialCustomHospitalType);
+  const [customHospitalTypeText, setCustomHospitalTypeText] = useState(initialHospitalType === 'Other' ? '' : (isInitialCustomHospitalType ? initialHospitalType : ''));
+  const [claimsPerson1Name, setClaimsPerson1Name] = useState(notesData.claimsPerson1Name || '');
+  const [claimsPerson1Contact, setClaimsPerson1Contact] = useState(notesData.claimsPerson1Contact || '');
+  const [claimsPerson2Name, setClaimsPerson2Name] = useState(notesData.claimsPerson2Name || '');
+  const [claimsPerson2Contact, setClaimsPerson2Contact] = useState(notesData.claimsPerson2Contact || '');
+  const [hospitalComment, setHospitalComment] = useState(notesData.hospitalComment || '');
+  
+  // Hospitalisation Details
+  const [diagnosisSimple, setDiagnosisSimple] = useState(notesData.diagnosisSimple || '');
+  const [roomCategory, setRoomCategory] = useState(notesData.roomCategory || '');
+  const [typeOfManagement, setTypeOfManagement] = useState(notesData.typeOfManagement || '');
+  const [typeOfAdmission, setTypeOfAdmission] = useState(notesData.typeOfAdmission || '');
+  const [isMedicoLegalCase, setIsMedicoLegalCase] = useState(notesData.isMedicoLegalCase || '');
+  const [isFirLegalDocAvailable, setIsFirLegalDocAvailable] = useState(notesData.isFirLegalDocAvailable || '');
+  const [hospitalisationComment, setHospitalisationComment] = useState(notesData.hospitalisationComment || '');
+
+  // Billing Details (Anesthesia and Comment)
+  const [amtAnesthesia, setAmtAnesthesia] = useState<number | string>(notesData.amtAnesthesia ? notesData.amtAnesthesia : '');
+  const [billingComment, setBillingComment] = useState(notesData.billingComment || '');
+
+  // Claim Approval Details
+  const [amtFinalBill, setAmtFinalBill] = useState<number | string>(notesData.amtFinalBill ? notesData.amtFinalBill : '');
+  const [amtNonPayables, setAmtNonPayables] = useState<number | string>(notesData.amtNonPayables ? notesData.amtNonPayables : '');
+  const [amtCopay, setAmtCopay] = useState<number | string>(notesData.amtCopay ? notesData.amtCopay : '');
+  const [amtDeductible, setAmtDeductible] = useState<number | string>(notesData.amtDeductible ? notesData.amtDeductible : '');
+  const [amtBalanceEMIs, setAmtBalanceEMIs] = useState<number | string>(notesData.amtBalanceEMIs ? notesData.amtBalanceEMIs : '');
+  const [amtNcdRecovery, setAmtNcdRecovery] = useState<number | string>(notesData.amtNcdRecovery ? notesData.amtNcdRecovery : '');
+  const [amtExcessSumInsured, setAmtExcessSumInsured] = useState<number | string>(notesData.amtExcessSumInsured ? notesData.amtExcessSumInsured : '');
+  const [amtExcessAilmentLimit, setAmtExcessAilmentLimit] = useState<number | string>(notesData.amtExcessAilmentLimit ? notesData.amtExcessAilmentLimit : '');
+  const [amtHigherRoomRent, setAmtHigherRoomRent] = useState<number | string>(notesData.amtHigherRoomRent ? notesData.amtHigherRoomRent : '');
+  const [amtReasonableCost, setAmtReasonableCost] = useState<number | string>(notesData.amtReasonableCost ? notesData.amtReasonableCost : '');
+  const [amtOtherRecoveries, setAmtOtherRecoveries] = useState<number | string>(notesData.amtOtherRecoveries ? notesData.amtOtherRecoveries : '');
+  const [amtPatientToPay, setAmtPatientToPay] = useState<number | string>(notesData.amtPatientToPay ? notesData.amtPatientToPay : '');
+  const [amtExcessAgreedPackage, setAmtExcessAgreedPackage] = useState<number | string>(notesData.amtExcessAgreedPackage ? notesData.amtExcessAgreedPackage : '');
+  const [amtNetworkDiscount, setAmtNetworkDiscount] = useState<number | string>(notesData.amtNetworkDiscount ? notesData.amtNetworkDiscount : '');
+  const [amtNotCollected, setAmtNotCollected] = useState<number | string>(notesData.amtNotCollected ? notesData.amtNotCollected : '');
+  const [amtPayableToInsured, setAmtPayableToInsured] = useState<number | string>(notesData.amtPayableToInsured ? notesData.amtPayableToInsured : '');
+  const [approvalComment, setApprovalComment] = useState(notesData.approvalComment || '');
+
+  // Auto calculate total claim amount and auto-fetch to final bill amount
+  useEffect(() => {
+    const tot = Number(amtHospital || 0) + Number(amtMedicine || 0) + Number(amtLab || 0) + Number(amtPreHosp || 0) + Number(amtPostHosp || 0) + Number(amtOthers || 0) + Number(amtAnesthesia || 0);
+    setClaimAmount(String(tot));
+    setAmtFinalBill(tot);
+  }, [amtHospital, amtMedicine, amtLab, amtPreHosp, amtPostHosp, amtOthers, amtAnesthesia]);
+
+  // Auto calculate sum for Claim Approval Details
+  useEffect(() => {
+    const totalPatientToPay = Number(amtNonPayables) + Number(amtCopay) + Number(amtDeductible) + Number(amtBalanceEMIs) + Number(amtNcdRecovery) + Number(amtExcessSumInsured) + Number(amtExcessAilmentLimit) + Number(amtHigherRoomRent) + Number(amtReasonableCost) + Number(amtOtherRecoveries);
+    setAmtPatientToPay(totalPatientToPay);
+    const totalNotCollected = Number(amtExcessAgreedPackage) + Number(amtNetworkDiscount);
+    setAmtNotCollected(totalNotCollected);
+    if (Number(amtFinalBill) > 0) {
+      const payable = Number(amtFinalBill) - totalPatientToPay - totalNotCollected;
+      setAmtPayableToInsured(payable);
+    }
+  }, [amtFinalBill, amtNonPayables, amtCopay, amtDeductible, amtBalanceEMIs, amtNcdRecovery, amtExcessSumInsured, amtExcessAilmentLimit, amtHigherRoomRent, amtReasonableCost, amtOtherRecoveries, amtExcessAgreedPackage, amtNetworkDiscount]);
+
+  const handleSave = async () => {
+    setUploading(true);
+    try {
+      const uploadPromises: Promise<any>[] = [];
+      const contactId = initial.contact?.id;
+      const policyId = initial.policy?.id;
+      const claimId = initial.id;
+
+      const getMeta = (type: string) => {
+        const docTypeTitles: Record<string, string> = {
+          CLAIM_FORM: 'Claim Form',
+          DISCHARGE_SUMMARY: 'Discharge Summary',
+          OT_NOTES_IPD_PAPERS: 'OT Notes / IPD Papers',
+          HOSPITAL_BILL: 'Hospital Bill',
+          PHARMACY_MEDICINES_BILL: 'Pharmacy / Medicines Bill',
+          INVESTIGATION_LAB_BILL: 'Investigation / Lab Bill',
+          BLOOD_ANESTHESIA_BILL: 'Blood / Anesthesia Bill',
+          IMPORTANT_LAB_REPORTS: 'Important Lab Reports',
+          IMP_BILLS: 'Imp Bills',
+          OTHER_IMP_DOCUMENTS: 'Other Imp Documents',
+          CLAIM_QUERY_LETTER: 'Claim Query Letter',
+          REPLY_DOCUMENTS: 'Reply Documents',
+          CLAIM_SETTLEMENT_LETTER: 'Claim Settlement Letter',
+          REJECTION_LETTER: 'Rejection Letter',
+        };
+        const meta: any = { claimId, type, title: docTypeTitles[type] || type };
+        if (contactId) meta.contactId = contactId;
+        if (policyId) meta.policyId = policyId;
+        return meta;
+      };
+
+      if (claimFormFile) {
+        uploadPromises.push(documentsService.upload(claimFormFile, getMeta('CLAIM_FORM')).catch(e => console.error(e)));
+      }
+      if (dischargeSummaryFile) {
+        uploadPromises.push(documentsService.upload(dischargeSummaryFile, getMeta('DISCHARGE_SUMMARY')).catch(e => console.error(e)));
+      }
+      if (otNotesFile) {
+        uploadPromises.push(documentsService.upload(otNotesFile, getMeta('OT_NOTES_IPD_PAPERS')).catch(e => console.error(e)));
+      }
+      if (hospitalBillFile) {
+        uploadPromises.push(documentsService.upload(hospitalBillFile, getMeta('HOSPITAL_BILL')).catch(e => console.error(e)));
+      }
+      if (pharmacyBillFile) {
+        uploadPromises.push(documentsService.upload(pharmacyBillFile, getMeta('PHARMACY_MEDICINES_BILL')).catch(e => console.error(e)));
+      }
+      if (investigationBillFile) {
+        uploadPromises.push(documentsService.upload(investigationBillFile, getMeta('INVESTIGATION_LAB_BILL')).catch(e => console.error(e)));
+      }
+      if (bloodBagsBillFile) {
+        uploadPromises.push(documentsService.upload(bloodBagsBillFile, getMeta('BLOOD_ANESTHESIA_BILL')).catch(e => console.error(e)));
+      }
+      if (labReportsFile) {
+        uploadPromises.push(documentsService.upload(labReportsFile, getMeta('IMPORTANT_LAB_REPORTS')).catch(e => console.error(e)));
+      }
+      if (billsFile) {
+        uploadPromises.push(documentsService.upload(billsFile, getMeta('IMP_BILLS')).catch(e => console.error(e)));
+      }
+      if (otherImpDocsFile) {
+        uploadPromises.push(documentsService.upload(otherImpDocsFile, getMeta('OTHER_IMP_DOCUMENTS')).catch(e => console.error(e)));
+      }
+      if (queryLetterFile) {
+        uploadPromises.push(documentsService.upload(queryLetterFile, getMeta('CLAIM_QUERY_LETTER')).catch(e => console.error(e)));
+      }
+      if (replyDocsFile) {
+        uploadPromises.push(documentsService.upload(replyDocsFile, getMeta('REPLY_DOCUMENTS')).catch(e => console.error(e)));
+      }
+      if (settlementLetterFile) {
+        uploadPromises.push(documentsService.upload(settlementLetterFile, getMeta('CLAIM_SETTLEMENT_LETTER')).catch(e => console.error(e)));
+      }
+      if (rejectionLetterFile) {
+        uploadPromises.push(documentsService.upload(rejectionLetterFile, getMeta('REJECTION_LETTER')).catch(e => console.error(e)));
+      }
+
+
+      if (uploadPromises.length > 0) {
+        await Promise.all(uploadPromises);
+        toast.success('Attached documents uploaded');
+      }
+
+      const invalidNom = nominees.find(n => n.phone && !/^\d{10}$/.test(n.phone.replace(/\D/g, '')));
+      if (invalidNom) {
+        toast.error(`Nominee ${invalidNom.name || ''} contact number must be exactly 10 digits`);
+        return;
+      }
+      const invalidDoc = doctors.find(d => d.contactNo && !/^\d{10}$/.test(d.contactNo.replace(/\D/g, '')));
+      if (invalidDoc) {
+        toast.error(`Doctor ${invalidDoc.name || ''} contact number must be exactly 10 digits`);
+        return;
+      }
+
+      if (intimatedAt && intimatedAt > getTodayDateInputValue()) {
+        toast.error('Intimation Date cannot be in the future');
+        return;
+      }
+
+      if (admissionAt && dischargeAt && formatDateForInput(admissionAt) && formatDateForInput(dischargeAt)) {
+        if (formatDateForInput(dischargeAt) < formatDateForInput(admissionAt)) {
+          toast.error('Date of Discharge cannot be earlier than Date of Admission');
+          return;
+        }
+      }
+
+      onSave({
+        status: getBackendStatusFromUi(uiClaimStatus),
+        claimType,
+        claimNumber: claimNumber || initial.claimNumber,
+        intimatedAt: intimatedAt ? new Date(intimatedAt).toISOString() : (initial.intimatedAt ? new Date(initial.intimatedAt).toISOString() : new Date().toISOString()),
+        claimAmount: Number(claimAmount),
+        approvedAmount: approvedAmount ? Number(approvedAmount) : undefined,
+        rejectionReason: rejectionReason || undefined,
+        assignedEmployeeId: assignedEmployeeId || null,
+        notes: serializeNotes({
+          claimNumber,
+          intimatedAt,
+          diagnosis,
+          hospital,
+          admissionAt,
+          dischargeAt,
+          amtHospital,
+          amtMedicine,
+          amtLab,
+          amtPreHosp,
+          amtPostHosp,
+          amtOthers,
+          notes: notesText,
+          subClaimNo,
+          uiClaimStatus,
+          comment,
+          insuranceCompanyCategory,
+          insuranceCompany,
+          insuranceProductName,
+          agentName,
+          deathAdmissionDate,
+          causeOfDeath,
+          dateOfOccurance,
+          dateOfDeath,
+          wasInComa,
+          deathSumInsured,
+          deathTotalClaimedAmount,
+          deathComment,
+          patientName,
+          nominees: JSON.stringify(nominees),
+          hospitalName, hospitalAddress, hospitalState, hospitalCity, hospitalPincode,
+          hospitalContactNo, hospitalEmail, hospitalRating, hospitalType, claimsPerson1Name,
+          claimsPerson1Contact, claimsPerson2Name, claimsPerson2Contact, hospitalComment,
+          hospitalDoctors: JSON.stringify(doctors),
+          diagnosisSimple, roomCategory, typeOfManagement, typeOfAdmission, isMedicoLegalCase, isFirLegalDocAvailable, hospitalisationComment, amtAnesthesia, billingComment,
+          amtFinalBill, amtNonPayables, amtCopay, amtDeductible, amtBalanceEMIs, amtNcdRecovery, amtExcessSumInsured, amtExcessAilmentLimit, amtHigherRoomRent, amtReasonableCost, amtOtherRecoveries, amtPatientToPay, amtExcessAgreedPackage, amtNetworkDiscount, amtNotCollected, amtPayableToInsured, approvalComment, fileUploadComment
+
+        })
+      });
+    } catch (err: any) {
+      toast.error('Failed to save claim details');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <Modal 
+      open 
+      onClose={onCancel} 
+      closeOnEscapeAndBackdrop={false}
+      title="Edit Claim" 
+      size="2xl"
+      actions={
+        <button
+          type="button"
+          className="btn-primary py-1.5 px-5 text-xs shadow-sm bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 border-0"
+          disabled={isPending || uploading}
+          onClick={handleSave}
+        >
+          {uploading ? 'Uploading Files...' : isPending ? 'Saving...' : 'Save Changes'}
+        </button>
+      }
+    >
+      <div className="space-y-3">
+      {/* Modal sub-navigation tabs */}
+      <div className="flex bg-slate-200/60 p-1.5 rounded-2xl mt-0 mb-3 gap-2 border border-slate-200/80 overflow-x-auto shadow-2xs">
+        {['Claim Details', 'Policy Details', 'Hospital Details', 'Claim Approval Details', 'File Uploads', 'History'].map(tab => (
+          <button
+            key={tab}
+            type="button"
+            onClick={() => setActiveClaimTab(tab)}
+            className={clsx(
+              'px-5 py-2.5 rounded-xl text-xs font-extrabold tracking-wide transition-all cursor-pointer whitespace-nowrap',
+              activeClaimTab === tab
+                ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md shadow-blue-500/25 scale-[1.02]'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
+            )}
+          >
+            {tab}
+          </button>
+        ))}
+      </div>
+
+      <div className="space-y-4">
+        {activeClaimTab === 'Claim Details' && (
+          <div className="space-y-4 animate-fadeIn">
+            {/* Proposer Details Collapsible */}
+            <div className="border border-slate-200/90 rounded-xl bg-white shadow-2xs overflow-hidden">
+              <div
+                className="min-h-8 px-3 py-2 bg-slate-50 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none"
+                onClick={() => toggleCollapse('proposer')}
+              >
+                <h4 className="text-[10px] font-extrabold text-slate-700 uppercase tracking-wide flex items-center gap-2">
+                  <span className="w-4 h-4 rounded-full bg-blue-500 text-white text-[9px] font-black flex items-center justify-center">1</span>
+                  Proposer & Policy Details
+                </h4>
+                <div className="flex items-center gap-2">
+                  <span className="text-[9px] text-slate-500 font-semibold">Policy Data</span>
+                  <ChevronDown size={12} className={`text-slate-500 transition-transform duration-200 ${collapsedSections['proposer'] ? 'rotate-180' : ''}`} />
+                </div>
+              </div>
+              {!collapsedSections['proposer'] && (
+                <div className="p-2.5 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2.5">
+                  <div>
+                    <label className="label text-[9px] font-extrabold text-slate-500 uppercase tracking-wider">Insurance Company Category</label>
+                    <input value={insuranceCompanyCategory} onChange={e => setInsuranceCompanyCategory(e.target.value)} placeholder="e.g. Health" className="input mt-1 h-8 bg-slate-50/80 text-[11px] text-slate-800" />
+                  </div>
+                  <div>
+                    <label className="label text-[9px] font-extrabold text-slate-500 uppercase tracking-wider">Insurance Company</label>
+                    <input value={insuranceCompany} onChange={e => setInsuranceCompany(e.target.value)} placeholder="e.g. Star Health" className="input mt-1 h-8 bg-slate-50/80 text-[11px] text-slate-800" />
+                  </div>
+                  <div>
+                    <label className="label text-[9px] font-extrabold text-slate-500 uppercase tracking-wider">Product Name</label>
+                    <input value={insuranceProductName} onChange={e => setInsuranceProductName(e.target.value)} placeholder="Product Name..." className="input mt-1 h-8 bg-slate-50/80 text-[11px] text-slate-800" />
+                  </div>
+                  <div>
+                    <label className="label text-[9px] font-extrabold text-slate-500 uppercase tracking-wider">Agent Name</label>
+                    <input value={agentName} onChange={e => setAgentName(e.target.value)} placeholder="Agent Name..." className="input mt-1 h-8 bg-slate-50/80 text-[11px] text-slate-800" />
+                  </div>
+                  <div>
+                    <label className="label text-[9px] font-extrabold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                      Sum Insured / Sum Assured
+                      {deathSumInsured && (
+                        <span className="text-[9px] font-semibold text-emerald-600 bg-emerald-50 border border-emerald-100 px-1 py-0.5 rounded-full">Auto-fetched</span>
+                      )}
+                    </label>
+                    <input
+                      value={deathSumInsured}
+                      onChange={e => setDeathSumInsured(e.target.value)}
+                      placeholder="Auto-fetched from policy"
+                      className="input mt-1 h-8 bg-slate-50/80 text-[11px] text-slate-800 font-bold"
+                    />
+                  </div>
+                  <div className="md:col-span-3">
+                    <label className="label text-[9px] font-extrabold text-slate-500 uppercase tracking-wider">Insured Person Name / Patient Name</label>
+                    <input value={patientName} onChange={e => setPatientName(e.target.value)} placeholder="Enter Insured Person Name / Patient Name..." className="input mt-1 h-8 bg-slate-50/80 text-[11px] text-slate-800" />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Claim Details Collapsible */}
+            <div className="border border-slate-200/90 rounded-xl bg-white shadow-2xs overflow-hidden">
+              <div
+                className="min-h-8 px-3 py-2 bg-slate-50 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none"
+                onClick={() => toggleCollapse('claim')}
+              >
+                <h4 className="text-[10px] font-extrabold text-slate-700 uppercase tracking-wide flex items-center gap-2">
+                  <span className="w-4 h-4 rounded-full bg-blue-500 text-white text-[9px] font-black flex items-center justify-center">2</span>
+                  Claim Details
+                </h4>
+                <div className="flex items-center gap-2">
+                  <span className="text-[9px] text-slate-500 font-semibold">Diagnosis & Status</span>
+                  <ChevronDown size={12} className={`text-slate-500 transition-transform duration-200 ${collapsedSections['claim'] ? 'rotate-180' : ''}`} />
+                </div>
+              </div>
+              {!collapsedSections['claim'] && (
+                <div className="p-2.5 space-y-2.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div>
+                      <label className="label text-[9px] font-extrabold text-slate-500 uppercase tracking-wider">Claim Type</label>
+                      <CustomSelect
+                        className="input mt-1 h-8 text-[11px]"
+                        value={claimType}
+                        onChange={val => setClaimType(val)}
+                        options={getActiveDropdownOptions('Claim', 'Claim Type', CLAIM_TYPES_OPTIONS)}
+                      />
+                    </div>
+                    <div>
+                      <label className="label text-[9px] font-extrabold text-slate-500 uppercase tracking-wider">Claim Number</label>
+                      <input
+                        className="input mt-1 h-8 text-[11px]"
+                        value={claimNumber}
+                        onChange={e => setClaimNumber(e.target.value)}
+                        placeholder="CLM-XXXXXXXX"
+                      />
+                    </div>
+                    <div>
+                      <label className="label text-[9px] font-extrabold text-slate-500 uppercase tracking-wider">Sub Claim No</label>
+                      <input className="input mt-1 h-8 text-[11px]" value={subClaimNo} onChange={e => setSubClaimNo(e.target.value)} placeholder="Optional" />
+                    </div>
+                  </div>
+
+                  <div className={clsx('grid grid-cols-1 gap-2.5', user?.role !== 'EMPLOYEE' ? 'sm:grid-cols-3' : 'sm:grid-cols-2')}>
+                    <div>
+                      <label className="label text-[9px] font-extrabold text-slate-500 uppercase tracking-wider">Claim Status</label>
+                      <CustomSelect
+                        className="input mt-1 h-8 text-[11px]"
+                        value={uiClaimStatus}
+                        onChange={val => setUiClaimStatus(val)}
+                        placeholder="Select Status"
+                        options={getActiveDropdownOptions('Claim', 'Claim Status', CLAIM_STATUS_OPTIONS)}
+                      />
+                    </div>
+                    <div>
+                      <label className="label text-[9px] font-extrabold text-slate-500 uppercase tracking-wider">Intimation Date</label>
+                      <input
+                        type="date"
+                        max={getTodayDateInputValue()}
+                        className="input mt-1 h-8 text-[11px] py-1"
+                        value={intimatedAt}
+                        onChange={e => setIntimatedAt(e.target.value)}
+                      />
+                    </div>
+                    {user?.role !== 'EMPLOYEE' && (
+                      <div>
+                        <label className="label text-[9px] font-extrabold text-slate-500 uppercase tracking-wider">Assignee</label>
+                        <CustomSelect
+                          className="input mt-1 h-8 text-[11px]"
+                          value={assignedEmployeeId}
+                          onChange={val => setAssignedEmployeeId(val)}
+                          placeholder="Unassigned"
+                          options={[
+                            { value: '', label: 'Unassigned' },
+                            ...employees.map((emp: any) => ({
+                              value: emp.userId || emp.id,
+                              label: `${emp.firstName} ${emp.lastName}`
+                            }))
+                          ]}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="label text-[9px] font-extrabold text-slate-500 uppercase tracking-wider">Diagnosis / Ailment</label>
+                      <input
+                        className="input mt-1 h-8 text-[11px]"
+                        value={diagnosis}
+                        onChange={e => setDiagnosis(e.target.value)}
+                        placeholder="e.g. Dengue Fever"
+                      />
+                    </div>
+                    <div>
+                      <label className="label text-[9px] font-extrabold text-slate-500 uppercase tracking-wider">Comment / Notes</label>
+                      <textarea
+                        className="input mt-1 text-[11px]"
+                        rows={1}
+                        value={comment}
+                        onChange={e => setComment(e.target.value)}
+                        placeholder="Add a comment..."
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+        <div className="border border-slate-200/90 rounded-xl bg-white shadow-2xs overflow-hidden">
+          <div
+            className="min-h-8 px-3 py-2 bg-slate-50 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none"
+            onClick={() => toggleCollapse('death')}
+          >
+            <h4 className="text-[10px] font-extrabold text-slate-700 uppercase tracking-wide flex items-center gap-2">
+              <span className="w-4 h-4 rounded-full bg-indigo-500 text-white text-[9px] font-black flex items-center justify-center">3</span>
+              Incident &amp; Death Details <span className="text-[10px] lowercase text-slate-400 font-normal">(optional)</span>
+            </h4>
+            <div className="flex items-center gap-2">
+              <span className="text-[9px] text-slate-500 font-semibold">Only for Death claims</span>
+              <ChevronDown size={12} className={`text-slate-500 transition-transform duration-200 ${collapsedSections['death'] ? 'rotate-180' : ''}`} />
+            </div>
+          </div>
+          {!collapsedSections['death'] && (
+            <div className="p-2.5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                      <div>
+                        <label className="label text-gray-500">Date of Admission <br/><span className="text-[10px] font-normal">(In case of hosp.)</span></label>
+                        <input
+                          type="date"
+                          max={new Date().toISOString().substring(0, 10)}
+                          value={deathAdmissionDate}
+                          onChange={e => {
+                            const val = e.target.value;
+                            if (val && new Date(val) > new Date()) {
+                              toast.error("Date of Admission cannot be a future date");
+                              return;
+                            }
+                            setDeathAdmissionDate(val);
+                          }}
+                          className="input mt-1"
+                        />
+                      </div>
+            <div>
+              <label className="label text-gray-500">Cause of Death</label>
+              <CustomSelect
+                className="input mt-1"
+                value={causeOfDeath}
+                onChange={val => setCauseOfDeath(val)}
+                placeholder="Select Cause"
+                options={['Accidental', 'Non-Accidental', 'Murder', 'Natural', 'Suicide', 'Other']}
+              />
+            </div>
+            <div>
+              <label className="label text-gray-500">Date of Occurrence <br/><span className="text-[10px] font-normal">(Accident, Attack, etc)</span></label>
+              <input
+                type="date"
+                max={new Date().toISOString().substring(0, 10)}
+                value={dateOfOccurance}
+                onChange={e => {
+                  const val = e.target.value;
+                  if (val && new Date(val) > new Date()) {
+                    toast.error("Date of Occurrence cannot be a future date");
+                    return;
+                  }
+                  setDateOfOccurance(val);
+                }}
+                className="input mt-1"
+              />
+            </div>
+            <div>
+              <label className="label text-gray-500">Date of Death</label>
+              <input
+                type="date"
+                max={new Date().toISOString().substring(0, 10)}
+                value={dateOfDeath}
+                onChange={e => {
+                  const val = e.target.value;
+                  if (val && new Date(val) > new Date()) {
+                    toast.error("Date of Death cannot be a future date");
+                    return;
+                  }
+                  setDateOfDeath(val);
+                }}
+                className="input mt-1"
+              />
+            </div>
+            <div>
+              <label className="label text-gray-500">Was in Coma?</label>
+              <CustomSelect
+                className="input mt-1"
+                value={wasInComa}
+                onChange={val => setWasInComa(val)}
+                placeholder="Select"
+                options={['Yes', 'No']}
+              />
+            </div>
+            <div>
+              <label className="label text-gray-500">Sum Insured</label>
+              <input className="input mt-1 bg-white" value={deathSumInsured} onChange={e => setDeathSumInsured(e.target.value)} placeholder="Auto-fetch or manual" />
+            </div>
+            <div>
+              <label className="label text-gray-500">Total Claimed Amount</label>
+              <input className="input mt-1 bg-white" value={deathTotalClaimedAmount} onChange={e => setDeathTotalClaimedAmount(e.target.value)} placeholder="₹0" />
+            </div>
+            <div className="sm:col-span-2 lg:col-span-1">
+              <label className="label text-gray-500">Comment</label>
+              <textarea className="input mt-1" rows={1} value={deathComment} onChange={e => setDeathComment(e.target.value)} />
+            </div>
+          </div>
+        )}
+      </div>
+
+        {/* Nominee Details Collapsible */}
+        <div className="border border-slate-200/90 rounded-xl bg-white shadow-2xs overflow-hidden">
+          <div
+            className="min-h-8 px-3 py-2 bg-slate-50 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none"
+            onClick={() => toggleCollapse('nominee')}
+          >
+            <h4 className="text-[10px] font-extrabold text-slate-700 uppercase tracking-wide flex items-center gap-2">
+              <span className="w-4 h-4 rounded-full bg-fuchsia-500 text-white text-[9px] font-black flex items-center justify-center">4</span>
+              Nominee Details
+              {availableConnectedPersons.length > 0 && (
+                <span className="text-[9px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full normal-case flex items-center gap-1">
+                  <Users size={10} className="text-emerald-600" />
+                  {availableConnectedPersons.length} Connected Person{availableConnectedPersons.length > 1 ? 's' : ''} available
+                </span>
+              )}
+            </h4>
+            <div className="flex items-center gap-2">
+              <span className="text-[9px] text-slate-500 font-semibold">Multiple allowed</span>
+              <ChevronDown size={12} className={`text-slate-500 transition-transform duration-200 ${collapsedSections['nominee'] ? 'rotate-180' : ''}`} />
+            </div>
+          </div>
+          {!collapsedSections['nominee'] && (
+            <div className="p-2.5 space-y-3">
+              {/* Quick action chips for available connected persons and policy nominees */}
+              {availableConnectedPersons.length > 0 && (
+                <div className="p-2.5 rounded-xl bg-gradient-to-r from-blue-50/80 via-indigo-50/40 to-slate-50 border border-blue-100/90 space-y-1.5">
+                  <div className="flex items-center justify-between flex-wrap gap-1">
+                    <span className="text-[10px] font-bold text-blue-900 flex items-center gap-1">
+                      <Users size={12} className="text-blue-600" />
+                      Connected Persons & Nominees from Policy / Contact:
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNominees(availableConnectedPersons.map(p => ({
+                          name: p.name,
+                          relationship: p.relationship,
+                          phone: p.phone,
+                          dob: p.dob,
+                          percentage: p.percentage || (availableConnectedPersons.length === 1 ? '100' : ''),
+                          comment: p.comment || '',
+                        })));
+                      }}
+                      className="text-[9px] font-bold text-blue-700 bg-white hover:bg-blue-100 px-2 py-0.5 rounded-md border border-blue-200 shadow-2xs transition-colors"
+                    >
+                      Auto-fill All ({availableConnectedPersons.length})
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {availableConnectedPersons.map((p, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => {
+                          setNominees(prev => {
+                            const emptyIdx = prev.findIndex(n => !(n.name || '').trim());
+                            if (emptyIdx !== -1) {
+                              const updated = [...prev];
+                              updated[emptyIdx] = {
+                                ...updated[emptyIdx],
+                                name: p.name,
+                                relationship: p.relationship,
+                                phone: p.phone,
+                                dob: p.dob,
+                                percentage: p.percentage || updated[emptyIdx].percentage || '',
+                                comment: p.comment || updated[emptyIdx].comment || '',
+                              };
+                              return updated;
+                            }
+                            return [...prev, {
+                              name: p.name,
+                              relationship: p.relationship,
+                              phone: p.phone,
+                              dob: p.dob,
+                              percentage: p.percentage || (prev.length === 0 ? '100' : ''),
+                              comment: p.comment || '',
+                            }];
+                          });
+                        }}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 bg-white hover:bg-blue-100/80 text-slate-800 rounded-lg text-[10px] font-medium border border-blue-200/80 shadow-2xs transition-all hover:scale-[1.01]"
+                        title="Click to fill or add this connected person as nominee"
+                      >
+                        <span className="font-bold text-blue-700">+ {p.name}</span>
+                        {p.relationship && <span className="text-[9px] text-slate-500">({p.relationship})</span>}
+                        {p.phone && <span className="text-[9px] text-slate-400">· {p.phone}</span>}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {nominees.map((nom, index) => (
+                <div key={index} className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-3 items-end border-b border-gray-100 pb-4 mb-2">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="label text-[10px]">Nominee Name</label>
+                      {availableConnectedPersons.length > 0 && (
+                        <select
+                          className="text-[9px] py-0 px-1 border border-blue-200 rounded text-blue-700 bg-blue-50/50 cursor-pointer max-w-[95px] truncate"
+                          value=""
+                          onChange={e => {
+                            const selectedName = e.target.value;
+                            const found = availableConnectedPersons.find(p => p.name === selectedName);
+                            if (found) {
+                              handleNomineeChange(index, 'name', found.name);
+                              handleNomineeChange(index, 'relationship', found.relationship);
+                              handleNomineeChange(index, 'phone', found.phone);
+                              handleNomineeChange(index, 'dob', found.dob);
+                              if (found.percentage) handleNomineeChange(index, 'percentage', String(found.percentage));
+                            }
+                          }}
+                        >
+                          <option value="">Select Person</option>
+                          {availableConnectedPersons.map((p, pIdx) => (
+                            <option key={pIdx} value={p.name}>
+                              {p.name} {p.relationship ? `(${p.relationship})` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                    <input 
+                      value={nom.name} 
+                      onChange={e => {
+                        const val = e.target.value;
+                        handleNomineeChange(index, 'name', val);
+                        const match = availableConnectedPersons.find(p => p.name.toLowerCase() === val.trim().toLowerCase());
+                        if (match) {
+                          if (match.relationship && !nom.relationship) handleNomineeChange(index, 'relationship', match.relationship);
+                          if (match.phone && !nom.phone) handleNomineeChange(index, 'phone', match.phone);
+                          if (match.dob && !nom.dob) handleNomineeChange(index, 'dob', match.dob);
+                          if (match.percentage && !nom.percentage) handleNomineeChange(index, 'percentage', String(match.percentage));
+                        }
+                      }} 
+                      className="input py-1 text-xs" 
+                      list={`claim-edit-connected-suggestions-${index}`}
+                      placeholder="Nominee Name"
+                    />
+                    <datalist id={`claim-edit-connected-suggestions-${index}`}>
+                      {availableConnectedPersons.map((p, pIdx) => (
+                        <option key={pIdx} value={p.name}>{p.relationship ? `${p.relationship} - ` : ''}{p.phone}</option>
+                      ))}
+                    </datalist>
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Relationship</label>
+                    <input value={nom.relationship} onChange={e => handleNomineeChange(index, 'relationship', e.target.value)} className="input mt-1 py-1 text-xs" placeholder="e.g. Spouse" />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Contact No.</label>
+                    <input 
+                      value={nom.phone} 
+                      maxLength={10}
+                      placeholder="10 digits"
+                      onChange={e => handleNomineeChange(index, 'phone', e.target.value.replace(/\D/g, '').slice(0, 10))} 
+                      className="input mt-1 py-1 text-xs" 
+                    />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">DoB</label>
+                    <input type="date" value={nom.dob} onChange={e => handleNomineeChange(index, 'dob', e.target.value)} className="input mt-1 py-1 text-xs" />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Percentage (%)</label>
+                    <input type="number" value={nom.percentage} onChange={e => handleNomineeChange(index, 'percentage', e.target.value)} className="input mt-1 py-1 text-xs" placeholder="100" />
+                  </div>
+                  <div className="flex gap-2">
+                    <input value={nom.comment} onChange={e => handleNomineeChange(index, 'comment', e.target.value)} placeholder="Comment" className="input mt-1 py-1 text-xs flex-1" />
+                    <button type="button" onClick={() => removeNominee(index)} className="mt-1 bg-red-50 text-red-500 hover:bg-red-100 px-2 rounded-lg text-xs font-bold transition-colors">X</button>
+                  </div>
+                </div>
+              ))}
+              <div className="flex items-center gap-2 pt-1">
+                <button type="button" onClick={addNewNomineeRow} className="text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors">
+                  + Add Nominee
+                </button>
+                {availableConnectedPersons.length > 0 && (
+                  <button 
+                    type="button" 
+                    onClick={() => {
+                      setNominees(availableConnectedPersons.map(p => ({
+                        name: p.name,
+                        relationship: p.relationship,
+                        phone: p.phone,
+                        dob: p.dob,
+                        percentage: p.percentage || (availableConnectedPersons.length === 1 ? '100' : ''),
+                        comment: p.comment || '',
+                      })));
+                    }}
+                    className="text-xs font-medium text-slate-600 bg-slate-100 px-3 py-1.5 rounded-lg hover:bg-slate-200 transition-colors"
+                  >
+                    Reset & Auto-fill from Policy/Contact
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    )}
+
+      {activeClaimTab === 'Policy Details' && (
+        <ClaimPolicyDetailsTab
+          policy={(initial as any).policy}
+          policyId={(initial as any).policy?.id || (initial as any).policyId}
+          contact={(initial as any).contact}
+          onGoToClaimTab={() => setActiveClaimTab('Claim Details')}
+        />
+      )}
+
+      {activeClaimTab === 'Hospital Details' && (
+        <div className="space-y-4 animate-fadeIn">
+          <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden">
+            <div
+              className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none"
+              onClick={() => toggleCollapse('newHospital')}
+            >
+              <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">H</span>
+                Hospital Details
+              </h4>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-slate-400 font-semibold">Location & Contact</span>
+                <ChevronDown size={16} className={`text-slate-500 transition-transform duration-200 ${collapsedSections['newHospital'] ? 'rotate-180' : ''}`} />
+              </div>
+            </div>
+            {!collapsedSections['newHospital'] && (
+              <div className="p-4 space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="sm:col-span-2">
+                    <label className="label text-[10px]">Select Registered Hospital</label>
+                    <select 
+                      className="input mt-1 py-1 text-xs font-medium" 
+                      value={hospitals.some((h: any) => (h.name || h.hospitalName) === hospitalName) ? hospitalName : ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (!val) return;
+                        setHospitalName(val);
+                        const hosp = hospitals.find((h: any) => (h.name || h.hospitalName) === val);
+                        if (hosp) {
+                          if (hosp.state || hosp.hospitalState) setHospitalState(hosp.state || hosp.hospitalState);
+                          if (hosp.city || hosp.hospitalCity) setHospitalCity(hosp.city || hosp.hospitalCity);
+                          if (hosp.address || hosp.hospitalAddress) setHospitalAddress(hosp.address || hosp.hospitalAddress);
+                          if (hosp.pincode || hosp.hospitalPincode) setHospitalPincode(hosp.pincode || hosp.hospitalPincode);
+                          if (hosp.phone || hosp.hospitalContactNo) setHospitalContactNo(hosp.phone || hosp.hospitalContactNo);
+                          if (hosp.email || hosp.hospitalEmail) setHospitalEmail(hosp.email || hosp.hospitalEmail);
+                          const hType = hosp.type || hosp.hospitalType || '';
+                          if (hType) {
+                            setHospitalType(hType);
+                            if (!['Network', 'Non-Network', 'Blacklisted'].includes(hType)) {
+                              setIsCustomHospitalType(true);
+                              setCustomHospitalTypeText(hType === 'Other' ? '' : hType);
+                            } else {
+                              setIsCustomHospitalType(false);
+                              setCustomHospitalTypeText('');
+                            }
+                          }
+                          if (hosp.rating || hosp.hospitalRating) setHospitalRating(hosp.rating || hosp.hospitalRating);
+                          if (hosp.claimsPerson1Name) setClaimsPerson1Name(hosp.claimsPerson1Name);
+                          if (hosp.claimsPerson1Contact) setClaimsPerson1Contact(hosp.claimsPerson1Contact);
+                          if (hosp.claimsPerson2Name) setClaimsPerson2Name(hosp.claimsPerson2Name);
+                          if (hosp.claimsPerson2Contact) setClaimsPerson2Contact(hosp.claimsPerson2Contact);
+                          if (hosp.comment || hosp.hospitalComment) setHospitalComment(hosp.comment || hosp.hospitalComment);
+
+                          const docs = hosp.doctors || hosp.hospitalDoctors || [];
+                          if (docs.length > 0 && doctors.length === 0) {
+                            setDoctors(docs.map((d: any) => ({
+                              name: d.name || '',
+                              degree: d.degree || '',
+                              contactNo: d.contactNo || d.phone || '',
+                              speciality: d.speciality || ''
+                            })));
+                          }
+                        }
+                      }}
+                    >
+                      <option value="">-- Choose Registered Hospital (or enter below) --</option>
+                      {hospitals.map((h: any) => (
+                        <option key={h.id} value={h.name || h.hospitalName}>
+                          {h.name || h.hospitalName} {h.city ? `(${h.city})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="label text-[10px]">Hospital Name {isFieldRequired('hospitalName', false) && <span className="text-red-500">*</span>}</label>
+                    <input 
+                      type="text" 
+                      className="input mt-1 py-1 text-xs font-semibold" 
+                      value={hospitalName} 
+                      onChange={e => setHospitalName(e.target.value)} 
+                      placeholder="e.g. Ruby Hall Clinic"
+                    />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Hospital Address</label>
+                    <input type="text" className="input mt-1 py-1 text-xs" value={hospitalAddress} onChange={e => setHospitalAddress(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Hospital State {isFieldRequired('hospitalState', false) && <span className="text-red-500">*</span>}</label>
+                    <input type="text" className="input mt-1 py-1 text-xs" value={hospitalState} onChange={e => setHospitalState(e.target.value)} placeholder="e.g. Maharashtra" />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Hospital City {isFieldRequired('hospitalCity', false) && <span className="text-red-500">*</span>}</label>
+                    <input type="text" className="input mt-1 py-1 text-xs" value={hospitalCity} onChange={e => setHospitalCity(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Hospital Pincode {isFieldRequired('hospitalPincode', false) && <span className="text-red-500">*</span>}</label>
+                    <input type="text" className="input mt-1 py-1 text-xs" value={hospitalPincode} onChange={e => setHospitalPincode(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Hospital Contact No {isFieldRequired('hospitalContactNo', false) && <span className="text-red-500">*</span>}</label>
+                    <input 
+                      type="text" 
+                      className="input mt-1 py-1 text-xs" 
+                      placeholder="Enter contact number"
+                      value={hospitalContactNo} 
+                      onChange={e => setHospitalContactNo(e.target.value)} 
+                    />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Hospital Email ID</label>
+                    <input type="email" className="input mt-1 py-1 text-xs" value={hospitalEmail} onChange={e => setHospitalEmail(e.target.value)} placeholder="hospital@email.com" />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Hospital Rating</label>
+                    <CustomSelect
+                      className="input mt-1 py-1 text-xs"
+                      value={hospitalRating}
+                      onChange={val => setHospitalRating(val)}
+                      placeholder="Select Rating"
+                      options={['5 Star', '4 Star', '3 Star', '2 Star', '1 Star']}
+                    />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Hospital Type</label>
+                    {!isCustomHospitalType ? (
+                      <CustomSelect
+                        className="input mt-1 py-1 text-xs"
+                        value={['Network', 'Non-Network', 'Blacklisted'].includes(hospitalType) ? hospitalType : (hospitalType ? 'Other' : '')}
+                        onChange={val => {
+                          if (val === 'Other') {
+                            setIsCustomHospitalType(true);
+                            setCustomHospitalTypeText('');
+                            setHospitalType('Other');
+                          } else {
+                            setIsCustomHospitalType(false);
+                            setCustomHospitalTypeText('');
+                            setHospitalType(val);
+                          }
+                        }}
+                        placeholder="Select Type"
+                        options={['Network', 'Non-Network', 'Blacklisted', 'Other']}
+                      />
+                    ) : (
+                      <div className="relative mt-1">
+                        <input
+                          type="text"
+                          className="input py-1 pr-7 text-xs w-full"
+                          placeholder="Type hospital type..."
+                          value={customHospitalTypeText}
+                          onChange={e => {
+                            const val = e.target.value;
+                            setCustomHospitalTypeText(val);
+                            setHospitalType(val.trim() ? val : 'Other');
+                          }}
+                          onKeyDown={e => { if (e.key === 'Enter') e.preventDefault(); }}
+                          autoFocus
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsCustomHospitalType(false);
+                            setCustomHospitalTypeText('');
+                            setHospitalType('');
+                          }}
+                          title="Back to list options"
+                          className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-blue-600 p-1 rounded hover:bg-slate-100 transition-colors cursor-pointer"
+                        >
+                          <ChevronDown size={14} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-slate-100">
+                  <div className="flex items-center justify-between mb-2">
+                    <h5 className="text-[11px] font-bold text-slate-700">Doctors / Consulting Providers</h5>
+                    {hospitalName && ((hospitals.find((h: any) => (h.name || h.hospitalName) === hospitalName)?.doctors?.length ?? hospitals.find((h: any) => (h.name || h.hospitalName) === hospitalName)?.hospitalDoctors?.length) ?? 0) > 0 && (
+                      <select 
+                        className="input py-0.5 text-[10px] w-auto h-auto font-medium text-blue-700 bg-blue-50 border-blue-200"
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            const hosp = hospitals.find((h: any) => (h.name || h.hospitalName) === hospitalName);
+                            const docs = hosp?.doctors || hosp?.hospitalDoctors || [];
+                            const selectedDoc = docs.find((d: any) => d.name === e.target.value);
+                            if (selectedDoc) {
+                              setDoctors([...doctors, { 
+                                name: selectedDoc.name || '', 
+                                degree: selectedDoc.degree || '', 
+                                contactNo: selectedDoc.contactNo || selectedDoc.phone || '', 
+                                speciality: selectedDoc.speciality || '' 
+                              }]);
+                            } else {
+                              setDoctors([...doctors, { name: e.target.value, degree: '', contactNo: '', speciality: '' }]);
+                            }
+                            e.target.value = '';
+                          }
+                        }}
+                      >
+                        <option value="">+ Add Doctor from Hospital</option>
+                        {(hospitals.find((h: any) => (h.name || h.hospitalName) === hospitalName)?.doctors || hospitals.find((h: any) => (h.name || h.hospitalName) === hospitalName)?.hospitalDoctors || []).map((d: any) => (
+                          <option key={d.id || d.name} value={d.name}>
+                            {d.name} {d.degree ? `(${d.degree})` : ''} {d.speciality ? `- ${d.speciality}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                  {doctors.map((doc, index) => (
+                    <div key={index} className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-3 items-end border-b border-gray-100 pb-4 mb-2">
+                      <div>
+                        <label className="label text-[10px]">Doctor Name</label>
+                        <input value={doc.name} onChange={e => handleDoctorChange(index, 'name', e.target.value)} className="input mt-1 py-1 text-xs" />
+                      </div>
+                      <div>
+                        <label className="label text-[10px]">Doctor Degree</label>
+                        <select
+                          value={doc.degree}
+                          onChange={e => handleDoctorChange(index, 'degree', e.target.value)}
+                          className="input mt-1 py-1 text-xs"
+                        >
+                          <option value="">Select Degree</option>
+                          {['MBBS', 'MD', 'MS', 'DM', 'MCh', 'DNB', 'BDS', 'MDS'].map(deg => (
+                            <option key={deg} value={deg}>{deg}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="label text-[10px]">Doctor Contact No</label>
+                        <input 
+                          value={doc.contactNo} 
+                          maxLength={10}
+                          placeholder="10 digits"
+                          onChange={e => handleDoctorChange(index, 'contactNo', e.target.value.replace(/\D/g, '').slice(0, 10))} 
+                          className="input mt-1 py-1 text-xs" 
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px]">Email ID</label>
+                        <input type="email" value={doc.email || ''} onChange={e => handleDoctorChange(index, 'email', e.target.value)} placeholder="doctor@email.com" className="input mt-1 py-1 text-xs" />
+                      </div>
+                      <div>
+                        <label className="label text-[10px]">Doctor Speciality</label>
+                        <input value={doc.speciality} onChange={e => handleDoctorChange(index, 'speciality', e.target.value)} className="input mt-1 py-1 text-xs" />
+                      </div>
+                      <div className="flex gap-2">
+                        <button type="button" onClick={() => removeDoctor(index)} className="mt-1 bg-red-50 text-red-500 hover:bg-red-100 px-2 rounded-lg text-xs font-bold transition-colors">X</button>
+                      </div>
+                    </div>
+                  ))}
+                  <button type="button" onClick={addNewDoctorRow} className="text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors">
+                    + Add Doctor
+                  </button>
+                </div>
+
+                <div className="pt-2 border-t border-slate-100">
+                  <h5 className="text-[11px] font-bold text-slate-700 mb-2">Enquiry Call / Claims Department Contact</h5>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                    <div>
+                      <label className="label text-[10px]">Person 1 Name</label>
+                      <input type="text" className="input mt-1 py-1 text-xs" value={claimsPerson1Name} onChange={e => setClaimsPerson1Name(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="label text-[10px]">Person 1 Contact No</label>
+                      <input 
+                        type="text" 
+                        className="input mt-1 py-1 text-xs" 
+                        placeholder="Enter contact number"
+                        value={claimsPerson1Contact} 
+                        onChange={e => setClaimsPerson1Contact(e.target.value)} 
+                      />
+                    </div>
+                    <div>
+                      <label className="label text-[10px]">Person 2 Name</label>
+                      <input type="text" className="input mt-1 py-1 text-xs" value={claimsPerson2Name} onChange={e => setClaimsPerson2Name(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="label text-[10px]">Person 2 Contact No</label>
+                      <input 
+                        type="text" 
+                        className="input mt-1 py-1 text-xs" 
+                        placeholder="Enter contact number"
+                        value={claimsPerson2Contact} 
+                        onChange={e => setClaimsPerson2Contact(e.target.value)} 
+                      />
+                    </div>
+                    <div className="md:col-span-4">
+                      <label className="label text-[10px]">Comment</label>
+                      <textarea className="input mt-1 py-1 text-xs" rows={2} value={hospitalComment} onChange={e => setHospitalComment(e.target.value)} />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Hospitalisation Details Collapsible */}
+          <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden mt-4">
+            <div
+              className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none"
+              onClick={() => toggleCollapse('hospitalisation')}
+            >
+              <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">H</span>
+                Hospitalisation Details
+              </h4>
+              <div className="flex items-center gap-2">
+                <ChevronDown size={16} className={`text-slate-500 transition-transform duration-200 ${collapsedSections['hospitalisation'] ? 'rotate-180' : ''}`} />
+              </div>
+            </div>
+            {!collapsedSections['hospitalisation'] && (
+              <div className="p-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                  <div>
+                    <label className="label text-[10px]">Date of Admission</label>
+                    <input
+                      type="date"
+                      value={formatDateForInput(admissionAt)}
+                      onChange={e => setAdmissionAt(e.target.value)}
+                      onBlur={() => {
+                        const adm = formatDateForInput(admissionAt);
+                        const dis = formatDateForInput(dischargeAt);
+                        if (adm && dis && adm > dis) {
+                          toast.error("Date of Admission cannot be after Date of Discharge");
+                        }
+                      }}
+                      className="input mt-1 py-1 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Date of Discharge</label>
+                    <input
+                      type="date"
+                      className="input mt-1 py-1 text-xs"
+                      value={formatDateForInput(dischargeAt)}
+                      min={admissionAt ? formatDateForInput(admissionAt) : undefined}
+                      onClick={(e) => {
+                        if (!admissionAt || !formatDateForInput(admissionAt)) {
+                          e.preventDefault();
+                          toast.error("Please enter Date of Admission first", { id: 'admission-required' });
+                        }
+                      }}
+                      onFocus={() => {
+                        if (!admissionAt || !formatDateForInput(admissionAt)) {
+                          toast.error("Please enter Date of Admission first", { id: 'admission-required' });
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (!admissionAt || !formatDateForInput(admissionAt)) {
+                          e.preventDefault();
+                          toast.error("Please enter Date of Admission first", { id: 'admission-required' });
+                        }
+                      }}
+                      onChange={e => {
+                        if (!admissionAt || !formatDateForInput(admissionAt)) {
+                          toast.error("Please enter Date of Admission first", { id: 'admission-required' });
+                          setDischargeAt('');
+                          return;
+                        }
+                        const val = e.target.value;
+                        if (val && val.length === 10 && Number(val.slice(0, 4)) >= 1900 && formatDateForInput(admissionAt) && val < formatDateForInput(admissionAt)) {
+                          toast.error("Date of Discharge cannot be earlier than Date of Admission", { id: 'discharge-earlier' });
+                          setDischargeAt('');
+                          return;
+                        }
+                        setDischargeAt(val);
+                      }}
+                      onBlur={() => {
+                        const adm = formatDateForInput(admissionAt);
+                        const dis = formatDateForInput(dischargeAt);
+                        if (adm && dis && dis < adm) {
+                          toast.error("Date of Discharge cannot be earlier than Date of Admission", { id: 'discharge-earlier' });
+                          setDischargeAt('');
+                        }
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Diagnosis / Ailment (Exact as written on DS)</label>
+                    <input type="text" className="input mt-1 py-1 text-xs" value={diagnosis} onChange={e => setDiagnosis(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Diagnosis in simple words</label>
+                    <input type="text" className="input mt-1 py-1 text-xs" value={diagnosisSimple} onChange={e => setDiagnosisSimple(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Room Category</label>
+                    <input type="text" className="input mt-1 py-1 text-xs" value={roomCategory} onChange={e => setRoomCategory(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Type of Management</label>
+                    <CustomSelect
+                      className="input mt-1 py-1 text-xs"
+                      value={typeOfManagement}
+                      onChange={val => setTypeOfManagement(val)}
+                      placeholder="Select Option"
+                      options={['Surgical', 'Medicinal', 'Other']}
+                    />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Type of Admission</label>
+                    <CustomSelect
+                      className="input mt-1 py-1 text-xs"
+                      value={typeOfAdmission}
+                      onChange={val => setTypeOfAdmission(val)}
+                      placeholder="Select Option"
+                      options={['Emergency', 'Planned', 'Day-Care', 'Maternity', 'Other']}
+                    />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Is Medico Legal Case?</label>
+                    <CustomSelect
+                      className="input mt-1 py-1 text-xs"
+                      value={isMedicoLegalCase}
+                      onChange={val => {
+                        setIsMedicoLegalCase(val);
+                        if (val !== 'Yes') {
+                          setIsFirLegalDocAvailable('');
+                        }
+                      }}
+                      placeholder="Select Option"
+                      options={['Yes', 'No']}
+                    />
+                  </div>
+                  {isMedicoLegalCase === 'Yes' && (
+                    <div>
+                      <label className="label text-[10px]">"FIR" / "Legal Doc" Available?</label>
+                      <CustomSelect
+                        className="input mt-1 py-1 text-xs"
+                        value={isFirLegalDocAvailable}
+                        onChange={val => setIsFirLegalDocAvailable(val)}
+                        placeholder="Select Option"
+                        options={['Yes', 'No']}
+                      />
+                    </div>
+                  )}
+                  <div>
+                    <label className="label text-[10px]">Comment</label>
+                    <input type="text" className="input mt-1 py-1 text-xs" value={hospitalisationComment} onChange={e => setHospitalisationComment(e.target.value)} />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Billing Details Collapsible */}
+          <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden mt-4">
+            <div
+              className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none"
+              onClick={() => toggleCollapse('billing')}
+            >
+              <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">B</span>
+                Billing Details
+              </h4>
+              <div className="flex items-center gap-2">
+                <ChevronDown size={16} className={`text-slate-500 transition-transform duration-200 ${collapsedSections['billing'] ? 'rotate-180' : ''}`} />
+              </div>
+            </div>
+            {!collapsedSections['billing'] && (
+              <div className="p-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                  <div>
+                    <label className="label text-[10px]">Pre Hospitalisation Bill</label>
+                    <input
+                      type="number"
+                      className="input mt-1 py-1 text-xs"
+                      value={amtPreHosp !== undefined && amtPreHosp !== null && amtPreHosp !== 0 ? amtPreHosp : ''}
+                      onChange={e => setAmtPreHosp(e.target.value === '' ? '' : Number(e.target.value))}
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Hospital Final Bill</label>
+                    <input
+                      type="number"
+                      className="input mt-1 py-1 text-xs"
+                      value={amtHospital !== undefined && amtHospital !== null && amtHospital !== 0 ? amtHospital : ''}
+                      onChange={e => setAmtHospital(e.target.value === '' ? '' : Number(e.target.value))}
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Anesthesia Bill</label>
+                    <input
+                      type="number"
+                      className="input mt-1 py-1 text-xs"
+                      value={amtAnesthesia !== undefined && amtAnesthesia !== null && amtAnesthesia !== 0 ? amtAnesthesia : ''}
+                      onChange={e => setAmtAnesthesia(e.target.value === '' ? '' : Number(e.target.value))}
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Medicine Bill Total</label>
+                    <input
+                      type="number"
+                      className="input mt-1 py-1 text-xs"
+                      value={amtMedicine !== undefined && amtMedicine !== null && amtMedicine !== 0 ? amtMedicine : ''}
+                      onChange={e => setAmtMedicine(e.target.value === '' ? '' : Number(e.target.value))}
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Lab Bill Total</label>
+                    <input
+                      type="number"
+                      className="input mt-1 py-1 text-xs"
+                      value={amtLab !== undefined && amtLab !== null && amtLab !== 0 ? amtLab : ''}
+                      onChange={e => setAmtLab(e.target.value === '' ? '' : Number(e.target.value))}
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Post Hospitalisation Bill</label>
+                    <input
+                      type="number"
+                      className="input mt-1 py-1 text-xs"
+                      value={amtPostHosp !== undefined && amtPostHosp !== null && amtPostHosp !== 0 ? amtPostHosp : ''}
+                      onChange={e => setAmtPostHosp(e.target.value === '' ? '' : Number(e.target.value))}
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Others (Amount)</label>
+                    <input
+                      type="number"
+                      className="input mt-1 py-1 text-xs"
+                      value={amtOthers !== undefined && amtOthers !== null && amtOthers !== 0 ? amtOthers : ''}
+                      onChange={e => setAmtOthers(e.target.value === '' ? '' : Number(e.target.value))}
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="label text-[10px] font-bold text-slate-700">
+                      Total Claimed Amount (₹) {isFieldRequired('claimAmount', true) && <span className="text-red-500">*</span>}
+                    </label>
+                    <input
+                      type="number"
+                      className="input mt-1 py-1 text-xs bg-slate-50 cursor-not-allowed"
+                      value={claimAmount && claimAmount !== '0' ? claimAmount : ''}
+                      placeholder="0"
+                      readOnly
+                    />
+                  </div>
+                  <div>
+                    <label className="label text-[10px]">Comment</label>
+                    <input type="text" className="input mt-1 py-1 text-xs" value={billingComment} onChange={e => setBillingComment(e.target.value)} />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+          </div>
+        )}
+
+        {activeClaimTab === 'Claim Approval Details' && (
+          <div className="space-y-4 animate-fadeIn">
+            <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden mt-4">
+              <div
+                className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none"
+                onClick={() => toggleCollapse('claimApproval')}
+              >
+                <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                  <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">CA</span>
+                  Claim Approval Details
+                </h4>
+                <div className="flex items-center gap-2">
+                  <ChevronDown size={16} className={`text-slate-500 transition-transform duration-200 ${collapsedSections['claimApproval'] ? 'rotate-180' : ''}`} />
+                </div>
+              </div>
+              {!collapsedSections['claimApproval'] && (
+                <div className="p-4 space-y-4">
+                  {/* Final Bill Amount */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div>
+                      <label className="label text-[10px]">Final Bill Amount</label>
+                      <input
+                        type="number"
+                        className="input mt-1 py-1 text-xs"
+                        value={amtFinalBill !== undefined && amtFinalBill !== null && amtFinalBill !== 0 ? amtFinalBill : ''}
+                        onChange={e => setAmtFinalBill(e.target.value === '' ? '' : Number(e.target.value))}
+                        placeholder="0"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-100">
+                    <h5 className="text-[11px] font-bold text-slate-700 mb-2">Less: To be Paid by the Patient / Insured</h5>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                      <div>
+                        <label className="label text-[10px]">Non-Payables as per policy terms</label>
+                        <input
+                          type="number"
+                          className="input mt-1 py-1 text-xs"
+                          value={amtNonPayables !== undefined && amtNonPayables !== null && amtNonPayables !== 0 ? amtNonPayables : ''}
+                          onChange={e => setAmtNonPayables(e.target.value === '' ? '' : Number(e.target.value))}
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px]">Co-pay, if applicable as per policy</label>
+                        <input
+                          type="number"
+                          className="input mt-1 py-1 text-xs"
+                          value={amtCopay !== undefined && amtCopay !== null && amtCopay !== 0 ? amtCopay : ''}
+                          onChange={e => setAmtCopay(e.target.value === '' ? '' : Number(e.target.value))}
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px]">Policy Deductible / Defined Limits / Voluntary Deductible</label>
+                        <input
+                          type="number"
+                          className="input mt-1 py-1 text-xs"
+                          value={amtDeductible !== undefined && amtDeductible !== null && amtDeductible !== 0 ? amtDeductible : ''}
+                          onChange={e => setAmtDeductible(e.target.value === '' ? '' : Number(e.target.value))}
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px]">Balance EMIs to be paid by the insured (if applicable)</label>
+                        <input
+                          type="number"
+                          className="input mt-1 py-1 text-xs"
+                          value={amtBalanceEMIs !== undefined && amtBalanceEMIs !== null && amtBalanceEMIs !== 0 ? amtBalanceEMIs : ''}
+                          onChange={e => setAmtBalanceEMIs(e.target.value === '' ? '' : Number(e.target.value))}
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px]">Recovery towards No Claim Discount in the renewed policy</label>
+                        <input
+                          type="number"
+                          className="input mt-1 py-1 text-xs"
+                          value={amtNcdRecovery !== undefined && amtNcdRecovery !== null && amtNcdRecovery !== 0 ? amtNcdRecovery : ''}
+                          onChange={e => setAmtNcdRecovery(e.target.value === '' ? '' : Number(e.target.value))}
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px]">Excess Over Sum Insured / Sublimit</label>
+                        <input
+                          type="number"
+                          className="input mt-1 py-1 text-xs"
+                          value={amtExcessSumInsured !== undefined && amtExcessSumInsured !== null && amtExcessSumInsured !== 0 ? amtExcessSumInsured : ''}
+                          onChange={e => setAmtExcessSumInsured(e.target.value === '' ? '' : Number(e.target.value))}
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px]">Excess Over Defined ailment / procedure Sub-limit</label>
+                        <input
+                          type="number"
+                          className="input mt-1 py-1 text-xs"
+                          value={amtExcessAilmentLimit !== undefined && amtExcessAilmentLimit !== null && amtExcessAilmentLimit !== 0 ? amtExcessAilmentLimit : ''}
+                          onChange={e => setAmtExcessAilmentLimit(e.target.value === '' ? '' : Number(e.target.value))}
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px]">Higher room rent occupancy and related medical services</label>
+                        <input
+                          type="number"
+                          className="input mt-1 py-1 text-xs"
+                          value={amtHigherRoomRent !== undefined && amtHigherRoomRent !== null && amtHigherRoomRent !== 0 ? amtHigherRoomRent : ''}
+                          onChange={e => setAmtHigherRoomRent(e.target.value === '' ? '' : Number(e.target.value))}
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px]">Reasonable cost</label>
+                        <input
+                          type="number"
+                          className="input mt-1 py-1 text-xs"
+                          value={amtReasonableCost !== undefined && amtReasonableCost !== null && amtReasonableCost !== 0 ? amtReasonableCost : ''}
+                          onChange={e => setAmtReasonableCost(e.target.value === '' ? '' : Number(e.target.value))}
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px]">Other recoveries, if any</label>
+                        <input
+                          type="number"
+                          className="input mt-1 py-1 text-xs"
+                          value={amtOtherRecoveries !== undefined && amtOtherRecoveries !== null && amtOtherRecoveries !== 0 ? amtOtherRecoveries : ''}
+                          onChange={e => setAmtOtherRecoveries(e.target.value === '' ? '' : Number(e.target.value))}
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-semibold text-blue-600">Total amount to be paid by the patient / insured</label>
+                        <input
+                          type="number"
+                          className="input mt-1 py-1 text-xs bg-blue-50 cursor-not-allowed font-semibold text-blue-700"
+                          value={amtPatientToPay !== undefined && amtPatientToPay !== null && amtPatientToPay !== 0 ? amtPatientToPay : ''}
+                          placeholder="0"
+                          readOnly
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-100">
+                    <h5 className="text-[11px] font-bold text-slate-700 mb-2">Less: Amounts NOT to be Collected from the Patient</h5>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                      <div>
+                        <label className="label text-[10px]">Excess amount charged over the agreed package / SOC</label>
+                        <input
+                          type="number"
+                          className="input mt-1 py-1 text-xs"
+                          value={amtExcessAgreedPackage !== undefined && amtExcessAgreedPackage !== null && amtExcessAgreedPackage !== 0 ? amtExcessAgreedPackage : ''}
+                          onChange={e => setAmtExcessAgreedPackage(e.target.value === '' ? '' : Number(e.target.value))}
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px]">Network hospital discount (not to be collected from the patient)</label>
+                        <input
+                          type="number"
+                          className="input mt-1 py-1 text-xs"
+                          value={amtNetworkDiscount !== undefined && amtNetworkDiscount !== null && amtNetworkDiscount !== 0 ? amtNetworkDiscount : ''}
+                          onChange={e => setAmtNetworkDiscount(e.target.value === '' ? '' : Number(e.target.value))}
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-semibold text-green-600">Total Amount NOT to be collected from the patient</label>
+                        <input
+                          type="number"
+                          className="input mt-1 py-1 text-xs bg-green-50 cursor-not-allowed font-semibold text-green-700"
+                          value={amtNotCollected !== undefined && amtNotCollected !== null && amtNotCollected !== 0 ? amtNotCollected : ''}
+                          placeholder="0"
+                          readOnly
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-100">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="label text-[10px] font-bold text-indigo-700">Amount payable by Insurance Company to the Insured/Hospital</label>
+                        <input
+                          type="number"
+                          className="input mt-1 py-1 text-xs bg-indigo-50/50 border-indigo-200 font-bold text-indigo-700 focus:bg-white"
+                          value={amtPayableToInsured !== undefined && amtPayableToInsured !== null && amtPayableToInsured !== 0 ? amtPayableToInsured : ''}
+                          onChange={e => setAmtPayableToInsured(e.target.value === '' ? '' : Number(e.target.value))}
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px]">Comment</label>
+                        <input type="text" className="input mt-1 py-1 text-xs" value={approvalComment} onChange={e => setApprovalComment(e.target.value)} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeClaimTab === 'File Uploads' && (
+          <div className="space-y-4 animate-fadeIn">
+            <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden mt-4">
+              <div
+                className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none"
+                onClick={() => toggleCollapse('documents')}
+              >
+                <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                  <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">F</span>
+                  File Uploads
+                  {editDocsList.length > 0 && (
+                    <span className="ml-1 px-2 py-0.5 rounded-full bg-blue-600 text-white text-[10px] font-black">{editDocsList.length}</span>
+                  )}
+                </h4>
+                <div className="flex items-center gap-2">
+                  <ChevronDown size={16} className={`text-slate-500 transition-transform duration-200 ${collapsedSections['documents'] ? 'rotate-180' : ''}`} />
+                </div>
+              </div>
+              {!collapsedSections['documents'] && (
+                <div className="p-4 space-y-4">
+                  {/* Upload button */}
+                  <button
+                    type="button"
+                    onClick={e => { e.preventDefault(); e.stopPropagation(); setDocUploadOpen(true); setDocUploadFields({ type: 'CLAIM_FORM', title: '', description: '', file: null }); }}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition-all hover:scale-[1.02]"
+                  >
+                    <Upload size={14} />
+                    Upload Document
+                  </button>
+
+                  {/* Uploaded docs list */}
+                  {editDocsList.length === 0 ? (
+                    <div className="border-2 border-dashed border-slate-200 rounded-xl p-8 text-center">
+                      <FileText size={32} className="mx-auto text-slate-300 mb-2" />
+                      <p className="text-xs text-slate-400 font-semibold">No documents added yet.</p>
+                      <p className="text-[11px] text-slate-300 mt-1">Click "Upload Document" to attach files.</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+                      <table className="w-full border-collapse text-left">
+                        <thead>
+                          <tr className="border-b border-slate-200 bg-slate-50 text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
+                            <th className="px-3 py-2.5">Uploaded Date</th>
+                            <th className="px-3 py-2.5">Document Name</th>
+                            <th className="px-3 py-2.5 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-xs">
+                          {editDocsList.map((doc, idx) => {
+                            const fileName = doc.file?.name || 'Document';
+                            const docTitle = doc.title || fileName;
+                            const docTypeLabel = CLAIM_DOC_TYPES.find(t => t.value === doc.type)?.label || doc.type || 'Claim Doc';
+                            const desc = doc.description || '';
+                            const extension = (fileName.split('.').pop()?.toUpperCase() || 'FILE').slice(0, 4);
+                            const fileSize = formatBytes(doc.file?.size);
+                            const phone = (initial as any).proposerPhone || (initial as any).patientPhone || initial.contact?.phone || '';
+                            const waText = `Document Title: ${docTitle}\nType: ${docTypeLabel}`;
+                            const waUrl = phone
+                              ? `https://api.whatsapp.com/send?phone=91${phone.slice(-10)}&text=${encodeURIComponent(waText)}`
+                              : `https://api.whatsapp.com/send?text=${encodeURIComponent(waText)}`;
+
+                            return (
+                              <tr key={idx} className="transition-colors hover:bg-slate-50/80">
+                                <td className="whitespace-nowrap px-3 py-2.5 font-semibold text-slate-600">
+                                  <span className="inline-flex items-center gap-1.5">
+                                    <CalendarDays size={13} className="text-slate-400" />
+                                    {format(new Date(), 'dd MMM yyyy')}
+                                  </span>
+                                </td>
+                                <td className="min-w-[220px] px-3 py-2.5">
+                                  <div className="flex min-w-0 items-center gap-2">
+                                    <span className="flex h-8 min-w-8 shrink-0 items-center justify-center rounded-lg border border-blue-100 bg-blue-50 px-1 font-mono text-[9px] font-bold text-blue-600">
+                                      {extension}
+                                    </span>
+                                    <div className="min-w-0">
+                                      <p className="truncate font-extrabold text-slate-800" title={fileName}>{fileName}</p>
+                                      <div className="mt-0.5 flex items-center gap-1.5">
+                                        <span className="truncate font-semibold text-slate-600" title={docTitle}>{docTitle}</span>
+                                        <span className="rounded border border-indigo-100 bg-indigo-50 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-indigo-700">
+                                          {docTypeLabel}
+                                        </span>
+                                        {fileSize && (
+                                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold text-slate-500">
+                                            {fileSize}
+                                          </span>
+                                        )}
+                                      </div>
+                                      {desc && desc !== '-' && (
+                                        <p className="mt-0.5 truncate text-[10px] text-slate-500" title={desc}>{desc}</p>
+                                      )}
+                                    </div>
+                                    <FileText size={14} className="ml-auto hidden shrink-0 text-slate-300 sm:block" />
+                                  </div>
+                                </td>
+                                <td className="whitespace-nowrap px-3 py-2.5 text-right">
+                                  <div className="flex items-center justify-end gap-1.5">
+                                    <a
+                                      href={waUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[11px] font-bold text-emerald-700 transition-colors hover:bg-emerald-100"
+                                      title="Share document"
+                                    >
+                                      <MessageCircle size={13} />
+                                      <span className="hidden sm:inline">WhatsApp</span>
+                                    </a>
+                                    {doc.file && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const objectUrl = URL.createObjectURL(doc.file);
+                                          setDocPreviewModal({ open: true, title: docTitle, url: objectUrl });
+                                        }}
+                                        className="rounded-lg border border-blue-100 bg-blue-50 p-1.5 text-blue-600 transition-colors hover:bg-blue-100"
+                                        title="View document"
+                                        aria-label={`View ${fileName}`}
+                                      >
+                                        <Eye size={14} />
+                                      </button>
+                                    )}
+                                    {doc.file && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const objectUrl = URL.createObjectURL(doc.file);
+                                          const a = document.createElement('a');
+                                          a.href = objectUrl;
+                                          a.download = fileName;
+                                          a.click();
+                                          window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+                                        }}
+                                        className="rounded-lg border border-slate-200 bg-slate-100 p-1.5 text-slate-700 transition-colors hover:bg-slate-200"
+                                        title="Download document"
+                                        aria-label={`Download ${fileName}`}
+                                      >
+                                        <Download size={14} />
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditDocsList(prev => prev.filter((_, i) => i !== idx))}
+                                      className="rounded-lg border border-rose-100 bg-rose-50 p-1.5 text-rose-600 transition-colors hover:bg-rose-100"
+                                      title="Delete document"
+                                      aria-label={`Delete ${fileName}`}
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* Comment */}
+                  <div>
+                    <label className="label text-[11px]">Comment</label>
+                    <input type="text" value={fileUploadComment} onChange={e => setFileUploadComment(e.target.value)} className="input w-full bg-white mt-1 text-xs py-1" placeholder="Optional notes about these documents" />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* ── Doc Upload Sub-Modal ─────────────────────────────────────── */}
+            <Modal
+              open={docUploadOpen}
+              onClose={() => { setDocUploadOpen(false); setDocUploadFields({ type: 'CLAIM_FORM', title: '', description: '', file: null }); }}
+              closeOnEscapeAndBackdrop={false}
+              title="Upload Document"
+              size="md"
+            >
+              <div className="space-y-4">
+                <div>
+                  <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Document Type <span className="text-red-500">*</span></label>
+                  <select
+                    value={docUploadFields.type}
+                    onChange={e => setDocUploadFields(p => ({ ...p, type: e.target.value }))}
+                    className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200"
+                  >
+                    {CLAIM_DOC_TYPES.map(t => (
+                      <option key={t.value} value={t.value}>{t.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Document Title <span className="text-red-500">*</span></label>
+                  <input
+                    type="text"
+                    value={docUploadFields.title}
+                    onChange={e => setDocUploadFields(p => ({ ...p, title: e.target.value }))}
+                    className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200"
+                    placeholder="e.g. Discharge Summary – Apollo Jan 2025"
+                  />
+                </div>
+                <div>
+                  <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Description</label>
+                  <textarea
+                    rows={2}
+                    value={docUploadFields.description}
+                    onChange={e => setDocUploadFields(p => ({ ...p, description: e.target.value }))}
+                    className="input w-full p-2.5 text-xs rounded-xl bg-white border border-slate-200"
+                    placeholder="Optional notes about this document"
+                  />
+                </div>
+                <div>
+                  <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Choose File <span className="text-red-500">*</span></label>
+                  <div className="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center hover:border-blue-500 hover:bg-blue-50/30 transition-colors">
+                    <input
+                      type="file"
+                      onChange={e => setDocUploadFields(p => {
+                        const file = e.target.files?.[0] || null;
+                        return {
+                          ...p,
+                          file,
+                          title: file ? file.name.replace(/\.[^.]+$/, '') : '',
+                        };
+                      })}
+                      className="w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-wrap justify-end gap-2 pt-4 border-t border-slate-100">
+                  <button
+                    type="button"
+                    className="btn-secondary px-4 py-2 text-xs"
+                    onClick={() => { setDocUploadOpen(false); setDocUploadFields({ type: 'CLAIM_FORM', title: '', description: '', file: null }); }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-primary px-4 py-2 text-xs"
+                    onClick={() => {
+                      if (!docUploadFields.title.trim()) { toast.error('Please enter a document title.'); return; }
+                      if (!docUploadFields.file) { toast.error('Please choose a file.'); return; }
+                      const setterMap: Record<string, (f: File | null) => void> = {
+                        CLAIM_FORM: setClaimFormFile,
+                        DISCHARGE_SUMMARY: setDischargeSummaryFile,
+                        OT_NOTES_IPD_PAPERS: setOtNotesFile,
+                        HOSPITAL_BILL: setHospitalBillFile,
+                        PHARMACY_MEDICINES_BILL: setPharmacyBillFile,
+                        INVESTIGATION_LAB_BILL: setInvestigationBillFile,
+                        BLOOD_ANESTHESIA_BILL: setBloodBagsBillFile,
+                        IMPORTANT_LAB_REPORTS: setLabReportsFile,
+                        IMP_BILLS: setBillsFile,
+                        OTHER_IMP_DOCS: setOtherImpDocsFile,
+                        QUERY_LETTER: setQueryLetterFile,
+                        REPLY_DOCS: setReplyDocsFile,
+                        SETTLEMENT_LETTER: setSettlementLetterFile,
+                        REJECTION_LETTER: setRejectionLetterFile,
+                      };
+                      setterMap[docUploadFields.type]?.(docUploadFields.file);
+                      setEditDocsList(prev => [...prev, { type: docUploadFields.type, title: docUploadFields.title, description: docUploadFields.description, file: docUploadFields.file! }]);
+                      setDocUploadOpen(false);
+                      setDocUploadFields({ type: 'CLAIM_FORM', title: '', description: '', file: null });
+                      toast.success('Document added!');
+                    }}
+                  >
+                    Add Document
+                  </button>
+                </div>
+              </div>
+            </Modal>
+          </div>
+        )}
+
+        {/* ════════════════ TAB 6: Claim History & Activity Log ════════════════ */}
+        {activeClaimTab === 'History' && (
+          <ActivityTimeline
+            entityType="Claim"
+            entityId={(initial as any)?.id}
+            events={[claimHistoryRes, (initial as any).contact?.activityLogs]}
+            fallbackEvents={[
+              ...((initial as any).createdAt ? [{
+                id: `claim-created-${initial.id}`,
+                entityType: 'Claim',
+                entityId: initial.id,
+                action: 'CREATE',
+                description: `Claim ${initial.claimNumber} created`,
+                createdAt: (initial as any).createdAt,
+              }] : []),
+            ]}
+            isLoading={claimHistoryLoading}
+            isError={claimHistoryError}
+            subtitle="Latest activity for this claim."
+          />
+        )}
+  </div>
+
+
+      </div>
+    </Modal>
+  );
+}
+
+export default function Claims() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const qc = useQueryClient();
+  const createClaim = useCreateClaim();
+  const deleteClaim = useDeleteClaim();
+  const updateClaimMutation = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: any }) => claimsService.update(id, body),
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ['claims'] });
+      qc.invalidateQueries({ queryKey: ['contact-activity'] });
+      qc.refetchQueries({ queryKey: ['contact-activity'] });
+      toast.success('Claim updated successfully');
+      if (res?.data) {
+        setEditTarget(prev => (prev ? { ...prev, ...res.data } : res.data));
+      }
+    },
+    onError: (err: any) => toast.error(err?.response?.data?.message ?? 'Failed to update claim'),
+  });
+  const { data: hospitalsRes } = useQuery({ queryKey: ['hospitals'], queryFn: () => insuranceService.listHospitals().catch(() => ({ data: [] })) });
+  const hospitals = hospitalsRes?.data ?? [];
+  const { user: authUser } = useAuthStore();
+  const [page, setPage] = useState(1);
+  const [modalOpen, setModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (searchParams.get('action') === 'add') {
+      setModalOpen(true);
+    }
+  }, [searchParams]);
+  const [editTarget, setEditTarget] = useState<Claim | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Claim | null>(null);
+  
+  // Claim Detail sheet
+  const [docPreviewModal, setDocPreviewModal] = useState<{ open: boolean; title: string; url: string }>({ open: false, title: '', url: '' });
+  const [selectedClaim, setSelectedClaim] = useState<any | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({ newProposer: false, newClaim: false, newDeath: true, newNominee: true, newHospital: false });
+  const toggleCollapse = (sec: string) => setCollapsedSections(prev => ({ ...prev, [sec]: !prev[sec] }));
+
+  // Doctor array state for new claim
+  const [newDoctors, setNewDoctors] = useState<any[]>([]);
+  const addNewDoctorRow = () => setNewDoctors([...newDoctors, { name: '', degree: '', contactNo: '', email: '', speciality: '' }]);
+  const removeNewDoctor = (index: number) => setNewDoctors(newDoctors.filter((_, i) => i !== index));
+  const handleNewDoctorChange = (index: number, field: string, val: string) => {
+    const updated = [...newDoctors];
+    updated[index][field] = val;
+    setNewDoctors(updated);
+  };
+
+  // Nominee array state for new claim
+  const [newNominees, setNewNominees] = useState<any[]>([]);
+  const addNewNomineeRow = () => setNewNominees([...newNominees, { name: '', relationship: '', phone: '', dob: '', percentage: '', comment: '' }]);
+  const removeNewNominee = (index: number) => setNewNominees(newNominees.filter((_, i) => i !== index));
+  const handleNewNomineeChange = (index: number, field: string, val: string) => {
+    const updated = [...newNominees];
+    updated[index][field] = val;
+    setNewNominees(updated);
+  };
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [importFormatOpen, setImportFormatOpen] = useState(false);
+  const employees = useLookupStore(s => s.employees);
+
+  // Fetch all claims for client side filtering matching reference app
+  const { data: claimsRes, isLoading } = useClaims({ page: 1, limit: 500 });
+  const rawClaims = claimsRes?.data ?? [];
+
+  // Filters
+  const [search, setSearch] = useState(() => searchParams.get('search') || searchParams.get('q') || '');
+  const [filterStatus, setFilterStatus] = useState<'All' | 'Pending' | 'In Progress' | 'Approved' | 'Rejected' | 'Settled'>('All');
+
+  useEffect(() => {
+    const q = searchParams.get('search') ?? searchParams.get('q');
+    if (q !== null && q !== undefined) {
+      setSearch(q);
+      setPage(1);
+    } else if (!searchParams.has('search') && !searchParams.has('q')) {
+      setSearch('');
+    }
+  }, [searchParams]);
+
+  // Advanced Filters
+  const [filterStartDate, setFilterStartDate] = useState('');
+  const [filterEndDate, setFilterEndDate] = useState('');
+  const [filterCompany, setFilterCompany] = useState('');
+  const [filterHospital, setFilterHospital] = useState('');
+  const [filterClaimType, setFilterClaimType] = useState('ALL');
+  const [filterAgent, setFilterAgent] = useState('');
+  const [analyticsDuration, setAnalyticsDuration] = useState('ALL');
+  const [showAnalytics, setShowAnalytics] = useState(false);
+
+  // In-Page Expandable Advanced Filters Card (Policy Page Style) & 20 Parameters
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filterProposerName, setFilterProposerName] = useState('');
+  const [filterCompanyName, setFilterCompanyName] = useState('');
+  const [filterPlanName, setFilterPlanName] = useState('');
+  const [filterAssignedEmployee, setFilterAssignedEmployee] = useState('');
+  const [filterAgentName, setFilterAgentName] = useState('');
+  const [filterClaimTypeModal, setFilterClaimTypeModal] = useState('ALL');
+  const [filterClaimStatusModal, setFilterClaimStatusModal] = useState('ALL');
+  const [filterClaimedAmountRange, setFilterClaimedAmountRange] = useState('ALL');
+  const [filterSettledMin, setFilterSettledMin] = useState('');
+  const [filterSettledMax, setFilterSettledMax] = useState('');
+  const [filterDeductedMin, setFilterDeductedMin] = useState('');
+  const [filterDeductedMax, setFilterDeductedMax] = useState('');
+  const [filterHospitalState, setFilterHospitalState] = useState('');
+  const [filterHospitalCity, setFilterHospitalCity] = useState('');
+  const [filterHospitalNameModal, setFilterHospitalNameModal] = useState('');
+  const [filterDoctorName, setFilterDoctorName] = useState('');
+  const [filterAdmissionDateFrom, setFilterAdmissionDateFrom] = useState('');
+  const [filterAdmissionDateTo, setFilterAdmissionDateTo] = useState('');
+  const [filterDischargeDateFrom, setFilterDischargeDateFrom] = useState('');
+  const [filterDischargeDateTo, setFilterDischargeDateTo] = useState('');
+  const [filterAffectedOrgan, setFilterAffectedOrgan] = useState('');
+  const [filterRoomCategory, setFilterRoomCategory] = useState('');
+  const [filterTypeOfManagement, setFilterTypeOfManagement] = useState('');
+  const [filterTypeOfAdmission, setFilterTypeOfAdmission] = useState('');
+  const [filterCreationDateFrom, setFilterCreationDateFrom] = useState('');
+  const [filterCreationDateTo, setFilterCreationDateTo] = useState('');
+
+  const resetAllModalFilters = () => {
+    setFilterProposerName('');
+    setFilterCompanyName('');
+    setFilterPlanName('');
+    setFilterAssignedEmployee('');
+    setFilterAgentName('');
+    setFilterClaimTypeModal('ALL');
+    setFilterClaimStatusModal('ALL');
+    setFilterClaimedAmountRange('ALL');
+    setFilterSettledMin('');
+    setFilterSettledMax('');
+    setFilterDeductedMin('');
+    setFilterDeductedMax('');
+    setFilterHospitalState('');
+    setFilterHospitalCity('');
+    setFilterHospitalNameModal('');
+    setFilterDoctorName('');
+    setFilterAdmissionDateFrom('');
+    setFilterAdmissionDateTo('');
+    setFilterDischargeDateFrom('');
+    setFilterDischargeDateTo('');
+    setFilterAffectedOrgan('');
+    setFilterRoomCategory('');
+    setFilterTypeOfManagement('');
+    setFilterTypeOfAdmission('');
+    setFilterCreationDateFrom('');
+    setFilterCreationDateTo('');
+  };
+
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    if (filterProposerName) count++;
+    if (filterCompanyName) count++;
+    if (filterPlanName) count++;
+    if (filterAssignedEmployee) count++;
+    if (filterAgentName) count++;
+    if (filterClaimTypeModal !== 'ALL') count++;
+    if (filterClaimStatusModal !== 'ALL') count++;
+    if (filterClaimedAmountRange !== 'ALL') count++;
+    if (filterSettledMin || filterSettledMax) count++;
+    if (filterDeductedMin || filterDeductedMax) count++;
+    if (filterHospitalState) count++;
+    if (filterHospitalCity) count++;
+    if (filterHospitalNameModal) count++;
+    if (filterDoctorName) count++;
+    if (filterAdmissionDateFrom || filterAdmissionDateTo) count++;
+    if (filterDischargeDateFrom || filterDischargeDateTo) count++;
+    if (filterAffectedOrgan) count++;
+    if (filterRoomCategory) count++;
+    if (filterTypeOfManagement) count++;
+    if (filterTypeOfAdmission) count++;
+    if (filterCreationDateFrom || filterCreationDateTo) count++;
+    return count;
+  }, [
+    filterProposerName, filterCompanyName, filterPlanName, filterAssignedEmployee, filterAgentName,
+    filterClaimTypeModal, filterClaimStatusModal, filterClaimedAmountRange, filterSettledMin, filterSettledMax,
+    filterDeductedMin, filterDeductedMax, filterHospitalState, filterHospitalCity, filterHospitalNameModal,
+    filterDoctorName, filterAdmissionDateFrom, filterAdmissionDateTo, filterDischargeDateFrom, filterDischargeDateTo,
+    filterAffectedOrgan, filterRoomCategory, filterTypeOfManagement, filterTypeOfAdmission,
+    filterCreationDateFrom, filterCreationDateTo
+  ]);
+
+  // View Mode
+  const [viewMode, setViewMode] = useState<'table' | 'kanban'>('table');
+
+  // Sorting
+  const [sortKey, setSortKey] = useState<string>('');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
+  // Unified Filtered Claims Selector
+  const filteredClaims = useMemo(() => {
+    const sTerm = search.trim().toLowerCase();
+    const searchTokens = sTerm.split(/\s+/).filter(Boolean);
+    return rawClaims.filter((c: any) => {
+      const notes = getClaimNotesData(c.notes);
+
+      // 1. Text Search (Client Full Name, Patient Name, Claim Number, Phone)
+      const clientName = `${c.contact?.firstName || ''} ${c.contact?.lastName || ''}`.trim().toLowerCase();
+      const patientName = `${notes.patientName || c.patientName || ''}`.trim().toLowerCase();
+      const claimNo = (c.claimNumber || '').toLowerCase();
+      const phone = (c.contact?.phone || '').toLowerCase();
+      const matchesPersonName = [clientName, patientName]
+        .some(name => searchTokens.every(token => name.includes(token)));
+      if (sTerm && !matchesPersonName && !claimNo.includes(sTerm) && !phone.includes(sTerm)) return false;
+
+      // 2. Status Filter (Analytics Top Bar)
+      if (filterStatus !== 'All') {
+        const uStatus = getClaimUiStatus(c);
+        if (uStatus !== filterStatus) return false;
+      }
+
+      // 3. Claim Type Filter (Analytics Top Bar)
+      if (filterClaimType !== 'ALL') {
+        if (c.claimType?.toLowerCase() !== filterClaimType.toLowerCase()) return false;
+      }
+
+      // 4. Company Filter (Analytics Top Bar)
+      if (filterCompany) {
+        const companyName = (c.policy?.plan?.company?.name || '').toLowerCase();
+        if (!companyName.includes(filterCompany.toLowerCase())) return false;
+      }
+
+      // 5. Hospital Filter (Analytics Top Bar)
+      if (filterHospital) {
+        const hospitalName = (notes.hospital || '').toLowerCase();
+        if (!hospitalName.includes(filterHospital.toLowerCase())) return false;
+      }
+
+      // 6. Date range Filter (Analytics Top Bar)
+      if (filterStartDate) {
+        const start = new Date(filterStartDate).setHours(0, 0, 0, 0);
+        const dateStr = c.intimatedAt || c.createdAt;
+        if (!dateStr) return false;
+        const date = new Date(dateStr).getTime();
+        if (isNaN(date) || date < start) return false;
+      }
+      if (filterEndDate) {
+        const end = new Date(filterEndDate).setHours(23, 59, 59, 999);
+        const dateStr = c.intimatedAt || c.createdAt;
+        if (!dateStr) return false;
+        const date = new Date(dateStr).getTime();
+        if (isNaN(date) || date > end) return false;
+      }
+
+      // 7. Duration shortcut filter
+      if (analyticsDuration === '30_DAYS') {
+        const diff = (Date.now() - new Date(c.intimatedAt || c.createdAt).getTime()) / 86400000;
+        if (diff > 30) return false;
+      } else if (analyticsDuration === '90_DAYS') {
+        const diff = (Date.now() - new Date(c.intimatedAt || c.createdAt).getTime()) / 86400000;
+        if (diff > 90) return false;
+      } else if (analyticsDuration === 'THIS_YEAR') {
+        const year = new Date(c.intimatedAt || c.createdAt).getFullYear();
+        if (year !== new Date().getFullYear()) return false;
+      }
+
+      // 8. Agent Filter
+      if (filterAgent && c.assignedEmployeeId !== filterAgent) return false;
+
+      // --- DEDICATED 20 FILTERS EVALUATION ---
+
+      // 1. Proposer Name Filter
+      if (filterProposerName) {
+        const pTerm = filterProposerName.toLowerCase();
+        const contactName = `${c.contact?.firstName || ''} ${c.contact?.lastName || ''}`.toLowerCase();
+        const pName = (notes.patientName || '').toLowerCase();
+        if (!contactName.includes(pTerm) && !pName.includes(pTerm)) return false;
+      }
+
+      // 2. Company Name Filter
+      if (filterCompanyName) {
+        const compTerm = filterCompanyName.toLowerCase();
+        const c1 = (c.policy?.plan?.company?.name || '').toLowerCase();
+        const c2 = (notes.insuranceCompany || '').toLowerCase();
+        if (!c1.includes(compTerm) && !c2.includes(compTerm)) return false;
+      }
+
+      // 3. Plan Name Filter
+      if (filterPlanName) {
+        const planTerm = filterPlanName.toLowerCase();
+        const p1 = (c.policy?.plan?.name || '').toLowerCase();
+        const p2 = (notes.insuranceProductName || '').toLowerCase();
+        if (!p1.includes(planTerm) && !p2.includes(planTerm)) return false;
+      }
+
+      // 4. Assigned Employee Filter
+      if (filterAssignedEmployee) {
+        const targetEmp = employees.find((e: any) => e.userId === filterAssignedEmployee || e.id === filterAssignedEmployee);
+        const matchIds = [filterAssignedEmployee, targetEmp?.id, targetEmp?.userId].filter(Boolean);
+        const cAssignedId = c.assignedEmployeeId || c.assignedEmployee?.id || c.assignedEmployee?.userId;
+        if (!matchIds.includes(cAssignedId)) return false;
+      }
+
+      // 5. Agent Name Filter
+      if (filterAgentName) {
+        const agTerm = filterAgentName.toLowerCase();
+        const a1 = (notes.agentName || '').toLowerCase();
+        const a2 = (c.policy?.agent?.firstName ? `${c.policy.agent.firstName} ${c.policy.agent.lastName}` : '').toLowerCase();
+        if (!a1.includes(agTerm) && !a2.includes(agTerm)) return false;
+      }
+
+      // 6. Claim Type Filter (Modal)
+      if (filterClaimTypeModal !== 'ALL') {
+        if ((c.claimType || '').toLowerCase() !== filterClaimTypeModal.toLowerCase()) return false;
+      }
+
+      // 7. Claim Status Filter (Modal)
+      if (filterClaimStatusModal !== 'ALL') {
+        const uiStatus = getClaimUiStatus(c);
+        const notesStatus = notes.uiClaimStatus || '';
+        if (
+          uiStatus.toLowerCase() !== filterClaimStatusModal.toLowerCase() &&
+          notesStatus.toLowerCase() !== filterClaimStatusModal.toLowerCase() &&
+          (c.status || '').toLowerCase() !== filterClaimStatusModal.toLowerCase()
+        ) return false;
+      }
+
+      // 8. Claimed Amount Range Filter (0-50,000 / 50,001-1,00,000 / 1,00,001-2,00,000 / 2,00,001-4,00,000 / 4,00,001-10,00,000 / 10,00,001-20,00,000 / 20,00,001+)
+      if (filterClaimedAmountRange !== 'ALL') {
+        const amt = Number(c.claimAmount || 0);
+        if (filterClaimedAmountRange === '0_50K' && !(amt >= 0 && amt <= 50000)) return false;
+        if (filterClaimedAmountRange === '50K_1L' && !(amt >= 50001 && amt <= 100000)) return false;
+        if (filterClaimedAmountRange === '1L_2L' && !(amt >= 100001 && amt <= 200000)) return false;
+        if (filterClaimedAmountRange === '2L_4L' && !(amt >= 200001 && amt <= 400000)) return false;
+        if (filterClaimedAmountRange === '4L_10L' && !(amt >= 400001 && amt <= 1000000)) return false;
+        if (filterClaimedAmountRange === '10L_20L' && !(amt >= 1000001 && amt <= 2000000)) return false;
+        if (filterClaimedAmountRange === '20L_ABOVE' && !(amt > 2000000)) return false;
+      }
+
+      // 9. Settled Amount (Min / Max)
+      const settledAmt = Number(c.approvedAmount ?? notes.amtPayableToInsured ?? 0);
+      if (filterSettledMin && settledAmt < Number(filterSettledMin)) return false;
+      if (filterSettledMax && settledAmt > Number(filterSettledMax)) return false;
+
+      // 10. Deducted Amount (Min / Max)
+      const claimedAmt = Number(c.claimAmount || 0);
+      const calculatedDeducted = Number(notes.amtPatientToPay ?? notes.amtNonPayables ?? (claimedAmt > settledAmt ? claimedAmt - settledAmt : 0));
+      if (filterDeductedMin && calculatedDeducted < Number(filterDeductedMin)) return false;
+      if (filterDeductedMax && calculatedDeducted > Number(filterDeductedMax)) return false;
+
+      // 11. Hospital State Filter
+      if (filterHospitalState) {
+        const stateTerm = filterHospitalState.toLowerCase();
+        const hState = (notes.hospitalState || '').toLowerCase();
+        if (!hState.includes(stateTerm)) return false;
+      }
+
+      // 12. Hospital City Filter
+      if (filterHospitalCity) {
+        const cityTerm = filterHospitalCity.toLowerCase();
+        const hCity = (notes.hospitalCity || '').toLowerCase();
+        if (!hCity.includes(cityTerm)) return false;
+      }
+
+      // 13. Hospital Name Filter
+      if (filterHospitalNameModal) {
+        const hTerm = filterHospitalNameModal.toLowerCase();
+        const h1 = (notes.hospital || '').toLowerCase();
+        const h2 = (notes.hospitalName || '').toLowerCase();
+        if (!h1.includes(hTerm) && !h2.includes(hTerm)) return false;
+      }
+
+      // 14. Doctor Name Filter
+      if (filterDoctorName) {
+        const docTerm = filterDoctorName.toLowerCase();
+        let doctorMatch = false;
+        try {
+          const docs = JSON.parse(notes.hospitalDoctors || '[]');
+          if (Array.isArray(docs)) {
+            doctorMatch = docs.some((d: any) => (d.name || '').toLowerCase().includes(docTerm));
+          }
+        } catch {}
+        if (!doctorMatch && !(notes.hospitalDoctors || '').toLowerCase().includes(docTerm)) return false;
+      }
+
+      // 15. Date of Admission Filter
+      if (filterAdmissionDateFrom || filterAdmissionDateTo) {
+        const admStr = notes.admissionAt || notes.deathAdmissionDate || '';
+        if (!admStr) return false;
+        const admTime = new Date(admStr).getTime();
+        if (isNaN(admTime)) return false;
+        if (filterAdmissionDateFrom) {
+          const fromTime = new Date(filterAdmissionDateFrom).setHours(0, 0, 0, 0);
+          if (admTime < fromTime) return false;
+        }
+        if (filterAdmissionDateTo) {
+          const toTime = new Date(filterAdmissionDateTo).setHours(23, 59, 59, 999);
+          if (admTime > toTime) return false;
+        }
+      }
+
+      // 16. Date of Discharge Filter
+      if (filterDischargeDateFrom || filterDischargeDateTo) {
+        const disStr = notes.dischargeAt || '';
+        if (!disStr) return false;
+        const disTime = new Date(disStr).getTime();
+        if (isNaN(disTime)) return false;
+        if (filterDischargeDateFrom) {
+          const fromTime = new Date(filterDischargeDateFrom).setHours(0, 0, 0, 0);
+          if (disTime < fromTime) return false;
+        }
+        if (filterDischargeDateTo) {
+          const toTime = new Date(filterDischargeDateTo).setHours(23, 59, 59, 999);
+          if (disTime > toTime) return false;
+        }
+      }
+
+      // 17. Affected Organ / Body Part Filter
+      if (filterAffectedOrgan) {
+        const organTerm = filterAffectedOrgan.toLowerCase();
+        const diag1 = (notes.diagnosis || '').toLowerCase();
+        const diag2 = (notes.diagnosisSimple || '').toLowerCase();
+        if (!diag1.includes(organTerm) && !diag2.includes(organTerm)) return false;
+      }
+
+      // 18. Room Category Filter
+      if (filterRoomCategory) {
+        const roomTerm = filterRoomCategory.toLowerCase();
+        const room = (notes.roomCategory || '').toLowerCase();
+        if (!room.includes(roomTerm)) return false;
+      }
+
+      // 19. Type of Management Filter
+      if (filterTypeOfManagement) {
+        const mgmtTerm = filterTypeOfManagement.toLowerCase();
+        const mgmt = (notes.typeOfManagement || '').toLowerCase();
+        if (!mgmt.includes(mgmtTerm)) return false;
+      }
+
+      // 20. Type of Admission Filter
+      if (filterTypeOfAdmission) {
+        const admTypeTerm = filterTypeOfAdmission.toLowerCase();
+        const admType = (notes.typeOfAdmission || '').toLowerCase();
+        if (!admType.includes(admTypeTerm)) return false;
+      }
+
+      // 21. Claim Creation Date Filter
+      if (filterCreationDateFrom || filterCreationDateTo) {
+        const createdStr = c.createdAt || c.intimatedAt || (notes as any).createdDate || '';
+        if (!createdStr) return false;
+        const createdTime = new Date(createdStr).getTime();
+        if (isNaN(createdTime)) return false;
+        if (filterCreationDateFrom) {
+          const fromTime = new Date(filterCreationDateFrom).setHours(0, 0, 0, 0);
+          if (createdTime < fromTime) return false;
+        }
+        if (filterCreationDateTo) {
+          const toTime = new Date(filterCreationDateTo).setHours(23, 59, 59, 999);
+          if (createdTime > toTime) return false;
+        }
+      }
+
+      return true;
+    });
+  }, [
+    rawClaims, search, filterStatus, filterStartDate, filterEndDate, filterCompany, filterHospital, filterClaimType, analyticsDuration, filterAgent,
+    filterProposerName, filterCompanyName, filterPlanName, filterAssignedEmployee, filterAgentName,
+    filterClaimTypeModal, filterClaimStatusModal, filterClaimedAmountRange, filterSettledMin, filterSettledMax,
+    filterDeductedMin, filterDeductedMax, filterHospitalState, filterHospitalCity, filterHospitalNameModal,
+    filterDoctorName, filterAdmissionDateFrom, filterAdmissionDateTo, filterDischargeDateFrom, filterDischargeDateTo,
+    filterAffectedOrgan, filterRoomCategory, filterTypeOfManagement, filterTypeOfAdmission,
+    filterCreationDateFrom, filterCreationDateTo
+  ]);
+
+  // Client-side Sorting
+  const sortedClaims = useMemo(() => {
+    return sortData(filteredClaims, sortKey, sortDir, (row: any, key: string) => {
+      if (key === 'contact') return `${row.contact?.firstName ?? ''} ${row.contact?.lastName ?? ''}`;
+      
+      const parts = key.split('.');
+      let val = row;
+      for (const part of parts) {
+        if (val == null) break;
+        val = val[part];
+      }
+      return val !== undefined ? val : row[key];
+    });
+  }, [filteredClaims, sortKey, sortDir]);
+  const paginatedClaims = useMemo(
+    () => sortedClaims.slice((page - 1) * 20, page * 20),
+    [sortedClaims, page],
+  );
+
+  const exportClaimsToExcel = () => {
+    const headers = ['Claim Number', 'Client Name', 'Policy Number', 'Company', 'Claim Type', 'Hospital', 'Amount', 'Intimated At', 'Status'];
+    const rows = sortedClaims.map((c: any) => {
+      const notes = getClaimNotesData(c.notes);
+      return [
+        `"${(c.claimNumber || '').replace(/"/g, '""')}"`,
+        `"${((c.contact?.firstName || '') + ' ' + (c.contact?.lastName || '')).trim().replace(/"/g, '""')}"`,
+        `"${(c.policy?.policyNumber || '').replace(/"/g, '""')}"`,
+        `"${(c.policy?.plan?.company?.name || '').replace(/"/g, '""')}"`,
+        `"${(c.claimType || '').replace(/"/g, '""')}"`,
+        `"${(notes.hospital || '').replace(/"/g, '""')}"`,
+        c.claimAmount ?? '',
+        c.intimatedAt ? new Date(c.intimatedAt).toLocaleDateString() : '',
+        `"${getClaimUiStatus(c).replace(/"/g, '""')}"`
+      ].join(',');
+    }).join('\n');
+    
+    const content = headers.join(',') + '\n' + rows;
+    const blob = new Blob(['\uFEFF' + content], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `claims_export_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success('Claims exported to Excel successfully');
+  };
+
+  const exportClaimsToPdf = () => {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      toast.error('Pop-up blocked. Please allow pop-ups to print PDF');
+      return;
+    }
+    
+    const rowsHtml = sortedClaims.map((c: any) => {
+      const notes = getClaimNotesData(c.notes);
+      const status = getClaimUiStatus(c);
+      return `
+        <tr style="border-bottom: 1px solid #e2e8f0; font-size: 11px;">
+          <td style="padding: 8px; font-weight: 600;">${c.claimNumber || 'N/A'}</td>
+          <td style="padding: 8px;">${((c.contact?.firstName || '') + ' ' + (c.contact?.lastName || '')).trim() || 'N/A'}</td>
+          <td style="padding: 8px;">${c.policy?.policyNumber || 'N/A'}</td>
+          <td style="padding: 8px;">${c.policy?.plan?.company?.name || 'N/A'}</td>
+          <td style="padding: 8px;">${c.claimType || 'N/A'}</td>
+          <td style="padding: 8px;">${notes.hospital || 'N/A'}</td>
+          <td style="padding: 8px; text-align: right;">₹${c.claimAmount?.toLocaleString() || 0}</td>
+          <td style="padding: 8px; text-align: center;">${c.intimatedAt ? new Date(c.intimatedAt).toLocaleDateString() : 'N/A'}</td>
+          <td style="padding: 8px; text-align: center;"><span style="padding: 2px 6px; border-radius: 4px; background: ${status === 'Approved' ? '#def7ec; color: #03543f;' : status === 'Pending' ? '#feecdc; color: #b43c08;' : '#fde8e8; color: #9b1c1c;'} font-size: 10px; font-weight: bold;">${status}</span></td>
+        </tr>
+      `;
+    }).join('');
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Claims Report</title>
+          <style>
+            body { font-family: system-ui, -apple-system, sans-serif; color: #1e293b; padding: 24px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th { background: #f8fafc; border-bottom: 2px solid #e2e8f0; padding: 10px 8px; text-align: left; font-size: 11px; font-weight: bold; text-transform: uppercase; color: #64748b; }
+            .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #3b82f6; padding-bottom: 12px; }
+            .title { font-size: 20px; font-weight: 800; color: #1e3a8a; }
+            .meta { font-size: 11px; color: #64748b; text-align: right; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div>
+              <div class="title">INSU-MITRA</div>
+              <div style="font-size: 12px; color: #475569; font-weight: 600;">Claims Export Report</div>
+            </div>
+            <div class="meta">
+              <div>Date: ${new Date().toLocaleString()}</div>
+              <div>Record Count: ${sortedClaims.length}</div>
+            </div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 10%;">Claim No</th>
+                <th style="width: 15%;">Client Name</th>
+                <th style="width: 15%;">Policy No</th>
+                <th style="width: 15%;">Company</th>
+                <th style="width: 10%;">Type</th>
+                <th style="width: 15%;">Hospital</th>
+                <th style="width: 10%; text-align: right;">Amount</th>
+                <th style="width: 10%; text-align: center;">Intimated At</th>
+                <th style="width: 10%; text-align: center;">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
+          </table>
+          <script>
+            window.onload = function() {
+              window.print();
+              setTimeout(() => { window.close(); }, 500);
+            };
+          </script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
+  // Calculations for Advanced Analytics Dashboard
+  const stats = useMemo(() => {
+    let totalClaimed = 0;
+    let totalSettled = 0;
+    const companyMap: Record<string, { count: number; claimed: number; settled: number }> = {};
+    const hospitalMap: Record<string, { count: number; claimed: number; settled: number }> = {};
+    const typeMap: Record<string, { count: number; claimed: number; settled: number }> = {};
+    const statusMap: Record<string, { count: number; claimed: number; settled: number }> = {
+      Pending: { count: 0, claimed: 0, settled: 0 },
+      'In Progress': { count: 0, claimed: 0, settled: 0 },
+      Approved: { count: 0, claimed: 0, settled: 0 },
+      Settled: { count: 0, claimed: 0, settled: 0 },
+      Rejected: { count: 0, claimed: 0, settled: 0 },
+    };
+
+    filteredClaims.forEach((c: any) => {
+      const notes = getClaimNotesData(c.notes);
+      const claimed = Number(c.claimAmount || 0);
+      const settled = Number(c.approvedAmount || 0);
+      const company = c.policy?.plan?.company?.name || 'Unknown Company';
+      const hospital = notes.hospital || 'Outpatient / Other';
+      const type = c.claimType || 'Other';
+      const statusStr = getClaimUiStatus(c);
+
+      totalClaimed += claimed;
+      totalSettled += settled;
+
+      // Company
+      if (!companyMap[company]) companyMap[company] = { count: 0, claimed: 0, settled: 0 };
+      companyMap[company].count++;
+      companyMap[company].claimed += claimed;
+      companyMap[company].settled += settled;
+
+      // Hospital
+      if (!hospitalMap[hospital]) hospitalMap[hospital] = { count: 0, claimed: 0, settled: 0 };
+      hospitalMap[hospital].count++;
+      hospitalMap[hospital].claimed += claimed;
+      hospitalMap[hospital].settled += settled;
+
+      // Type
+      if (!typeMap[type]) typeMap[type] = { count: 0, claimed: 0, settled: 0 };
+      typeMap[type].count++;
+      typeMap[type].claimed += claimed;
+      typeMap[type].settled += settled;
+
+      // Status
+      if (!statusMap[statusStr]) statusMap[statusStr] = { count: 0, claimed: 0, settled: 0 };
+      statusMap[statusStr].count++;
+      statusMap[statusStr].claimed += claimed;
+      statusMap[statusStr].settled += settled;
+    });
+
+    const pendingClaimed = totalClaimed - totalSettled;
+    const settlementRatio = totalClaimed > 0 ? (totalSettled / totalClaimed) * 100 : 0;
+    const avgClaim = filteredClaims.length > 0 ? totalClaimed / filteredClaims.length : 0;
+
+    return {
+      totalClaims: filteredClaims.length,
+      totalClaimed,
+      totalSettled,
+      pendingClaimed,
+      settlementRatio,
+      avgClaim,
+      companies: Object.entries(companyMap).map(([name, v]) => ({ name, ...v })),
+      hospitals: Object.entries(hospitalMap).map(([name, v]) => ({ name, ...v })),
+      types: Object.entries(typeMap).map(([name, v]) => ({ name, ...v })),
+      statuses: Object.entries(statusMap).map(([name, v]) => ({ name, ...v })),
+    };
+  }, [filteredClaims]);
+
+  // Group claims by Month for Visual Line Chart
+  const monthlyData = useMemo(() => {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const values = months.map(() => 0);
+    filteredClaims.forEach((c: any) => {
+      const m = new Date(c.intimatedAt).getMonth();
+      if (m >= 0 && m < 12) {
+        values[m] += Number(c.claimAmount || 0);
+      }
+    });
+    return { months, values };
+  }, [filteredClaims]);
+
+  // Export Analytics function
+  const exportAnalytics = () => {
+    let csvContent = "data:text/csv;charset=utf-8,";
+    csvContent += "Category,Name,Total Claims,Claimed Amount,Settled Amount\n";
+
+    // Summary
+    csvContent += `Summary,All Filtered Claims,${stats.totalClaims},${stats.totalClaimed},${stats.totalSettled}\n\n`;
+
+    // Company wise
+    csvContent += "Company-wise Breakdown,,,\n";
+    stats.companies.forEach(item => {
+      csvContent += `Company,${item.name},${item.count},${item.claimed},${item.settled}\n`;
+    });
+    csvContent += "\n";
+
+    // Hospital wise
+    csvContent += "Hospital-wise Breakdown,,,\n";
+    stats.hospitals.forEach(item => {
+      csvContent += `Hospital,${item.name},${item.count},${item.claimed},${item.settled}\n`;
+    });
+    csvContent += "\n";
+
+    // Type wise
+    csvContent += "Type Breakdown,,,\n";
+    stats.types.forEach(item => {
+      csvContent += `Claim Type,${item.name},${item.count},${item.claimed},${item.settled}\n`;
+    });
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `claims_analytics_report_${format(new Date(), 'yyyyMMdd')}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Contact picker state
+  const [contactSearch, setContactSearch] = useState('');
+  const [contactDropdown, setContactDropdown] = useState(false);
+  const [activeClaimTab, setActiveClaimTab] = useState('Claim Details');
+  const [selectedContact, setSelectedContact] = useState<{ id: string; firstName: string; lastName: string; phone: string } | null>(null);
+
+  // Policy picker
+  const [selectedPolicy, setSelectedPolicy] = useState<{ id: string; policyNumber: string; plan?: { name: string } } | null>(null);
+  const [policyDropdown, setPolicyDropdown] = useState(false);
+
+  // Selected document files
+  const [claimFormFile, setClaimFormFile] = useState<File | null>(null);
+  const [dischargeSummaryFile, setDischargeSummaryFile] = useState<File | null>(null);
+  const [otNotesFile, setOtNotesFile] = useState<File | null>(null);
+  const [hospitalBillFile, setHospitalBillFile] = useState<File | null>(null);
+  const [pharmacyBillFile, setPharmacyBillFile] = useState<File | null>(null);
+  const [investigationBillFile, setInvestigationBillFile] = useState<File | null>(null);
+  const [bloodBagsBillFile, setBloodBagsBillFile] = useState<File | null>(null);
+  const [labReportsFile, setLabReportsFile] = useState<File | null>(null);
+  const [billsFile, setBillsFile] = useState<File | null>(null);
+  const [otherImpDocsFile, setOtherImpDocsFile] = useState<File | null>(null);
+  const [queryLetterFile, setQueryLetterFile] = useState<File | null>(null);
+  const [replyDocsFile, setReplyDocsFile] = useState<File | null>(null);
+  const [settlementLetterFile, setSettlementLetterFile] = useState<File | null>(null);
+  const [rejectionLetterFile, setRejectionLetterFile] = useState<File | null>(null);
+
+  // Doc upload sub-modal state (Add New Claim — File Uploads tab)
+  const [docUploadOpen, setDocUploadOpen] = useState(false);
+  const [docUploadFields, setDocUploadFields] = useState<{ type: string; title: string; description: string; file: File | null }>({
+    type: 'CLAIM_FORM', title: '', description: '', file: null,
+  });
+  const [newDocsList, setNewDocsList] = useState<{ type: string; title: string; description: string; file: File }[]>([]);
+
+  const CLAIM_DOC_TYPES = [
+    { value: 'CLAIM_FORM',              label: 'Claim Form' },
+    { value: 'DISCHARGE_SUMMARY',       label: 'Discharge Summary' },
+    { value: 'OT_NOTES_IPD_PAPERS',     label: 'OT Notes / IPD Papers' },
+    { value: 'HOSPITAL_BILL',           label: 'Hospital Bill / Breakup Bill' },
+    { value: 'PHARMACY_MEDICINES_BILL', label: 'Pharmacy / Medicines Bill' },
+    { value: 'INVESTIGATION_LAB_BILL',  label: 'Investigation / Lab Bill' },
+    { value: 'BLOOD_ANESTHESIA_BILL',   label: 'Blood / Anesthesia Bill' },
+    { value: 'IMPORTANT_LAB_REPORTS',   label: 'Important Lab Reports' },
+    { value: 'IMP_BILLS',               label: 'Imp Bills' },
+    { value: 'OTHER_IMP_DOCS',          label: 'Other Imp Documents' },
+    { value: 'QUERY_LETTER',            label: 'Claim Query Letter' },
+    { value: 'REPLY_DOCS',              label: 'Reply Documents' },
+    { value: 'SETTLEMENT_LETTER',       label: 'Claim Settlement Letter' },
+    { value: 'REJECTION_LETTER',        label: 'Rejection Letter' },
+    { value: 'OTHER',                   label: 'Other' },
+  ];
+
+  const extractNomineesFromPolicy = (p: any, contactOverride?: any) => {
+    const activeContact = contactOverride || selectedContact || contactDetail?.data;
+    const extracted = extractConnectedPersonsAndNominees(p, activeContact);
+    return extracted.map(item => ({
+      name: item.name,
+      relationship: item.relationship,
+      phone: item.phone,
+      dob: item.dob,
+      percentage: item.percentage || (extracted.length === 1 ? '100' : ''),
+      comment: item.comment || '',
+    }));
+  };
+
+  const { data: contactResults } = useQuery({
+    queryKey: ['contact-search-claim', contactSearch],
+    queryFn: () => contactsService.list({ search: contactSearch || undefined, limit: 8 }),
+    enabled: contactDropdown,
+  });
+
+  const { data: contactDetail } = useQuery({
+    queryKey: ['contact-detail-claims-picker', selectedContact?.id],
+    queryFn: () => contactsService.get(selectedContact!.id),
+    enabled: !!selectedContact,
+  });
+
+  const availableConnectedPersonsInCreate = useMemo(() => {
+    return extractConnectedPersonsAndNominees(selectedPolicy, selectedContact || contactDetail?.data);
+  }, [selectedPolicy, selectedContact, contactDetail]);
+
+  // Auto-populate newNominees if empty when connected persons become available
+  useEffect(() => {
+    if (availableConnectedPersonsInCreate.length === 0) return;
+    setNewNominees(prev => {
+      const hasValid = prev.some(n => (n?.name || '').trim() !== '');
+      if (hasValid) return prev;
+      return availableConnectedPersonsInCreate.map(p => ({
+        name: p.name,
+        relationship: p.relationship,
+        phone: p.phone,
+        dob: p.dob,
+        percentage: p.percentage || (availableConnectedPersonsInCreate.length === 1 ? '100' : ''),
+        comment: p.comment || '',
+      }));
+    });
+  }, [availableConnectedPersonsInCreate]);
+
+  const { data: directContactPoliciesRes } = useQuery({
+    queryKey: ['direct-contact-policies-claims-picker', selectedContact?.id, selectedContact?.phone],
+    queryFn: async () => {
+      if (!selectedContact?.id) return { data: [] };
+      try {
+        const extractItems = (r: any): any[] => {
+          if (!r) return [];
+          if (Array.isArray(r.data?.items)) return r.data.items;
+          if (Array.isArray(r.data?.data)) return r.data.data;
+          if (Array.isArray(r.data)) return r.data;
+          if (Array.isArray(r.items)) return r.items;
+          if (Array.isArray(r)) return r;
+          return [];
+        };
+
+        const res = await policiesService.list({ contactId: selectedContact.id, limit: 100 });
+        let items = extractItems(res);
+        if (items.length > 0) return { data: items };
+
+        // Fallback: search by phone if contactId query returned 0 items
+        if (selectedContact.phone) {
+          const phoneRes = await policiesService.list({ search: selectedContact.phone, limit: 100 });
+          const phoneItems = extractItems(phoneRes);
+          if (phoneItems.length > 0) return { data: phoneItems };
+        }
+
+        // Fallback: search by contactId string if different
+        const customContactId = (selectedContact as any)?.contactId;
+        if (customContactId && customContactId !== selectedContact.id) {
+          const codeRes = await policiesService.list({ search: customContactId, limit: 100 });
+          const codeItems = extractItems(codeRes);
+          if (codeItems.length > 0) return { data: codeItems };
+        }
+
+        return { data: items };
+      } catch {
+        return { data: [] };
+      }
+    },
+  });
+
+  const { data: allTenantPoliciesRes } = usePolicies({ limit: 1000 });
+
+  const { data: compulsoryRulesRes } = useQuery({
+    queryKey: ['compulsory-rules'],
+    queryFn: () => insuranceService.getCompulsoryRules(),
+  });
+  const compulsoryRules = useMemo(() => compulsoryRulesRes?.data ?? [], [compulsoryRulesRes]);
+  const isFieldRequired = (key: string, defaultRequired: boolean) => {
+    return isFieldRequiredHelper(compulsoryRules, 'Claim', key, defaultRequired);
+  };
+
+  useEffect(() => {
+    const onCompRulesUpdated = () => {
+      qc.invalidateQueries({ queryKey: ['compulsory-rules'] });
+    };
+    window.addEventListener(COMPULSORY_RULES_UPDATED_EVENT, onCompRulesUpdated);
+    window.addEventListener('storage', onCompRulesUpdated);
+    return () => {
+      window.removeEventListener(COMPULSORY_RULES_UPDATED_EVENT, onCompRulesUpdated);
+      window.removeEventListener('storage', onCompRulesUpdated);
+    };
+  }, [qc]);
+
+  const activeContactPolicies = useMemo(() => {
+    if (!selectedContact?.id) return [];
+
+    const contactId = selectedContact.id;
+    const contactCode = (selectedContact as any)?.contactId;
+    const rawPhone = selectedContact.phone ? String(selectedContact.phone).replace(/\D/g, '') : '';
+
+    const matchesContact = (p: any): boolean => {
+      if (!p) return false;
+      const pContactId = p.contactId || p.contact?.id;
+      if (pContactId && (pContactId === contactId || (contactCode && pContactId === contactCode))) {
+        return true;
+      }
+      if (rawPhone && p.contact?.phone) {
+        const pPhone = String(p.contact.phone).replace(/\D/g, '');
+        if (pPhone && (pPhone === rawPhone || pPhone.endsWith(rawPhone) || rawPhone.endsWith(pPhone))) {
+          return true;
+        }
+      }
+      if (selectedContact.firstName && p.contact?.firstName) {
+        const pFirst = String(p.contact.firstName).toLowerCase().trim();
+        const sFirst = String(selectedContact.firstName).toLowerCase().trim();
+        const pLast = String(p.contact.lastName || '').toLowerCase().trim();
+        const sLast = String(selectedContact.lastName || '').toLowerCase().trim();
+        if (pFirst === sFirst && (!sLast || pLast === sLast)) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    // 1. From preloaded tenant policies (instant match)
+    const allList = allTenantPoliciesRes?.data?.items ?? 
+                    (Array.isArray(allTenantPoliciesRes?.data) ? allTenantPoliciesRes?.data : null) ?? 
+                    (Array.isArray(allTenantPoliciesRes?.data?.data) ? allTenantPoliciesRes.data.data : null) ?? 
+                    (Array.isArray(allTenantPoliciesRes) ? allTenantPoliciesRes : null) ?? [];
+    const fromAll = allList.filter(matchesContact);
+
+    // 2. Direct contact policies query
+    const directList = directContactPoliciesRes?.data ?? [];
+
+    // 3. Contact detail nested policies
+    const detailList = (Array.isArray(contactDetail?.data?.policies) ? contactDetail?.data?.policies : null) ?? 
+                       (Array.isArray(contactDetail?.policies) ? contactDetail?.policies : null) ?? [];
+
+    // 4. Directly on selectedContact
+    const selectedList = (Array.isArray((selectedContact as any)?.policies) ? (selectedContact as any)?.policies : null) ?? [];
+
+    // 5. Related family contacts policies
+    const relPolicies: any[] = [];
+    (contactDetail?.data?.relationships || []).forEach((r: any) => {
+      if (Array.isArray(r.relatedContact?.policies)) {
+        relPolicies.push(...r.relatedContact.policies);
+      }
+    });
+
+    const map = new Map<string, any>();
+    // Directly linked policies from detail, direct query, contact object, and family relations
+    [...directList, ...detailList, ...selectedList, ...relPolicies].forEach((p: any) => {
+      if (p && (p.id || p.policyNumber || p.policyNo)) {
+        const key = String(p.id || p.policyNumber || p.policyNo);
+        if (!map.has(key)) {
+          map.set(key, p);
+        }
+      }
+    });
+
+    fromAll.forEach((p: any) => {
+      if (p && (p.id || p.policyNumber || p.policyNo)) {
+        const key = String(p.id || p.policyNumber || p.policyNo);
+        if (!map.has(key)) {
+          map.set(key, p);
+        }
+      }
+    });
+
+    return Array.from(map.values());
+  }, [allTenantPoliciesRes, contactDetail, directContactPoliciesRes, selectedContact]);
+  const activeSchema = useMemo(() => {
+    return z.object({
+      policyId: isFieldRequired('policyId', true) ? z.string().min(1, 'Please select a Policy from Claim Details') : z.string().optional().or(z.literal('')),
+      contactId: isFieldRequired('contactId', true) ? z.string().min(1, 'Please select a Customer / Proposer from Claim Details') : z.string().optional().or(z.literal('')),
+      claimNumber: isFieldRequired('claimNumber', true) ? z.string().min(1, 'Claim Number is required in Claim Details') : z.string().optional().or(z.literal('')),
+      claimType: isFieldRequired('claimType', true) ? z.string().min(1, 'Please select a Claim Type') : z.string().optional().or(z.literal('')),
+      claimAmount: isFieldRequired('claimAmount', true) ? z.coerce.number().min(0, 'Enter valid claim amount') : z.coerce.number().optional().or(z.literal('')),
+      intimatedAt: isFieldRequired('intimatedAt', true)
+        ? z.string().min(1, 'Intimation Date is required').refine(value => !value || value <= getTodayDateInputValue(), 'Intimation Date cannot be in the future')
+        : z.string().optional().or(z.literal('')),
+      assignedEmployeeId: isFieldRequired('assignedEmployeeId', false) ? z.string().min(1, 'Required') : z.string().optional().or(z.literal('')),
+      diagnosis: isFieldRequired('diagnosis', false) ? z.string().min(1, 'Diagnosis is required') : z.string().optional(),
+      hospital: isFieldRequired('hospital', false) ? z.string().min(1, 'Hospital is required') : z.string().optional(),
+      hospitalAddress: isFieldRequired('hospitalAddress', false) ? z.string().min(1, 'Hospital Address is required') : z.string().optional(),
+      patientName: isFieldRequired('patientName', false) ? z.string().min(1, 'Patient Name is required') : z.string().optional(),
+      admissionAt: isFieldRequired('admissionAt', false) ? z.string().min(1, 'Admission Date is required') : z.string().optional(),
+      dischargeAt: isFieldRequired('dischargeAt', false) ? z.string().min(1, 'Discharge Date is required') : z.string().optional(),
+      amtHospital: isFieldRequired('amtHospital', false) ? z.coerce.number().min(1, 'Required') : z.coerce.number().default(0),
+      amtMedicine: isFieldRequired('amtMedicine', false) ? z.coerce.number().min(1, 'Required') : z.coerce.number().default(0),
+      amtLab: isFieldRequired('amtLab', false) ? z.coerce.number().min(1, 'Required') : z.coerce.number().default(0),
+      amtPreHosp: isFieldRequired('amtPreHosp', false) ? z.coerce.number().min(1, 'Required') : z.coerce.number().default(0),
+      amtPostHosp: isFieldRequired('amtPostHosp', false) ? z.coerce.number().min(1, 'Required') : z.coerce.number().default(0),
+      amtOthers: isFieldRequired('amtOthers', false) ? z.coerce.number().min(1, 'Required') : z.coerce.number().default(0),
+      notes: isFieldRequired('notes', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      approvedAmount: isFieldRequired('approvedAmount', false) ? z.coerce.number().min(1, 'Required') : z.coerce.number().optional().default(0),
+      deductionsNotes: isFieldRequired('deductionsNotes', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      subClaimNo: isFieldRequired('subClaimNo', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      uiClaimStatus: isFieldRequired('uiClaimStatus', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      comment: isFieldRequired('comment', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      insuranceCompanyCategory: isFieldRequired('insuranceCompanyCategory', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      insuranceCompany: isFieldRequired('insuranceCompany', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      insuranceProductName: isFieldRequired('insuranceProductName', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      agentName: isFieldRequired('agentName', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      deathAdmissionDate: isFieldRequired('deathAdmissionDate', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      causeOfDeath: isFieldRequired('causeOfDeath', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      dateOfOccurance: isFieldRequired('dateOfOccurance', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      dateOfDeath: isFieldRequired('dateOfDeath', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      wasInComa: isFieldRequired('wasInComa', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      deathSumInsured: isFieldRequired('deathSumInsured', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      deathTotalClaimedAmount: isFieldRequired('deathTotalClaimedAmount', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      deathComment: isFieldRequired('deathComment', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      hospitalName: isFieldRequired('hospitalName', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      hospitalState: isFieldRequired('hospitalState', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      hospitalCity: isFieldRequired('hospitalCity', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      hospitalPincode: isFieldRequired('hospitalPincode', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      hospitalContactNo: isFieldRequired('hospitalContactNo', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      hospitalEmail: isFieldRequired('hospitalEmail', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      hospitalRating: isFieldRequired('hospitalRating', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      hospitalType: isFieldRequired('hospitalType', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      claimsPerson1Name: isFieldRequired('claimsPerson1Name', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      claimsPerson1Contact: isFieldRequired('claimsPerson1Contact', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      claimsPerson2Name: isFieldRequired('claimsPerson2Name', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      claimsPerson2Contact: isFieldRequired('claimsPerson2Contact', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      hospitalComment: isFieldRequired('hospitalComment', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      diagnosisSimple: isFieldRequired('diagnosisSimple', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      roomCategory: isFieldRequired('roomCategory', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      typeOfManagement: isFieldRequired('typeOfManagement', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      typeOfAdmission: isFieldRequired('typeOfAdmission', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      isMedicoLegalCase: isFieldRequired('isMedicoLegalCase', false) ? z.string().min(1, 'Required') : z.string().optional(),
+      isFirLegalDocAvailable: isFieldRequired('isFirLegalDocAvailable', false) ? z.string().min(1, 'Required') : z.string().optional(),
+    });
+  }, [compulsoryRules]);
+
+  const { register, handleSubmit, reset, setValue, watch } = useForm<Form>({
+    resolver: zodResolver(activeSchema),
+    defaultValues: { claimType: 'Cashless', intimatedAt: getTodayDateInputValue() },
+  });
+
+  useEffect(() => {
+    if (selectedContact && activeContactPolicies.length > 0 && !selectedPolicy) {
+      const p = activeContactPolicies[0];
+      setSelectedPolicy(p);
+      setValue('policyId', p.id, { shouldValidate: true });
+      setValue('insuranceCompany', p.plan?.company?.name || p.companyName || '');
+      setValue('insuranceCompanyCategory', p.plan?.company?.category || p.category || 'Health');
+      setValue('insuranceProductName', p.plan?.name || p.productName || '');
+      setValue('agentName', p.agent?.firstName ? `${p.agent.firstName} ${p.agent.lastName}` : (p.agentName || ''));
+      const sa = p.sumAssured != null ? p.sumAssured : (p.sumInsured != null ? p.sumInsured : (p.plan?.sumInsured != null ? p.plan.sumInsured : ''));
+      setValue('deathSumInsured', sa !== '' ? String(sa) : '');
+      const fetchedNoms = extractNomineesFromPolicy(p);
+      setNewNominees(fetchedNoms);
+      if (fetchedNoms.length > 0) {
+        setCollapsedSections(prev => ({ ...prev, newNominee: false }));
+      }
+    }
+  }, [selectedContact, activeContactPolicies, selectedPolicy, setValue]);
+
+  // Watch calculations for create form
+  const amtHospital = watch('amtHospital');
+  const amtMedicine = watch('amtMedicine');
+  const amtLab = watch('amtLab');
+  const amtPreHosp = watch('amtPreHosp');
+  const amtPostHosp = watch('amtPostHosp');
+  const amtOthers = watch('amtOthers');
+  const amtAnesthesia = watch('amtAnesthesia');
+
+  const amtFinalBill = watch('amtFinalBill');
+  const amtNonPayables = watch('amtNonPayables');
+  const amtCopay = watch('amtCopay');
+  const amtDeductible = watch('amtDeductible');
+  const amtBalanceEMIs = watch('amtBalanceEMIs');
+  const amtNcdRecovery = watch('amtNcdRecovery');
+  const amtExcessSumInsured = watch('amtExcessSumInsured');
+  const amtExcessAilmentLimit = watch('amtExcessAilmentLimit');
+  const amtHigherRoomRent = watch('amtHigherRoomRent');
+  const amtReasonableCost = watch('amtReasonableCost');
+  const amtOtherRecoveries = watch('amtOtherRecoveries');
+  const amtExcessAgreedPackage = watch('amtExcessAgreedPackage');
+  const amtNetworkDiscount = watch('amtNetworkDiscount');
+
+  const watchClaimNumber = watch('claimNumber');
+  const watchPolicyId = watch('policyId');
+  const watchAdmissionAt = watch('admissionAt');
+  const watchDischargeAt = watch('dischargeAt');
+  const watchIntimatedAt = watch('intimatedAt');
+  const watchClaimType = watch('claimType');
+  const watchHospitalCity = watch('hospitalCity');
+  const watchHospitalName = watch('hospitalName');
+  const watchHospitalType = watch('hospitalType');
+  const [isCustomHospitalType, setIsCustomHospitalType] = useState(false);
+  const [customHospitalTypeText, setCustomHospitalTypeText] = useState('');
+
+  useEffect(() => {
+    const tot = Number(amtHospital || 0) + Number(amtMedicine || 0) + Number(amtLab || 0) + Number(amtPreHosp || 0) + Number(amtPostHosp || 0) + Number(amtOthers || 0) + Number(amtAnesthesia || 0);
+    setValue('claimAmount', tot);
+    setValue('amtFinalBill', tot);
+  }, [amtHospital, amtMedicine, amtLab, amtPreHosp, amtPostHosp, amtOthers, amtAnesthesia, setValue]);
+
+  useEffect(() => {
+    const totalPatientToPay = Number(amtNonPayables || 0) + Number(amtCopay || 0) + Number(amtDeductible || 0) + Number(amtBalanceEMIs || 0) + Number(amtNcdRecovery || 0) + Number(amtExcessSumInsured || 0) + Number(amtExcessAilmentLimit || 0) + Number(amtHigherRoomRent || 0) + Number(amtReasonableCost || 0) + Number(amtOtherRecoveries || 0);
+    setValue('amtPatientToPay', totalPatientToPay);
+    const totalNotCollected = Number(amtExcessAgreedPackage || 0) + Number(amtNetworkDiscount || 0);
+    setValue('amtNotCollected', totalNotCollected);
+    if (Number(amtFinalBill || 0) > 0) {
+      const payable = Number(amtFinalBill || 0) - totalPatientToPay - totalNotCollected;
+      setValue('amtPayableToInsured', payable);
+    }
+  }, [amtFinalBill, amtNonPayables, amtCopay, amtDeductible, amtBalanceEMIs, amtNcdRecovery, amtExcessSumInsured, amtExcessAilmentLimit, amtHigherRoomRent, amtReasonableCost, amtOtherRecoveries, amtExcessAgreedPackage, amtNetworkDiscount]);
+
+  // Auto-fill from existing claim entries with same claim number
+  useEffect(() => {
+    if (watchClaimNumber && rawClaims.length > 0) {
+      const match = rawClaims.find((c: any) => c.claimNumber?.trim().toLowerCase() === watchClaimNumber.trim().toLowerCase());
+      if (match) {
+        const extra = getClaimNotesData(match.notes);
+        if (extra.patientName) setValue('patientName', extra.patientName);
+        if (extra.diagnosis) setValue('diagnosis', extra.diagnosis);
+        if (extra.hospital) setValue('hospital', extra.hospital);
+        if (extra.hospitalAddress) setValue('hospitalAddress', extra.hospitalAddress);
+        if (extra.admissionAt) setValue('admissionAt', formatDateForInput(extra.admissionAt));
+        if (extra.dischargeAt) setValue('dischargeAt', formatDateForInput(extra.dischargeAt));
+        if (match.intimatedAt) setValue('intimatedAt', formatDateForInput(match.intimatedAt));
+      }
+    }
+  }, [watchClaimNumber, rawClaims, setValue]);
+
+
+  // Auto-fill patient name when policy is selected
+  useEffect(() => {
+    if (watchPolicyId && selectedContact) {
+      setValue('patientName', `${selectedContact.firstName} ${selectedContact.lastName}`);
+    }
+  }, [watchPolicyId, selectedContact, setValue]);
+
+  const closeModal = () => {
+    setModalOpen(false);
+    reset();
+    setSelectedContact(null); setContactSearch('');
+    setSelectedPolicy(null);
+    setClaimFormFile(null);
+    setDischargeSummaryFile(null);
+    setOtNotesFile(null);
+    setHospitalBillFile(null);
+    setPharmacyBillFile(null);
+    setInvestigationBillFile(null);
+    setBloodBagsBillFile(null);
+    setLabReportsFile(null);
+    setBillsFile(null);
+    setOtherImpDocsFile(null);
+    setQueryLetterFile(null);
+    setReplyDocsFile(null);
+    setSettlementLetterFile(null);
+    setRejectionLetterFile(null);
+    setNewDocsList([]);
+    setIsCustomHospitalType(false);
+    setCustomHospitalTypeText('');
+  };
+
+  const onInvalid = (errors: any) => {
+    console.warn('Add Claim validation errors:', errors);
+    const errorKeys = Object.keys(errors);
+    if (errorKeys.length === 0) return;
+
+    const proposerFields = ['contactId', 'policyId', 'patientName', 'insuranceCompanyCategory', 'insuranceCompany', 'insuranceProductName', 'agentName', 'assignedEmployeeId'];
+    const claimBasicFields = ['claimType', 'claimNumber', 'subClaimNo', 'uiClaimStatus', 'intimatedAt', 'diagnosis', 'comment'];
+    const deathFields = ['deathAdmissionDate', 'causeOfDeath', 'dateOfOccurance', 'dateOfDeath', 'wasInComa', 'deathSumInsured', 'deathTotalClaimedAmount', 'deathComment'];
+    const hospitalDetailsFields = [
+      'hospitalName', 'hospitalState', 'hospitalCity', 'hospitalPincode', 'hospitalContactNo',
+      'hospitalRating', 'hospitalType', 'claimsPerson1Name', 'claimsPerson1Contact', 'claimsPerson2Name',
+      'claimsPerson2Contact', 'hospitalComment', 'diagnosisSimple', 'roomCategory', 'typeOfManagement',
+      'typeOfAdmission', 'isMedicoLegalCase', 'hospitalisationComment'
+    ];
+    const approvalFields = [
+      'amtFinalBill', 'amtNonPayables', 'amtCopay', 'amtDeductible', 'amtBalanceEMIs', 'amtNcdRecovery',
+      'amtExcessSumInsured', 'amtExcessAilmentLimit', 'amtHigherRoomRent', 'amtReasonableCost', 'amtOtherRecoveries',
+      'amtPatientToPay', 'amtExcessAgreedPackage', 'amtNetworkDiscount', 'amtNotCollected', 'amtPayableToInsured', 'approvalComment'
+    ];
+
+    const firstErrorKey = errorKeys[0];
+    const errObj = errors[firstErrorKey];
+    let firstErrorMessage = errObj?.message;
+    if (!firstErrorMessage || firstErrorMessage === 'Required') {
+      if (firstErrorKey === 'contactId') firstErrorMessage = 'Please select a Customer / Proposer from Claim Details';
+      else if (firstErrorKey === 'policyId') firstErrorMessage = 'Please select a Policy Number from Claim Details';
+      else if (firstErrorKey === 'claimNumber') firstErrorMessage = 'Claim Number is required';
+      else if (firstErrorKey === 'claimType') firstErrorMessage = 'Please select a Claim Type';
+      else if (firstErrorKey === 'intimatedAt') firstErrorMessage = 'Intimation Date is required';
+      else firstErrorMessage = `Please fill required field: ${firstErrorKey}`;
+    }
+
+    if (proposerFields.includes(firstErrorKey)) {
+      setActiveClaimTab('Claim Details');
+      setCollapsedSections(prev => ({ ...prev, newProposer: false }));
+    } else if (claimBasicFields.includes(firstErrorKey)) {
+      setActiveClaimTab('Claim Details');
+      setCollapsedSections(prev => ({ ...prev, newClaim: false }));
+    } else if (deathFields.includes(firstErrorKey)) {
+      setActiveClaimTab('Claim Details');
+      setCollapsedSections(prev => ({ ...prev, newDeath: false }));
+    } else if (hospitalDetailsFields.includes(firstErrorKey)) {
+      setActiveClaimTab('Hospital Details');
+      setCollapsedSections(prev => ({ ...prev, newHospital: false }));
+    } else if (approvalFields.includes(firstErrorKey)) {
+      setActiveClaimTab('Claim Approval Details');
+    }
+
+    toast.error(firstErrorMessage);
+  };
+
+  const onSubmit = async (body: Form) => {
+    try {
+      const invalidNom = newNominees.find(n => n.phone && !/^\d{10}$/.test(n.phone.replace(/\D/g, '')));
+      if (invalidNom) {
+        setActiveClaimTab('Claim Details');
+        toast.error(`Nominee ${invalidNom.name || ''} contact number must be exactly 10 digits`);
+        return;
+      }
+      const invalidDoc = newDoctors.find(d => d.contactNo && !/^\d{10}$/.test(d.contactNo.replace(/\D/g, '')));
+      if (invalidDoc) {
+        setActiveClaimTab('Hospital Details');
+        toast.error(`Doctor ${invalidDoc.name || ''} contact number must be exactly 10 digits`);
+        return;
+      }
+
+      if (body.admissionAt && body.dischargeAt && formatDateForInput(body.admissionAt) && formatDateForInput(body.dischargeAt)) {
+        if (formatDateForInput(body.dischargeAt) < formatDateForInput(body.admissionAt)) {
+          setActiveClaimTab('Hospital Details');
+          toast.error('Date of Discharge cannot be earlier than Date of Admission');
+          return;
+        }
+      }
+
+      const { diagnosis, hospital, hospitalAddress, patientName, deductionsNotes, admissionAt, dischargeAt, notes, assignedEmployeeId, amtHospital, amtMedicine, amtLab, amtPreHosp, amtPostHosp, amtOthers, subClaimNo, uiClaimStatus, comment, insuranceCompanyCategory, insuranceCompany, insuranceProductName, agentName, deathAdmissionDate, causeOfDeath, dateOfOccurance, dateOfDeath, wasInComa, deathSumInsured, deathTotalClaimedAmount, deathComment, hospitalName, hospitalState, hospitalCity, hospitalPincode, hospitalContactNo, hospitalEmail, hospitalRating, hospitalType, claimsPerson1Name, claimsPerson1Contact, claimsPerson2Name, claimsPerson2Contact, hospitalComment, diagnosisSimple, roomCategory, typeOfManagement, typeOfAdmission, isMedicoLegalCase, isFirLegalDocAvailable, hospitalisationComment, amtAnesthesia, billingComment, amtFinalBill, amtNonPayables, amtCopay, amtDeductible, amtBalanceEMIs, amtNcdRecovery, amtExcessSumInsured, amtExcessAilmentLimit, amtHigherRoomRent, amtReasonableCost, amtOtherRecoveries, amtPatientToPay, amtExcessAgreedPackage, amtNetworkDiscount, amtNotCollected, amtPayableToInsured, approvalComment, ...rest } = body;
+      const notesJson = serializeNotes({
+        diagnosis, hospital, hospitalAddress, patientName, deductionsNotes, admissionAt, dischargeAt, notes,
+        amtHospital, amtMedicine, amtLab, amtPreHosp, amtPostHosp, amtOthers,
+        subClaimNo, uiClaimStatus, comment, insuranceCompanyCategory, insuranceCompany, insuranceProductName, agentName,
+        deathAdmissionDate, causeOfDeath, dateOfOccurance, dateOfDeath, wasInComa, deathSumInsured, deathTotalClaimedAmount, deathComment,
+        nominees: JSON.stringify(newNominees),
+        hospitalName, hospitalState, hospitalCity, hospitalPincode, hospitalContactNo, hospitalEmail, hospitalRating, hospitalType, claimsPerson1Name, claimsPerson1Contact, claimsPerson2Name, claimsPerson2Contact, hospitalComment,
+        hospitalDoctors: JSON.stringify(newDoctors),
+        diagnosisSimple, roomCategory, typeOfManagement, typeOfAdmission, isMedicoLegalCase, isFirLegalDocAvailable, hospitalisationComment, amtAnesthesia, billingComment,
+        amtFinalBill, amtNonPayables, amtCopay, amtDeductible, amtBalanceEMIs, amtNcdRecovery, amtExcessSumInsured, amtExcessAilmentLimit, amtHigherRoomRent, amtReasonableCost, amtOtherRecoveries, amtPatientToPay, amtExcessAgreedPackage, amtNetworkDiscount, amtNotCollected, amtPayableToInsured, approvalComment
+      });
+      const res = await createClaim.mutateAsync({
+        ...rest,
+        status: getBackendStatusFromUi(uiClaimStatus),
+        assignedEmployeeId: assignedEmployeeId || undefined,
+        notes: notesJson,
+      });
+      const claimId = res.data?.id;
+
+      if (claimId) {
+        const uploadPromises: Promise<any>[] = [];
+        if (claimFormFile) uploadPromises.push(documentsService.upload(claimFormFile, { claimId, contactId: rest.contactId, policyId: rest.policyId, type: 'CLAIM_FORM', title: 'Claim Form' }).catch(err => console.error(err)));
+        if (dischargeSummaryFile) uploadPromises.push(documentsService.upload(dischargeSummaryFile, { claimId, contactId: rest.contactId, policyId: rest.policyId, type: 'DISCHARGE_SUMMARY', title: 'Discharge Summary' }).catch(err => console.error(err)));
+        if (otNotesFile) uploadPromises.push(documentsService.upload(otNotesFile, { claimId, contactId: rest.contactId, policyId: rest.policyId, type: 'OT_NOTES_IPD_PAPERS', title: 'OT Notes / IPD Papers' }).catch(err => console.error(err)));
+        if (hospitalBillFile) uploadPromises.push(documentsService.upload(hospitalBillFile, { claimId, contactId: rest.contactId, policyId: rest.policyId, type: 'HOSPITAL_BILL', title: 'Hospital Bill' }).catch(err => console.error(err)));
+        if (pharmacyBillFile) uploadPromises.push(documentsService.upload(pharmacyBillFile, { claimId, contactId: rest.contactId, policyId: rest.policyId, type: 'PHARMACY_MEDICINES_BILL', title: 'Pharmacy / Medicines Bill' }).catch(err => console.error(err)));
+        if (investigationBillFile) uploadPromises.push(documentsService.upload(investigationBillFile, { claimId, contactId: rest.contactId, policyId: rest.policyId, type: 'INVESTIGATION_LAB_BILL', title: 'Investigation / Lab Bill' }).catch(err => console.error(err)));
+        if (bloodBagsBillFile) uploadPromises.push(documentsService.upload(bloodBagsBillFile, { claimId, contactId: rest.contactId, policyId: rest.policyId, type: 'BLOOD_ANESTHESIA_BILL', title: 'Blood / Anesthesia Bill' }).catch(err => console.error(err)));
+        if (labReportsFile) uploadPromises.push(documentsService.upload(labReportsFile, { claimId, contactId: rest.contactId, policyId: rest.policyId, type: 'IMPORTANT_LAB_REPORTS', title: 'Important Lab Reports' }).catch(err => console.error(err)));
+        if (billsFile) uploadPromises.push(documentsService.upload(billsFile, { claimId, contactId: rest.contactId, policyId: rest.policyId, type: 'IMP_BILLS', title: 'Imp Bills' }).catch(err => console.error(err)));
+        if (otherImpDocsFile) uploadPromises.push(documentsService.upload(otherImpDocsFile, { claimId, contactId: rest.contactId, policyId: rest.policyId, type: 'OTHER_IMP_DOCUMENTS', title: 'Other Imp Documents' }).catch(err => console.error(err)));
+        if (queryLetterFile) uploadPromises.push(documentsService.upload(queryLetterFile, { claimId, contactId: rest.contactId, policyId: rest.policyId, type: 'CLAIM_QUERY_LETTER', title: 'Claim Query Letter' }).catch(err => console.error(err)));
+        if (replyDocsFile) uploadPromises.push(documentsService.upload(replyDocsFile, { claimId, contactId: rest.contactId, policyId: rest.policyId, type: 'REPLY_DOCUMENTS', title: 'Reply Documents' }).catch(err => console.error(err)));
+        if (settlementLetterFile) uploadPromises.push(documentsService.upload(settlementLetterFile, { claimId, contactId: rest.contactId, policyId: rest.policyId, type: 'CLAIM_SETTLEMENT_LETTER', title: 'Claim Settlement Letter' }).catch(err => console.error(err)));
+        if (rejectionLetterFile) uploadPromises.push(documentsService.upload(rejectionLetterFile, { claimId, contactId: rest.contactId, policyId: rest.policyId, type: 'REJECTION_LETTER', title: 'Rejection Letter' }).catch(err => console.error(err)));
+        if (uploadPromises.length > 0) {
+          await Promise.all(uploadPromises);
+        }
+      }
+
+      qc.invalidateQueries({ queryKey: ['claims'] });
+      toast.success('Claim created successfully');
+      if (claimId) {
+        setModalOpen(false);
+        try {
+          const fetched = await claimsService.get(claimId);
+          setEditTarget(fetched?.data || fetched || res.data);
+        } catch {
+          setEditTarget(res.data);
+        }
+      }
+    } catch (e: any) {
+      console.error(e);
+      toast.error(e?.response?.data?.message || 'Failed to save claim');
+    }
+  };
+
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImportFormatOpen(false);
+    const toastId = toast.loading('Importing claims...');
+    try {
+      let fileToUpload = file;
+      if (/\.(xlsx|xls)$/i.test(file.name)) {
+        const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+        if (!firstSheet) throw new Error('The Excel file does not contain a worksheet');
+        const csvContent = XLSX.utils.sheet_to_csv(firstSheet);
+        fileToUpload = new File([csvContent], file.name.replace(/\.[^/.]+$/, '.csv'), { type: 'text/csv' });
+      }
+      const res = await claimsService.importCsv(fileToUpload);
+      toast.success(res.message || `Successfully imported claims!`, { id: toastId });
+      qc.invalidateQueries({ queryKey: ['claims'] });
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || err?.message || 'Failed to import claims', { id: toastId });
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+
+
+  const COLS: Column<Claim>[] = [
+    {
+      key: 'claimNumber',
+      label: 'Claim ID',
+      render: r => <span className="font-bold text-gray-900">{r.claimNumber}</span>
+    },
+    {
+      key: 'contact',
+      label: 'Client & Policy',
+      render: r => {
+        const notes = getClaimNotesData(r.notes);
+        const sa = (r.policy as any)?.sumAssured != null
+          ? (r.policy as any).sumAssured
+          : ((r.policy as any)?.sumInsured != null
+            ? (r.policy as any).sumInsured
+            : (notes.deathSumInsured || null));
+        return (
+          <div className="flex flex-col">
+            <span className="font-bold text-gray-900">{r.contact ? `${r.contact.firstName} ${r.contact.lastName}` : '—'}</span>
+            <span className="text-xs text-gray-500">Policy: {r.policy?.policyNumber ? `${r.policy.policyNumber}${getPolicyYearString(r.policy) ? ` (${getPolicyYearString(r.policy)})` : ''}` : '—'}</span>
+            {sa != null && sa !== '' && !isNaN(Number(sa)) && Number(sa) > 0 && (
+              <span className="text-[11px] font-semibold text-emerald-700">
+                Sum Assured: ₹{Number(sa).toLocaleString('en-IN')}
+              </span>
+            )}
+          </div>
+        );
+      }
+    },
+    {
+      key: 'claimAmount',
+      label: 'Claimed Amt',
+      render: r => <span className="font-semibold text-gray-900">₹{Number(r.claimAmount).toLocaleString('en-IN')}</span>
+    },
+    {
+      key: 'approvedAmount',
+      label: 'Settled Amt',
+      render: r => r.approvedAmount ? <span className="font-semibold text-emerald-600">₹{Number(r.approvedAmount).toLocaleString('en-IN')}</span> : <span className="text-gray-400">—</span>
+    },
+    {
+      key: 'intimatedAt',
+      label: 'Date Filed',
+      render: r => r.intimatedAt ? format(new Date(r.intimatedAt), 'dd/MMM/yyyy') : '—'
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      render: r => {
+        const notes = getClaimNotesData(r.notes);
+        const display = getClaimUiStatus(r);
+        return (
+          <div className="flex flex-col items-start gap-0.5">
+            <span
+              title={display}
+              className={clsx('inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border uppercase tracking-wider', STATUS_BADGE[display] || STATUS_BADGE[r.status] || 'bg-gray-100 text-gray-600')}
+            >
+              {display}
+            </span>
+            {notes.uiClaimStatus && notes.uiClaimStatus.toLowerCase() !== display.toLowerCase() && (
+              <span className="text-[10px] leading-tight text-slate-700 font-medium" title={notes.uiClaimStatus}>
+                {notes.uiClaimStatus}
+              </span>
+            )}
+          </div>
+        );
+      }
+    },
+    {
+      key: 'actions' as any,
+      label: 'ACTIONS',
+      render: r => (
+        <div className="flex flex-wrap items-center gap-1.5 justify-start" onClick={e => e.stopPropagation()}>
+          <button
+            title="Edit Claim"
+            className="p-2 rounded-xl bg-gradient-to-r from-purple-600 to-violet-600 hover:from-purple-700 hover:to-violet-700 text-white font-bold flex items-center justify-center cursor-pointer shadow-md shadow-purple-500/20 hover:shadow-lg hover:scale-105 transition-all"
+            onClick={() => setEditTarget(r)}
+          >
+            <Pencil size={14} />
+          </button>
+          <button
+            title="Delete Claim"
+            className="p-2 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-700 hover:to-red-700 text-white font-bold flex items-center justify-center cursor-pointer shadow-md shadow-rose-500/20 hover:shadow-lg hover:scale-105 transition-all"
+            onClick={() => setDeleteTarget(r)}
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
+      ),
+    },
+  ];
+
+  const genClaimNumber = () => `CLM-${Date.now().toString().slice(-8)}`;
+
+  return (
+    <>
+    <div className="space-y-4 text-sm sm:text-base">
+      {/* Floating Right Action Panel */}
+      <input type="file" ref={fileInputRef} onChange={handleImport} accept=".csv,.xlsx,.xls" className="hidden" />
+      <div className="fixed right-5 top-1/2 -translate-y-1/2 z-40 flex flex-col gap-3 bg-white/90 backdrop-blur-xl p-2 rounded-2xl shadow-2xl border border-slate-200/80 animate-fadeIn">
+        {/* Import CSV */}
+        <button
+          type="button"
+          onClick={() => setImportFormatOpen(true)}
+          className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 hover:from-emerald-700 hover:to-teal-600 text-white flex items-center justify-center transition-all hover:scale-105 shadow-md shadow-emerald-500/25 cursor-pointer group relative"
+        >
+          <Upload size={18} strokeWidth={2.2} />
+          <span className="absolute right-full mr-3 px-3 py-1.5 rounded-xl bg-slate-900/90 backdrop-blur-md text-white text-[11px] font-bold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-all pointer-events-none shadow-xl border border-slate-800">
+            Import Claims CSV
+          </span>
+        </button>
+
+        {/* New Claim */}
+        <button
+          type="button"
+          onClick={() => { setModalOpen(true); setValue('claimNumber', genClaimNumber()); }}
+          className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white flex items-center justify-center transition-all hover:scale-105 shadow-lg shadow-blue-500/30 cursor-pointer group relative"
+        >
+          <Plus size={18} strokeWidth={2.2} />
+          <span className="absolute right-full mr-3 px-3 py-1.5 rounded-xl bg-slate-900/90 backdrop-blur-md text-white text-[11px] font-bold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-all pointer-events-none shadow-xl border border-slate-800">
+            New Claim
+          </span>
+        </button>
+      </div>
+
+      {/* Unified Search & Actions Row (Policy UI Style) */}
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-3 border border-slate-100 rounded-2xl shadow-sm">
+        {/* Left Side: Search Bar & Inline Quick Filters */}
+        <div className="flex flex-wrap items-center gap-2.5 flex-1 min-w-0">
+          <div className="page-search-wrapper">
+            <Search className="page-search-icon" />
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search claims by ID or customer..."
+              className="page-search-input"
+            />
+          </div>
+
+          <div className="h-6 w-px bg-slate-200 hidden md:block shrink-0" />
+
+          {/* Quick Filters Inline Pills */}
+          <div className="flex flex-wrap items-center gap-1.5 overflow-x-auto custom-scrollbar py-0.5 min-w-0">
+            <span className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wider mr-0.5 flex items-center gap-1 shrink-0">
+              <Filter size={13} className="text-blue-500" /> Quick:
+            </span>
+            {[
+              { key: 'All', label: 'All Claims' },
+              { key: 'Pending', label: 'Pending', icon: '⏳' },
+              { key: 'In Progress', label: 'In Progress', icon: '⚡' },
+              { key: 'Approved', label: 'Approved', icon: '✅' },
+              { key: 'Settled', label: 'Settled', icon: '💰' },
+              { key: 'Rejected', label: 'Rejected', icon: '❌' },
+            ].map(q => {
+              const isSelected = filterStatus === q.key;
+              return (
+                <button
+                  key={q.key}
+                  type="button"
+                  onClick={() => { setFilterStatus(q.key as any); setPage(1); }}
+                  className={clsx(
+                    'inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer border shadow-2xs whitespace-nowrap shrink-0',
+                    isSelected
+                      ? 'bg-blue-600 text-white border-blue-600 shadow-sm scale-105'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900'
+                  )}
+                >
+                  {q.icon && <span>{q.icon}</span>}
+                  <span>{q.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Right Side: View Mode Toggle, Show Analytics & Advanced Filters Toggle */}
+        <div className="flex flex-wrap items-center gap-2 justify-end">
+          {/* Kanban / Table Toggle */}
+          <div className="flex items-center bg-slate-100 rounded-lg p-0.5 border border-slate-200/50">
+            <button
+              onClick={() => setViewMode('kanban')}
+              className={clsx('flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-bold cursor-pointer transition-all select-none',
+                viewMode === 'kanban' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-900')}
+            >
+              <LayoutGrid size={13} /> <span className="hidden sm:inline">Kanban</span>
+            </button>
+            <button
+              onClick={() => setViewMode('table')}
+              className={clsx('flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-bold cursor-pointer transition-all select-none',
+                viewMode === 'table' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-900')}
+            >
+              <List size={13} /> <span className="hidden sm:inline">Table</span>
+            </button>
+          </div>
+
+          <button
+            onClick={() => setShowAnalytics(!showAnalytics)}
+            onMouseEnter={() => setShowAnalytics(true)}
+            className={clsx('btn-secondary h-9 py-0 px-3 text-xs flex items-center gap-1.5 font-bold cursor-pointer rounded-lg',
+              showAnalytics && 'bg-blue-50 border-blue-200 text-blue-600')}
+          >
+            {showAnalytics ? 'Hide Analytics' : 'Show Analytics'}
+          </button>
+
+          {/* Advanced Filters Toggle Button (Policy Page Style) */}
+          <button
+            type="button"
+            onClick={() => setFiltersOpen(!filtersOpen)}
+            onMouseEnter={() => setFiltersOpen(true)}
+            className={clsx(
+              'p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-500 hover:text-slate-700 cursor-pointer shadow-2xs transition-all flex items-center gap-1.5 text-xs font-bold bg-white shrink-0',
+              filtersOpen && 'bg-blue-50 border-blue-200 text-blue-600 font-extrabold'
+            )}
+            title="Advanced Filters"
+          >
+            <Filter size={14} className={filtersOpen || activeFilterCount > 0 ? 'text-blue-600' : 'text-slate-500'} />
+            <span className="hidden sm:inline">Filters</span>
+            {activeFilterCount > 0 && (
+              <span className="px-1.5 py-0.5 text-[10px] bg-blue-600 text-white rounded-full font-black leading-none">
+                {activeFilterCount}
+              </span>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* Active Filter Badges Bar */}
+      {activeFilterCount > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 bg-blue-50/60 p-2.5 rounded-2xl border border-blue-100/90 shadow-2xs animate-fadeIn">
+          <span className="text-[11px] font-extrabold text-blue-800 mr-1 flex items-center gap-1">
+            <Filter size={13} className="text-blue-600" /> Active Filters ({activeFilterCount}):
+          </span>
+
+          {filterProposerName && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
+              Proposer: {filterProposerName}
+              <X size={12} className="cursor-pointer hover:text-red-500 transition-colors" onClick={() => setFilterProposerName('')} />
+            </span>
+          )}
+          {filterCompanyName && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
+              Company: {filterCompanyName}
+              <X size={12} className="cursor-pointer hover:text-red-500 transition-colors" onClick={() => setFilterCompanyName('')} />
+            </span>
+          )}
+          {filterPlanName && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
+              Plan: {filterPlanName}
+              <X size={12} className="cursor-pointer hover:text-red-500 transition-colors" onClick={() => setFilterPlanName('')} />
+            </span>
+          )}
+          {filterAssignedEmployee && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
+              Employee: {employees.find((e: any) => e.id === filterAssignedEmployee || e.userId === filterAssignedEmployee)?.firstName || filterAssignedEmployee}
+              <X size={12} className="cursor-pointer hover:text-red-500 transition-colors" onClick={() => setFilterAssignedEmployee('')} />
+            </span>
+          )}
+          {filterAgentName && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
+              Agent: {filterAgentName}
+              <X size={12} className="cursor-pointer hover:text-red-500 transition-colors" onClick={() => setFilterAgentName('')} />
+            </span>
+          )}
+          {filterClaimTypeModal !== 'ALL' && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
+              Type: {filterClaimTypeModal}
+              <X size={12} className="cursor-pointer hover:text-red-500 transition-colors" onClick={() => setFilterClaimTypeModal('ALL')} />
+            </span>
+          )}
+          {filterClaimStatusModal !== 'ALL' && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
+              Status: {filterClaimStatusModal}
+              <X size={12} className="cursor-pointer hover:text-red-500 transition-colors" onClick={() => setFilterClaimStatusModal('ALL')} />
+            </span>
+          )}
+          {filterClaimedAmountRange !== 'ALL' && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
+              Claimed: {
+                filterClaimedAmountRange === '0_50K' ? '0 - 50,000' :
+                filterClaimedAmountRange === '50K_1L' ? '50,001 - 1,00,000' :
+                filterClaimedAmountRange === '1L_2L' ? '1,00,001 - 2,00,000' :
+                filterClaimedAmountRange === '2L_4L' ? '2,00,001 - 4,00,000' :
+                filterClaimedAmountRange === '4L_10L' ? '4,00,001 - 10,00,000' :
+                filterClaimedAmountRange === '10L_20L' ? '10,00,001 - 20,00,000' :
+                '20,00,001+'
+              }
+              <X size={12} className="cursor-pointer hover:text-red-500 transition-colors" onClick={() => setFilterClaimedAmountRange('ALL')} />
+            </span>
+          )}
+          {(filterSettledMin || filterSettledMax) && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
+              Settled: ₹{filterSettledMin || '0'} - ₹{filterSettledMax || '∞'}
+              <X size={12} className="cursor-pointer hover:text-red-500 transition-colors" onClick={() => { setFilterSettledMin(''); setFilterSettledMax(''); }} />
+            </span>
+          )}
+          {(filterDeductedMin || filterDeductedMax) && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
+              Deducted: ₹{filterDeductedMin || '0'} - ₹{filterDeductedMax || '∞'}
+              <X size={12} className="cursor-pointer hover:text-red-500 transition-colors" onClick={() => { setFilterDeductedMin(''); setFilterDeductedMax(''); }} />
+            </span>
+          )}
+          {filterHospitalState && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
+              State: {filterHospitalState}
+              <X size={12} className="cursor-pointer hover:text-red-500 transition-colors" onClick={() => setFilterHospitalState('')} />
+            </span>
+          )}
+          {filterHospitalCity && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
+              City: {filterHospitalCity}
+              <X size={12} className="cursor-pointer hover:text-red-500 transition-colors" onClick={() => setFilterHospitalCity('')} />
+            </span>
+          )}
+          {filterHospitalNameModal && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
+              Hospital: {filterHospitalNameModal}
+              <X size={12} className="cursor-pointer hover:text-red-500 transition-colors" onClick={() => setFilterHospitalNameModal('')} />
+            </span>
+          )}
+          {filterDoctorName && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
+              Doctor: {filterDoctorName}
+              <X size={12} className="cursor-pointer hover:text-red-500 transition-colors" onClick={() => setFilterDoctorName('')} />
+            </span>
+          )}
+          {(filterAdmissionDateFrom || filterAdmissionDateTo) && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
+              Admission: {filterAdmissionDateFrom || 'Start'} to {filterAdmissionDateTo || 'End'}
+              <X size={12} className="cursor-pointer hover:text-red-500 transition-colors" onClick={() => { setFilterAdmissionDateFrom(''); setFilterAdmissionDateTo(''); }} />
+            </span>
+          )}
+          {(filterDischargeDateFrom || filterDischargeDateTo) && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
+              Discharge: {filterDischargeDateFrom || 'Start'} to {filterDischargeDateTo || 'End'}
+              <X size={12} className="cursor-pointer hover:text-red-500 transition-colors" onClick={() => { setFilterDischargeDateFrom(''); setFilterDischargeDateTo(''); }} />
+            </span>
+          )}
+          {filterAffectedOrgan && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
+              Organ/Body Part: {filterAffectedOrgan}
+              <X size={12} className="cursor-pointer hover:text-red-500 transition-colors" onClick={() => setFilterAffectedOrgan('')} />
+            </span>
+          )}
+          {filterRoomCategory && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
+              Room: {filterRoomCategory}
+              <X size={12} className="cursor-pointer hover:text-red-500 transition-colors" onClick={() => setFilterRoomCategory('')} />
+            </span>
+          )}
+          {filterTypeOfManagement && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
+              Management: {filterTypeOfManagement}
+              <X size={12} className="cursor-pointer hover:text-red-500 transition-colors" onClick={() => setFilterTypeOfManagement('')} />
+            </span>
+          )}
+          {filterTypeOfAdmission && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
+              Admission Type: {filterTypeOfAdmission}
+              <X size={12} className="cursor-pointer hover:text-red-500 transition-colors" onClick={() => setFilterTypeOfAdmission('')} />
+            </span>
+          )}
+          {(filterCreationDateFrom || filterCreationDateTo) && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
+              Claim Created: {filterCreationDateFrom || 'Start'} to {filterCreationDateTo || 'End'}
+              <X size={12} className="cursor-pointer hover:text-red-500 transition-colors" onClick={() => { setFilterCreationDateFrom(''); setFilterCreationDateTo(''); }} />
+            </span>
+          )}
+
+          <button
+            type="button"
+            onClick={resetAllModalFilters}
+            className="text-[11px] font-extrabold text-red-600 hover:text-red-800 hover:underline cursor-pointer ml-auto px-2 py-0.5 rounded-lg bg-red-50 hover:bg-red-100 transition-colors"
+          >
+            Clear All
+          </button>
+        </div>
+      )}
+
+      {/* In-Page Expandable Advanced Filters Card (Policy Page Style) */}
+      {filtersOpen && (
+        <div className="card bg-gray-50/50 p-5 rounded-2xl border border-slate-200 shadow-sm mt-2 mb-4 animate-fadeIn">
+          <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-200/70">
+            <h3 className="text-sm font-bold text-slate-800 flex flex-wrap items-center gap-2">
+              <Filter size={16} className="text-blue-600" />
+              Advanced Filters
+            </h3>
+            {activeFilterCount > 0 && (
+              <span className="text-xs font-extrabold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-100">
+                {activeFilterCount} {activeFilterCount === 1 ? 'Filter' : 'Filters'} Active
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-4 text-xs">
+            {/* 1. Proposer Name */}
+            <div>
+              <label className="label text-[11px] font-bold text-slate-600">Proposer Name</label>
+              <input
+                type="text"
+                placeholder="Search proposer/client name..."
+                className="input text-xs w-full bg-white shadow-2xs mt-1"
+                value={filterProposerName}
+                onChange={e => setFilterProposerName(e.target.value)}
+              />
+            </div>
+
+            {/* 2. Company Name */}
+            <div>
+              <label className="label text-[11px] font-bold text-slate-600">Company Name</label>
+              <input
+                type="text"
+                placeholder="e.g. Star Health, Neva Bupa..."
+                className="input text-xs w-full bg-white shadow-2xs mt-1"
+                value={filterCompanyName}
+                onChange={e => setFilterCompanyName(e.target.value)}
+              />
+            </div>
+
+            {/* 3. Plan Name */}
+            <div>
+              <label className="label text-[11px] font-bold text-slate-600">Plan Name</label>
+              <input
+                type="text"
+                placeholder="Search plan name..."
+                className="input text-xs w-full bg-white shadow-2xs mt-1"
+                value={filterPlanName}
+                onChange={e => setFilterPlanName(e.target.value)}
+              />
+            </div>
+
+            {/* 4. Assigned Employee */}
+            <div>
+              <label className="label text-[11px] font-bold text-slate-600">Assigned Employee</label>
+              <select
+                className="input text-xs w-full bg-white shadow-2xs mt-1"
+                value={filterAssignedEmployee}
+                onChange={e => setFilterAssignedEmployee(e.target.value)}
+              >
+                <option value="">All Employees</option>
+                {employees.map((emp: any) => (
+                  <option key={emp.id} value={emp.userId || emp.id}>
+                    {emp.firstName} {emp.lastName}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* 5. Agent Name */}
+            <div>
+              <label className="label text-[11px] font-bold text-slate-600">Agent Name</label>
+              <input
+                type="text"
+                placeholder="Search agent name..."
+                className="input text-xs w-full bg-white shadow-2xs mt-1"
+                value={filterAgentName}
+                onChange={e => setFilterAgentName(e.target.value)}
+              />
+            </div>
+
+            {/* 6. Claim Type */}
+            <div>
+              <label className="label text-[11px] font-bold text-slate-600">Claim Type</label>
+              <select
+                className="input text-xs w-full bg-white shadow-2xs mt-1"
+                value={filterClaimTypeModal}
+                onChange={e => setFilterClaimTypeModal(e.target.value)}
+              >
+                <option value="ALL">All Claim Types</option>
+                <option value="Cashless">Cashless</option>
+                <option value="Reimbursement">Reimbursement</option>
+                <option value="Pre-Post Hospitalization">Pre-Post Hospitalization</option>
+                <option value="Accident">Accident</option>
+                <option value="Death Claim">Death Claim</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+
+            {/* 7. Claim Status */}
+            <div>
+              <label className="label text-[11px] font-bold text-slate-600">Claim Status</label>
+              <select
+                className="input text-xs w-full bg-white shadow-2xs mt-1"
+                value={filterClaimStatusModal}
+                onChange={e => setFilterClaimStatusModal(e.target.value)}
+              >
+                <option value="ALL">All Statuses</option>
+                <option value="Pending">Pending</option>
+                <option value="In Progress">In Progress</option>
+                <option value="Approved">Approved</option>
+                <option value="Settled">Settled</option>
+                <option value="Rejected">Rejected</option>
+                <option value="Intimated">Intimated</option>
+                <option value="Discharge Done">Discharge Done</option>
+                <option value="Query Raised">Query Raised</option>
+                <option value="Query Resolved">Query Resolved</option>
+                <option value="Partially Approved">Partially Approved</option>
+              </select>
+            </div>
+
+            {/* 8. Claimed Amount Range */}
+            <div>
+              <label className="label text-[11px] font-bold text-slate-600">Claimed Amount Range</label>
+              <select
+                className="input text-xs w-full bg-white shadow-2xs mt-1"
+                value={filterClaimedAmountRange}
+                onChange={e => setFilterClaimedAmountRange(e.target.value)}
+              >
+                <option value="ALL">All Amount Ranges</option>
+                <option value="0_50K">0 to 50,000</option>
+                <option value="50K_1L">50,001 to 1,00,000</option>
+                <option value="1L_2L">1,00,001 to 2,00,000</option>
+                <option value="2L_4L">2,00,001 to 4,00,000</option>
+                <option value="4L_10L">4,00,001 to 10,00,000</option>
+                <option value="10L_20L">10,00,001 to 20,00,000</option>
+                <option value="20L_ABOVE">20,00,001 and above</option>
+              </select>
+            </div>
+
+            {/* 9. Settled Amount Range */}
+            <div>
+              <label className="label text-[11px] font-bold text-slate-600">Settled Amount Range</label>
+              <div className="flex gap-2 items-center mt-1">
+                <input
+                  type="number"
+                  placeholder="Min ₹"
+                  className="input text-xs w-full bg-white shadow-2xs"
+                  value={filterSettledMin}
+                  onChange={e => setFilterSettledMin(e.target.value)}
+                />
+                <span className="text-gray-400 font-bold">-</span>
+                <input
+                  type="number"
+                  placeholder="Max ₹"
+                  className="input text-xs w-full bg-white shadow-2xs"
+                  value={filterSettledMax}
+                  onChange={e => setFilterSettledMax(e.target.value)}
+                />
+              </div>
+            </div>
+
+            {/* 10. Deducted Amount Range */}
+            <div>
+              <label className="label text-[11px] font-bold text-slate-600">Deducted Amount Range</label>
+              <div className="flex gap-2 items-center mt-1">
+                <input
+                  type="number"
+                  placeholder="Min ₹"
+                  className="input text-xs w-full bg-white shadow-2xs"
+                  value={filterDeductedMin}
+                  onChange={e => setFilterDeductedMin(e.target.value)}
+                />
+                <span className="text-gray-400 font-bold">-</span>
+                <input
+                  type="number"
+                  placeholder="Max ₹"
+                  className="input text-xs w-full bg-white shadow-2xs"
+                  value={filterDeductedMax}
+                  onChange={e => setFilterDeductedMax(e.target.value)}
+                />
+              </div>
+            </div>
+
+            {/* 11. Hospital State */}
+            <div>
+              <label className="label text-[11px] font-bold text-slate-600">Hospital State</label>
+              <input
+                type="text"
+                placeholder="e.g. Maharashtra, Gujarat..."
+                className="input text-xs w-full bg-white shadow-2xs mt-1"
+                value={filterHospitalState}
+                onChange={e => setFilterHospitalState(e.target.value)}
+              />
+            </div>
+
+            {/* 12. Hospital City */}
+            <div>
+              <label className="label text-[11px] font-bold text-slate-600">Hospital City</label>
+              <input
+                type="text"
+                placeholder="e.g. Mumbai, Pune..."
+                className="input text-xs w-full bg-white shadow-2xs mt-1"
+                value={filterHospitalCity}
+                onChange={e => setFilterHospitalCity(e.target.value)}
+              />
+            </div>
+
+            {/* 13. Hospital Name */}
+            <div>
+              <label className="label text-[11px] font-bold text-slate-600">Hospital Name</label>
+              <input
+                type="text"
+                placeholder="Search hospital name..."
+                className="input text-xs w-full bg-white shadow-2xs mt-1"
+                value={filterHospitalNameModal}
+                onChange={e => setFilterHospitalNameModal(e.target.value)}
+              />
+            </div>
+
+            {/* 14. Doctor Name */}
+            <div>
+              <label className="label text-[11px] font-bold text-slate-600">Doctor Name</label>
+              <input
+                type="text"
+                placeholder="Search doctor name..."
+                className="input text-xs w-full bg-white shadow-2xs mt-1"
+                value={filterDoctorName}
+                onChange={e => setFilterDoctorName(e.target.value)}
+              />
+            </div>
+
+            {/* 15. Claim Creation Date */}
+            <div>
+              <label className="label text-[11px] font-bold text-slate-600">Claim Creation Date</label>
+              <div className="flex gap-2 items-center mt-1">
+                <DatePicker className="input text-xs w-full shadow-2xs" value={filterCreationDateFrom} onDateChange={val => setFilterCreationDateFrom(val)} title="From" />
+                <span className="text-gray-400 font-bold">-</span>
+                <DatePicker className="input text-xs w-full shadow-2xs" value={filterCreationDateTo} onDateChange={val => setFilterCreationDateTo(val)} title="To" />
+              </div>
+            </div>
+
+            {/* 16. Date of Admission */}
+            <div>
+              <label className="label text-[11px] font-bold text-slate-600">Date of Admission</label>
+              <div className="flex gap-2 items-center mt-1">
+                <DatePicker className="input text-xs w-full shadow-2xs" value={filterAdmissionDateFrom} onDateChange={val => setFilterAdmissionDateFrom(val)} title="From" />
+                <span className="text-gray-400 font-bold">-</span>
+                <DatePicker className="input text-xs w-full shadow-2xs" value={filterAdmissionDateTo} onDateChange={val => setFilterAdmissionDateTo(val)} title="To" />
+              </div>
+            </div>
+
+            {/* 17. Date of Discharge */}
+            <div>
+              <label className="label text-[11px] font-bold text-slate-600">Date of Discharge</label>
+              <div className="flex gap-2 items-center mt-1">
+                <DatePicker className="input text-xs w-full shadow-2xs" value={filterDischargeDateFrom} onDateChange={val => setFilterDischargeDateFrom(val)} title="From" />
+                <span className="text-gray-400 font-bold">-</span>
+                <DatePicker className="input text-xs w-full shadow-2xs" value={filterDischargeDateTo} onDateChange={val => setFilterDischargeDateTo(val)} title="To" />
+              </div>
+            </div>
+
+            {/* 18. Affected Organ / Body part */}
+            <div>
+              <label className="label text-[11px] font-bold text-slate-600">Affected Organ / Body Part</label>
+              <input
+                type="text"
+                placeholder="e.g. Heart, Knee, Kidney..."
+                className="input text-xs w-full bg-white shadow-2xs mt-1"
+                value={filterAffectedOrgan}
+                onChange={e => setFilterAffectedOrgan(e.target.value)}
+              />
+            </div>
+
+            {/* 19. Room Category */}
+            <div>
+              <label className="label text-[11px] font-bold text-slate-600">Room Category</label>
+              <input
+                type="text"
+                placeholder="e.g. Single AC, Twin Sharing..."
+                className="input text-xs w-full bg-white shadow-2xs mt-1"
+                value={filterRoomCategory}
+                onChange={e => setFilterRoomCategory(e.target.value)}
+              />
+            </div>
+
+            {/* 20. Type of Management */}
+            <div>
+              <label className="label text-[11px] font-bold text-slate-600">Type of Management</label>
+              <input
+                type="text"
+                placeholder="e.g. Medical, Surgical..."
+                className="input text-xs w-full bg-white shadow-2xs mt-1"
+                value={filterTypeOfManagement}
+                onChange={e => setFilterTypeOfManagement(e.target.value)}
+              />
+            </div>
+
+            {/* 21. Type of Admission */}
+            <div>
+              <label className="label text-[11px] font-bold text-slate-600">Type of Admission</label>
+              <input
+                type="text"
+                placeholder="e.g. Emergency, Planned..."
+                className="input text-xs w-full bg-white shadow-2xs mt-1"
+                value={filterTypeOfAdmission}
+                onChange={e => setFilterTypeOfAdmission(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* Action Buttons at bottom of Card */}
+          <div className="flex flex-wrap justify-between items-center gap-3 mt-6 pt-4 border-t border-slate-200/70">
+            {/* Export Buttons */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-bold text-slate-500 mr-1">Export Claims Data:</span>
+              <button
+                type="button"
+                onClick={exportClaimsToExcel}
+                className="px-3.5 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 cursor-pointer shadow-2xs transition-all flex items-center gap-1.5 text-xs font-bold bg-white"
+                title="Export to Excel"
+              >
+                <Download size={14} className="text-emerald-600" />
+                <span>Export Excel</span>
+              </button>
+              <button
+                type="button"
+                onClick={exportClaimsToPdf}
+                className="px-3.5 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 cursor-pointer shadow-2xs transition-all flex items-center gap-1.5 text-xs font-bold bg-white"
+                title="Export to PDF"
+              >
+                <FileText size={14} className="text-red-500" />
+                <span>Export PDF</span>
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={resetAllModalFilters}
+                className="px-6 py-2 text-xs font-bold text-slate-600 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition-colors shadow-2xs cursor-pointer"
+              >
+                Reset Filters
+              </button>
+              <button
+                type="button"
+                onClick={() => setFiltersOpen(false)}
+                className="px-6 py-2 text-xs font-bold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 rounded-xl transition-all shadow-md shadow-blue-500/20 cursor-pointer"
+              >
+                Apply Filters {activeFilterCount > 0 ? `(${activeFilterCount})` : ''}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Analytics & Reports Collapsible Card */}
+      {showAnalytics && (
+        <div className="bg-slate-50/50 p-6 rounded-2xl border border-slate-100 shadow-sm space-y-6 mb-4 animate-in fade-in slide-in-from-top-2 duration-200">
+          
+          {/* Header & Main Controls */}
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 pb-4">
+            <div>
+              <h3 className="text-sm font-bold text-gray-800 flex flex-wrap items-center gap-1.5">
+                <FileCheck2 size={16} className="text-blue-600" />
+                Claims Analytics Dashboard
+              </h3>
+              <p className="text-xs text-gray-500 mt-0.5">Real-time statistics, graphs, and filtered reports</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={exportAnalytics}
+                className="btn-primary h-8 py-0 px-3 text-[10px] sm:text-xs bg-emerald-600 hover:bg-emerald-700 font-bold flex flex-wrap items-center gap-1.5 shadow-sm rounded-lg"
+              >
+                <FileCheck2 size={13} /> Export Report (CSV)
+              </button>
+            </div>
+          </div>
+
+          {/* Advanced Filters Panel */}
+          <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-4">
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Start Date</label>
+              <DatePicker
+                value={filterStartDate}
+                onDateChange={setFilterStartDate}
+                className="input h-8 text-xs py-0 px-2 rounded-lg bg-slate-50 border border-slate-200 w-full"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">End Date</label>
+              <DatePicker
+                value={filterEndDate}
+                onDateChange={setFilterEndDate}
+                className="input h-8 text-xs py-0 px-2 rounded-lg bg-slate-50 border border-slate-200 w-full"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Company</label>
+              <input
+                type="text"
+                placeholder="Search company..."
+                value={filterCompany}
+                onChange={e => setFilterCompany(e.target.value)}
+                className="input h-8 text-xs py-0 px-2 rounded-lg bg-slate-50 border border-slate-200 w-full"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Hospital</label>
+              <input
+                type="text"
+                placeholder="Search hospital..."
+                value={filterHospital}
+                onChange={e => setFilterHospital(e.target.value)}
+                className="input h-8 text-xs py-0 px-2 rounded-lg bg-slate-50 border border-slate-200 w-full"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Claim Type</label>
+              <select
+                value={filterClaimType}
+                onChange={e => setFilterClaimType(e.target.value)}
+                className="input h-8 text-xs py-0 px-2 rounded-lg bg-slate-50 border border-slate-200 w-full"
+              >
+                <option value="ALL">All Types</option>
+                <option value="Cashless">Cashless</option>
+                <option value="Reimbursement">Reimbursement</option>
+                <option value="DEATH">Death</option>
+                <option value="ACCIDENTAL">Accidental</option>
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Agent</label>
+              <select
+                value={filterAgent}
+                onChange={e => setFilterAgent(e.target.value)}
+                className="input h-8 text-xs py-0 px-2 rounded-lg bg-slate-50 border border-slate-200 w-full"
+              >
+                <option value="">All Agents</option>
+                {employees.map((emp: any) => (
+                  <option key={emp.id} value={emp.id}>{emp.firstName} {emp.lastName}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Claim Stage Count Cards Row */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4">
+            {['Pending', 'In Progress', 'Approved', 'Settled', 'Rejected'].map(status => {
+              const statusData = stats.statuses.find(s => s.name === status);
+              const count = statusData ? statusData.count : 0;
+              return (
+                <div key={status} className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm flex flex-col justify-between items-center text-center">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{status}</span>
+                  <span className="text-xl font-bold text-indigo-600 mt-1">{count}</span>
+                </div>
+              );
+            })}
+            <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm flex flex-col justify-between items-center text-center">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Claims</span>
+              <span className="text-xl font-bold text-slate-800 mt-1">{stats.totalClaims}</span>
+            </div>
+          </div>
+
+          {/* 6 KPI Cards Row */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4">
+            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm flex flex-col justify-between">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Claims</span>
+              <span className="text-xl font-bold text-slate-800 mt-1">{stats.totalClaims}</span>
+            </div>
+
+            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm flex flex-col justify-between">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Claimed Amt</span>
+              <span className="text-xl font-bold text-slate-800 mt-1">₹{Math.round(stats.totalClaimed).toLocaleString('en-IN')}</span>
+            </div>
+
+            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm flex flex-col justify-between">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Settled Amt</span>
+              <span className="text-xl font-bold text-emerald-600 mt-1">₹{Math.round(stats.totalSettled).toLocaleString('en-IN')}</span>
+            </div>
+
+            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm flex flex-col justify-between">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Pending Amt</span>
+              <span className="text-xl font-bold text-amber-600 mt-1">₹{Math.round(stats.pendingClaimed).toLocaleString('en-IN')}</span>
+            </div>
+
+            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm flex flex-col justify-between">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Settlement %</span>
+              <div className="flex flex-wrap items-center gap-2 mt-1">
+                <span className="text-xl font-bold text-slate-800">{stats.settlementRatio.toFixed(1)}%</span>
+              </div>
+            </div>
+
+            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm flex flex-col justify-between">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Avg Claim</span>
+              <span className="text-xl font-bold text-slate-800 mt-1">₹{Math.round(stats.avgClaim).toLocaleString('en-IN')}</span>
+            </div>
+          </div>
+
+          {/* Interactive SVG Charts Section */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            
+            {/* Chart 1: Claims Trend (SVG Line Chart) */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+              <div>
+                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Claims Trend (Monthly)</h4>
+                <p className="text-[10px] text-slate-400">Total claimed amount in ₹</p>
+              </div>
+              <div className="relative h-44 flex items-end justify-center">
+                <svg viewBox="0 0 240 120" className="w-full h-full">
+                  {/* Grid Lines */}
+                  <line x1="10" y1="20" x2="230" y2="20" stroke="#f1f5f9" strokeWidth="1" />
+                  <line x1="10" y1="60" x2="230" y2="60" stroke="#f1f5f9" strokeWidth="1" />
+                  <line x1="10" y1="100" x2="230" y2="100" stroke="#e2e8f0" strokeWidth="1" />
+                  
+                  {/* Polyline */}
+                  {(() => {
+                    const maxVal = Math.max(...monthlyData.values, 1);
+                    const points = monthlyData.values.map((val, idx) => {
+                      const x = 10 + idx * 20;
+                      const y = 100 - (val / maxVal) * 80;
+                      return `${x},${y}`;
+                    }).join(' ');
+                    return (
+                      <>
+                        <polyline fill="none" stroke="#3b82f6" strokeWidth="2.5" points={points} />
+                        {monthlyData.values.map((val, idx) => {
+                          const x = 10 + idx * 20;
+                          const y = 100 - (val / maxVal) * 80;
+                          if (val === 0) return null;
+                          return (
+                            <circle key={idx} cx={x} cy={y} r="3.5" fill="#2563eb" stroke="#ffffff" strokeWidth="1.5" />
+                          );
+                        })}
+                      </>
+                    );
+                  })()}
+                  
+                  {/* X Axis Labels */}
+                  {monthlyData.months.map((m, idx) => (
+                    <text key={m} x={10 + idx * 20} y="115" fontSize="6.5" fill="#94a3b8" textAnchor="middle">{m}</text>
+                  ))}
+                </svg>
+              </div>
+            </div>
+
+            {/* Chart 2: Claim Type Share (SVG Doughnut Chart) */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+              <div>
+                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Claim Type Share</h4>
+                <p className="text-[10px] text-slate-400">Cashless vs Reimbursement distribution</p>
+              </div>
+              <div className="h-44 flex items-center justify-between gap-2">
+                <div className="w-1/2 relative flex items-center justify-center">
+                  <svg width="100" height="100" viewBox="0 0 36 36" className="w-24 h-24">
+                    <circle cx="18" cy="18" r="15.915" fill="none" stroke="#f1f5f9" strokeWidth="3" />
+                    {(() => {
+                      let accumulatedPercent = 0;
+                      const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ec4899', '#6366f1'];
+                      return stats.types.map((type, idx) => {
+                        const pct = stats.totalClaims > 0 ? (type.count / stats.totalClaims) * 100 : 0;
+                        const dashArray = `${pct} ${100 - pct}`;
+                        const dashOffset = 100 - accumulatedPercent + 25;
+                        accumulatedPercent += pct;
+                        return (
+                          <circle
+                            key={type.name}
+                            cx="18"
+                            cy="18"
+                            r="15.915"
+                            fill="none"
+                            stroke={colors[idx % colors.length]}
+                            strokeWidth="3.5"
+                            strokeDasharray={dashArray}
+                            strokeDashoffset={dashOffset}
+                          />
+                        );
+                      });
+                    })()}
+                  </svg>
+                  <div className="absolute flex flex-col items-center justify-center">
+                    <span className="text-[10px] text-slate-400 uppercase font-semibold">Total</span>
+                    <span className="text-base font-bold text-slate-800">{stats.totalClaims}</span>
+                  </div>
+                </div>
+                <div className="w-1/2 space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                  {stats.types.map((t, idx) => {
+                    const colors = ['bg-blue-500', 'bg-emerald-500', 'bg-amber-500', 'bg-pink-500', 'bg-indigo-500'];
+                    const pct = stats.totalClaims > 0 ? (t.count / stats.totalClaims) * 100 : 0;
+                    return (
+                      <div key={t.name} className="flex flex-wrap items-center gap-1.5 text-[9px] text-slate-600">
+                        <span className={`w-2 h-2 rounded-full ${colors[idx % colors.length]}`} />
+                        <span className="truncate font-medium flex-1">{t.name}</span>
+                        <span className="font-bold text-slate-800">{pct.toFixed(0)}%</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Chart 3: Status Distribution (SVG Bar Chart) */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+              <div>
+                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Status Distribution</h4>
+                <p className="text-[10px] text-slate-400">Total claims per status stage</p>
+              </div>
+              <div className="relative h-44 flex items-end justify-center">
+                <svg viewBox="0 0 200 120" className="w-full h-full">
+                  <line x1="10" y1="20" x2="190" y2="20" stroke="#f1f5f9" strokeWidth="1" />
+                  <line x1="10" y1="60" x2="190" y2="60" stroke="#f1f5f9" strokeWidth="1" />
+                  <line x1="10" y1="100" x2="190" y2="100" stroke="#e2e8f0" strokeWidth="1" />
+
+                  {(() => {
+                    const counts = stats.statuses.map(s => s.count);
+                    const maxCount = Math.max(...counts, 1);
+                    const colors: Record<string, string> = {
+                      Pending: '#3b82f6',
+                      'In Progress': '#f59e0b',
+                      Approved: '#10b981',
+                      Rejected: '#ef4444',
+                      Settled: '#059669',
+                    };
+                    return stats.statuses.map((s, idx) => {
+                      const barWidth = 18;
+                      const x = 20 + idx * 35;
+                      const barHeight = (s.count / maxCount) * 80;
+                      const y = 100 - barHeight;
+                      return (
+                        <g key={s.name}>
+                          <rect
+                            x={x}
+                            y={y}
+                            width={barWidth}
+                            height={barHeight}
+                            rx="2"
+                            fill={colors[s.name] || '#64748b'}
+                          />
+                          <text x={x + 9} y={y - 4} fontSize="7" fontWeight="bold" fill="#475569" textAnchor="middle">{s.count}</text>
+                          <text x={x + 9} y="113" fontSize="6" fill="#64748b" textAnchor="middle" transform={`rotate(0, ${x + 9}, 113)`}>{s.name}</text>
+                        </g>
+                      );
+                    });
+                  })()}
+                </svg>
+              </div>
+            </div>
+
+          </div>
+
+          {/* Breakdown Tables Grid (2x2) */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+            {/* Company wise */}
+            <div className="space-y-2 bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
+              <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Company-wise Breakdown & Share</h4>
+              <div className="border border-slate-100 rounded-xl overflow-hidden bg-white max-h-48 overflow-y-auto">
+                <table className="min-w-full divide-y divide-slate-100 text-xs">
+                  <thead className="bg-slate-50 font-bold text-slate-600">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Company</th>
+                      <th className="px-3 py-2 text-center">Claims</th>
+                      <th className="px-3 py-2 text-right">Claimed</th>
+                      <th className="px-3 py-2 text-right">Settled</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {stats.companies.length === 0 ? (
+                      <tr><td colSpan={4} className="text-center py-4 text-slate-400">No data found</td></tr>
+                    ) : (
+                      stats.companies.map(c => {
+                        const pct = stats.totalClaimed > 0 ? (c.claimed / stats.totalClaimed) * 100 : 0;
+                        return (
+                          <tr key={c.name} className="hover:bg-slate-50/50">
+                            <td className="px-3 py-2">
+                              <span className="font-medium block">{c.name}</span>
+                              <div className="w-full bg-slate-100 h-1.5 rounded-full mt-1.5 overflow-hidden">
+                                <div className="bg-blue-600 h-full rounded-full" style={{ width: `${Math.max(3, pct)}%` }} />
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 text-center font-semibold">{c.count}</td>
+                            <td className="px-3 py-2 text-right">₹{c.claimed.toLocaleString('en-IN')}</td>
+                            <td className="px-3 py-2 text-right text-emerald-600 font-semibold">₹{c.settled.toLocaleString('en-IN')}</td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Hospital wise */}
+            <div className="space-y-2 bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
+              <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Hospital-wise Breakdown & Share</h4>
+              <div className="border border-slate-100 rounded-xl overflow-hidden bg-white max-h-48 overflow-y-auto">
+                <table className="min-w-full divide-y divide-slate-100 text-xs">
+                  <thead className="bg-slate-50 font-bold text-slate-600">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Hospital</th>
+                      <th className="px-3 py-2 text-center">Claims</th>
+                      <th className="px-3 py-2 text-right">Claimed</th>
+                      <th className="px-3 py-2 text-right">Settled</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {stats.hospitals.length === 0 ? (
+                      <tr><td colSpan={4} className="text-center py-4 text-slate-400">No data found</td></tr>
+                    ) : (
+                      stats.hospitals.map(h => {
+                        const pct = stats.totalClaimed > 0 ? (h.claimed / stats.totalClaimed) * 100 : 0;
+                        return (
+                          <tr key={h.name} className="hover:bg-slate-50/50">
+                            <td className="px-3 py-2">
+                              <span className="font-medium block truncate max-w-[150px]" title={h.name}>{h.name}</span>
+                              <div className="w-full bg-slate-100 h-1.5 rounded-full mt-1.5 overflow-hidden">
+                                <div className="bg-indigo-600 h-full rounded-full" style={{ width: `${Math.max(3, pct)}%` }} />
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 text-center font-semibold">{h.count}</td>
+                            <td className="px-3 py-2 text-right">₹{h.claimed.toLocaleString('en-IN')}</td>
+                            <td className="px-3 py-2 text-right text-emerald-600 font-semibold">₹{h.settled.toLocaleString('en-IN')}</td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Claim Type Breakdown (Cashless/Reimburse) */}
+            <div className="space-y-2 bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
+              <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Claim Type Breakdown (Cashless / Reimbursement)</h4>
+              <div className="border border-slate-100 rounded-xl overflow-hidden bg-white max-h-48 overflow-y-auto">
+                <table className="min-w-full divide-y divide-slate-100 text-xs">
+                  <thead className="bg-slate-50 font-bold text-slate-600">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Type</th>
+                      <th className="px-3 py-2 text-center">Claims</th>
+                      <th className="px-3 py-2 text-right">Claimed</th>
+                      <th className="px-3 py-2 text-right">Settled</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {stats.types.length === 0 ? (
+                      <tr><td colSpan={4} className="text-center py-4 text-slate-400">No data found</td></tr>
+                    ) : (
+                      stats.types.map(t => {
+                        const pct = stats.totalClaimed > 0 ? (t.claimed / stats.totalClaimed) * 100 : 0;
+                        return (
+                          <tr key={t.name} className="hover:bg-slate-50/50">
+                            <td className="px-3 py-2">
+                              <span className="font-medium block">{t.name}</span>
+                              <div className="w-full bg-slate-100 h-1.5 rounded-full mt-1.5 overflow-hidden">
+                                <div className="bg-emerald-600 h-full rounded-full" style={{ width: `${Math.max(3, pct)}%` }} />
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 text-center font-semibold">{t.count}</td>
+                            <td className="px-3 py-2 text-right">₹{t.claimed.toLocaleString('en-IN')}</td>
+                            <td className="px-3 py-2 text-right text-emerald-600 font-semibold">₹{t.settled.toLocaleString('en-IN')}</td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Duration Breakdown */}
+            <div className="space-y-2 bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
+              <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Duration-wise Breakdown</h4>
+              <div className="border border-slate-100 rounded-xl overflow-hidden bg-white max-h-48 overflow-y-auto">
+                <table className="min-w-full divide-y divide-slate-100 text-xs">
+                  <thead className="bg-slate-50 font-bold text-slate-600">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Time Range</th>
+                      <th className="px-3 py-2 text-center">Claims</th>
+                      <th className="px-3 py-2 text-right">Claimed</th>
+                      <th className="px-3 py-2 text-right">Settled</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {[
+                      { name: 'Last 30 Days', filter: (c: any) => (Date.now() - new Date(c.intimatedAt).getTime()) / 86400000 <= 30 },
+                      { name: '31 to 90 Days', filter: (c: any) => { const diff = (Date.now() - new Date(c.intimatedAt).getTime()) / 86400000; return diff > 30 && diff <= 90; } },
+                      { name: 'Older (90+ Days)', filter: (c: any) => (Date.now() - new Date(c.intimatedAt).getTime()) / 86400000 > 90 },
+                    ].map(range => {
+                      const matched = filteredClaims.filter(range.filter);
+                      const claimed = matched.reduce((sum: number, c: any) => sum + Number(c.claimAmount || 0), 0);
+                      const settled = matched.reduce((sum: number, c: any) => sum + Number(c.approvedAmount || 0), 0);
+                      const pct = stats.totalClaimed > 0 ? (claimed / stats.totalClaimed) * 100 : 0;
+                      return (
+                        <tr key={range.name} className="hover:bg-slate-50/50">
+                          <td className="px-3 py-2">
+                            <span className="font-medium block">{range.name}</span>
+                            <div className="w-full bg-slate-100 h-1.5 rounded-full mt-1.5 overflow-hidden">
+                              <div className="bg-amber-500 h-full rounded-full" style={{ width: `${Math.max(3, pct)}%` }} />
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-center font-semibold">{matched.length}</td>
+                          <td className="px-3 py-2 text-right">₹{claimed.toLocaleString('en-IN')}</td>
+                          <td className="px-3 py-2 text-right text-emerald-600 font-semibold">₹{settled.toLocaleString('en-IN')}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+
+
+      {viewMode === 'table' ? (
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+          <DataTable
+            columns={COLS.map(c => ({ ...c, sortable: c.key !== 'actions' }))}
+            data={paginatedClaims}
+            total={sortedClaims.length}
+            page={page}
+            pageSize={20}
+            scrollAreaHeight="420px"
+            showPagination
+            horizontalScroll
+            loading={isLoading}
+            rowKey={r => r.id}
+            onPageChange={setPage}
+            sortKey={sortKey}
+            sortDir={sortDir}
+            onSort={(k) => {
+              if (sortKey === k) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+              else { setSortKey(k); setSortDir('asc'); }
+            }}
+            onRowClick={r => {
+              setSelectedClaim(r);
+              setDetailOpen(true);
+            }}
+          />
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 pb-4 flex-1 overflow-y-auto custom-scrollbar" style={{ maxHeight: 'calc(100vh - 180px)' }}>
+          {['Pending', 'In Progress', 'Approved', 'Rejected', 'Settled'].map(stage => {
+            const stageClaims = sortedClaims.filter(c => getClaimUiStatus(c) === stage);
+            const totalClaimed = stageClaims.reduce((sum, curr) => sum + Number(curr.claimAmount || 0), 0);
+            const AVATAR_BG: Record<string, string> = {
+              'Pending': 'bg-slate-500', 'In Progress': 'bg-blue-500', 'Approved': 'bg-purple-500',
+              'Rejected': 'bg-red-500', 'Settled': 'bg-emerald-500',
+            };
+            const BORDER_TOP: Record<string, string> = {
+              'Pending': 'border-t-4 border-t-slate-400', 'In Progress': 'border-t-4 border-t-blue-500',
+              'Approved': 'border-t-4 border-t-purple-500', 'Rejected': 'border-t-4 border-t-red-500',
+              'Settled': 'border-t-4 border-t-emerald-500',
+            };
+            const SHADOW_HOVER: Record<string, string> = {
+              'Pending': 'hover:shadow-md hover:shadow-slate-500/10 hover:border-slate-400',
+              'In Progress': 'hover:shadow-md hover:shadow-blue-500/10 hover:border-blue-400',
+              'Approved': 'hover:shadow-md hover:shadow-purple-500/10 hover:border-purple-400',
+              'Rejected': 'hover:shadow-md hover:shadow-red-500/10 hover:border-red-400',
+              'Settled': 'hover:shadow-md hover:shadow-emerald-500/10 hover:border-emerald-400',
+            };
+            const RING_COLOR: Record<string, string> = {
+              'Pending': 'ring-slate-500/20', 'In Progress': 'ring-blue-500/20', 'Approved': 'ring-purple-500/20',
+              'Rejected': 'ring-red-500/20', 'Settled': 'ring-emerald-500/20',
+            };
+            return (
+              <div
+                key={stage}
+                className="flex flex-col min-w-0"
+              >
+                <div className="flex items-center justify-between mb-2 px-1.5 py-1 select-none">
+                  <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                    <span className={clsx('h-2 w-2 rounded-full shrink-0',
+                      stage === 'Pending' && 'bg-slate-500',
+                      stage === 'In Progress' && 'bg-blue-500',
+                      stage === 'Approved' && 'bg-purple-500',
+                      stage === 'Rejected' && 'bg-red-500',
+                      stage === 'Settled' && 'bg-emerald-500'
+                    )} />
+                    <span className="text-xs font-bold text-slate-800 truncate">{stage}</span>
+                    <span className="text-[10px] font-bold text-slate-400 bg-slate-100 border border-slate-200/50 px-1 py-0.5 rounded-md shrink-0">{stageClaims.length}</span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1">
+                    <span className="text-[9px] text-slate-400 font-bold shrink-0">
+                      ₹{totalClaimed >= 100000 ? `${(totalClaimed / 100000).toFixed(1)}L` : `${(totalClaimed / 1000).toFixed(1)}K`}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex-1 min-h-[350px] rounded-xl border p-1.5 space-y-1.5 transition-all duration-200 overflow-y-auto custom-scrollbar bg-slate-50/50">
+                  {stageClaims.map(c => {
+                    const notes = getClaimNotesData(c.notes);
+                    const emp = employees.find((e: any) => e.id === c.assignedEmployeeId);
+                    const assigneeName = emp ? `${emp.firstName} ${emp.lastName}` : 'Unassigned';
+                    return (
+                      <div
+                        key={c.id}
+                        onClick={() => {
+                          setSelectedClaim(c);
+                          setDetailOpen(true);
+                        }}
+                        className={clsx(
+                          'bg-white rounded-2xl p-4 shadow-sm border border-slate-100 cursor-pointer hover:-translate-y-0.5 transition-[transform,box-shadow,border-color] duration-150 flex flex-col gap-3 group relative overflow-hidden',
+                          BORDER_TOP[stage] ?? 'border-t-4 border-t-slate-300',
+                          SHADOW_HOVER[stage] ?? 'hover:shadow-slate-500/10'
+                        )}
+                      >
+                        <div className="flex items-center justify-between min-w-0">
+                          <div className="flex flex-wrap items-center gap-2 min-w-0">
+                            <div className={clsx('h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0 shadow-sm ring-4',
+                              AVATAR_BG[stage] ?? 'bg-slate-500', RING_COLOR[stage] ?? 'ring-slate-500/20')}>
+                              {`${c.contact?.firstName?.[0] ?? ''}${c.contact?.lastName?.[0] ?? ''}`.toUpperCase() || 'CL'}
+                            </div>
+                            <span className="flex items-center gap-0.5 px-1.5 py-0.5 rounded border border-slate-200 text-[9px] font-bold text-slate-600 bg-slate-50 tracking-wider">
+                              {c.claimNumber || 'NO-ID'}
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity bg-white pl-1.5" onClick={e => e.stopPropagation()}>
+                            <button onClick={() => setEditTarget(c)} className="p-1 rounded text-gray-400 hover:text-blue-600 hover:bg-slate-50 transition-colors" title="Edit Claim">
+                              <Pencil size={11} />
+                            </button>
+                            <button onClick={() => setDeleteTarget(c)} className="p-1 rounded text-gray-400 hover:text-red-500 hover:bg-slate-50 transition-colors" title="Delete Claim">
+                              <Trash2 size={11} />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="min-w-0">
+                          <h4 className="text-[13px] font-bold text-slate-900 leading-snug hover:text-blue-600 transition-colors truncate">
+                            {c.contact?.firstName} {c.contact?.lastName}
+                          </h4>
+                          <p className="text-[10px] text-slate-500 font-medium mt-0.5">Filed {c.intimatedAt ? format(new Date(c.intimatedAt), 'dd/MMM/yyyy') : ''}</p>
+                          {notes.uiClaimStatus && (
+                            <p className="text-[10px] text-blue-700 font-semibold mt-1">{notes.uiClaimStatus}</p>
+                          )}
+                        </div>
+
+                        <div className="border-t border-slate-100/80 my-0.5" />
+
+                        <div className="space-y-1.5 text-xs text-slate-700 font-medium">
+                          <div className="flex flex-wrap items-center gap-2 min-w-0">
+                            <MapPin size={12} className="text-slate-500 shrink-0" />
+                            <span className="truncate">{notes.hospital || 'Unknown Hospital'}</span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 min-w-0">
+                            <Shield size={12} className="text-slate-500 shrink-0" />
+                            <span className="truncate font-semibold text-slate-800">{c.policy?.plan?.name || c.claimType || 'No Plan'}</span>
+                          </div>
+
+                          {((c.policy as any)?.sumAssured != null || (c.policy as any)?.sumInsured != null || notes.deathSumInsured) && (
+                            <div className="flex items-center justify-between bg-slate-50 border border-slate-200/60 rounded-lg px-2.5 py-1 text-xs font-semibold text-slate-700">
+                              <span className="text-[10px] text-slate-500 font-medium uppercase tracking-wider">Sum Assured</span>
+                              <span className="font-bold text-slate-800 text-xs">
+                                ₹{Number((c.policy as any)?.sumAssured ?? (c.policy as any)?.sumInsured ?? notes.deathSumInsured).toLocaleString('en-IN')}
+                              </span>
+                            </div>
+                          )}
+
+                          <div className="flex items-center justify-between bg-emerald-50/80 border border-emerald-200/80 rounded-lg px-2.5 py-1 text-xs font-semibold text-emerald-900 mt-1">
+                            <span className="text-[11px] text-emerald-700 font-medium">Claimed</span>
+                            <span className="font-bold text-emerald-800 text-xs">
+                              ₹{Number(c.claimAmount || 0).toLocaleString('en-IN')}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between bg-blue-50/80 border border-blue-200/80 rounded-lg px-2.5 py-1 text-xs font-semibold text-blue-900 mt-1">
+                            <span className="text-[11px] text-blue-700 font-medium">Settled</span>
+                            <span className="font-bold text-blue-800 text-xs">
+                              {c.approvedAmount ? `₹${Number(c.approvedAmount).toLocaleString('en-IN')}` : '—'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between border-t border-slate-100 pt-2.5 mt-0.5 gap-2" onClick={e => e.stopPropagation()}>
+                          <div className="flex flex-wrap items-center gap-1 text-slate-500 text-[9px] font-semibold truncate">
+                            <UserCircle2 size={10} className="text-slate-400 shrink-0" />
+                            <span className="truncate">{assigneeName}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {stageClaims.length === 0 && (
+                    <div className="flex flex-col items-center justify-center py-8 text-slate-400">
+                      <LayoutGrid size={32} className="opacity-20 mb-2" />
+                      <p className="text-xs font-medium">No claims</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Create Modal */}
+      <Modal 
+        open={modalOpen} 
+        onClose={closeModal} 
+        closeOnEscapeAndBackdrop={false}
+        title="Add New Claim" 
+        size="2xl"
+        actions={
+          <button type="submit" form="add-claim-form" className="btn-primary py-1.5 px-5 text-xs shadow-sm bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 border-0" disabled={createClaim.isPending}>
+            {createClaim.isPending ? 'Saving...' : 'Save Claim'}
+          </button>
+        }
+      >
+        <>
+          <div className="pb-3 text-xs text-slate-400 font-semibold -mt-1 mb-4 border-b border-slate-100">
+            Enter details for the new insurance claim.
+          </div>
+          <form id="add-claim-form" onSubmit={handleSubmit(onSubmit, onInvalid)} className="space-y-3">
+            
+            {/* Modal sub-navigation tabs */}
+          <div className="flex bg-slate-200/60 p-1.5 rounded-2xl mt-0 mb-3 gap-2 border border-slate-200/80 overflow-x-auto shadow-2xs">
+            {['Claim Details', 'Policy Details', 'Hospital Details', 'Claim Approval Details', 'File Uploads', 'History'].map(tab => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setActiveClaimTab(tab)}
+                className={clsx(
+                  'px-5 py-2.5 rounded-xl text-xs font-extrabold tracking-wide transition-all cursor-pointer whitespace-nowrap',
+                  activeClaimTab === tab
+                    ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md shadow-blue-500/25 scale-[1.02]'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
+                )}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
+
+          <div className="space-y-4">
+            {activeClaimTab === 'Claim Details' && (
+              <div className="space-y-4 animate-fadeIn">
+                
+                {/* Proposer Details Collapsible */}
+                <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden">
+                  <div
+                    className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none"
+                    onClick={() => toggleCollapse('newProposer')}
+                  >
+                    <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">1</span>
+                      Proposer & Policy Details
+                    </h4>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-slate-400 font-semibold">Customer & Policy Data</span>
+                      <ChevronDown size={16} className={`text-slate-500 transition-transform duration-200 ${collapsedSections['newProposer'] ? 'rotate-180' : ''}`} />
+                    </div>
+                  </div>
+                  {!collapsedSections['newProposer'] && (
+                    <div className="p-4 space-y-4">
+                      {/* Select Customer */}
+                  <div className="relative">
+                    <label className="label text-xs font-bold text-slate-700">Select Customer / Proposer <span className="text-red-500">*</span></label>
+                    <input type="hidden" {...register('contactId')} />
+                    <div className="relative mt-1">
+                      <input
+                        type="text"
+                        value={selectedContact ? `${selectedContact.firstName} ${selectedContact.lastName} ${selectedContact.phone ? `(${selectedContact.phone})` : ''}` : contactSearch}
+                        onChange={e => {
+                          const val = e.target.value;
+                          if (selectedContact) {
+                            setSelectedContact(null);
+                            setValue('contactId', '');
+                            setSelectedPolicy(null);
+                            setValue('policyId', '');
+                          }
+                          setContactSearch(val);
+                          setContactDropdown(true);
+                        }}
+                        onFocus={() => setContactDropdown(true)}
+                        onBlur={() => setTimeout(() => setContactDropdown(false), 250)}
+                        placeholder="Search customer by name, phone, or email..."
+                        className="input w-full pl-10 pr-10 bg-white text-xs h-10 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                      />
+                      <User size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                      {selectedContact ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedContact(null);
+                            setValue('contactId', '');
+                            setSelectedPolicy(null);
+                            setValue('policyId', '');
+                            setContactSearch('');
+                            setContactDropdown(true);
+                          }}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold bg-slate-100 hover:bg-slate-200 rounded-full w-5 h-5 flex items-center justify-center cursor-pointer"
+                          title="Clear selection"
+                        >
+                          ✕
+                        </button>
+                      ) : (
+                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">▼</span>
+                      )}
+                    </div>
+                    {contactDropdown && !selectedContact && (
+                      <ul className="absolute top-full left-0 z-50 mt-1 w-full bg-white border border-slate-200 rounded-xl shadow-xl max-h-48 overflow-y-auto divide-y divide-slate-100">
+                        {(contactResults?.data ?? []).length === 0 ? (
+                          <li className="px-3 py-2.5 text-xs text-slate-400 font-medium">No customers found matching "{contactSearch}"</li>
+                        ) : (
+                          (contactResults?.data ?? []).map((c: any) => (
+                            <li
+                              key={c.id}
+                              onMouseDown={() => {
+                                setSelectedContact(c);
+                                setValue('contactId', c.id, { shouldValidate: true });
+                                setSelectedPolicy(null);
+                                setValue('policyId', '');
+                                setContactDropdown(false);
+                                setContactSearch('');
+                              }}
+                              className="flex items-center justify-between px-3 py-2.5 text-xs hover:bg-blue-50/80 cursor-pointer transition-colors"
+                            >
+                              <div className="flex flex-col min-w-0">
+                                <span className="font-bold text-slate-800 truncate">{c.firstName} {c.lastName}</span>
+                                <span className="text-[10px] text-slate-400 truncate">{c.phone || c.email || 'No contact info'}</span>
+                              </div>
+                              <span className="text-[10px] font-semibold text-blue-600 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-full shrink-0">Select</span>
+                            </li>
+                          ))
+                        )}
+                      </ul>
+                    )}
+                  </div>
+
+                  {/* Select Policy & Patient / Insured Person */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {/* Select Policy */}
+                    <div>
+                      <label className="label text-xs font-bold text-slate-700">Select Policy Number <span className="text-red-500">*</span></label>
+                      <input type="hidden" {...register('policyId')} />
+                      <CustomSelect
+                        className="input w-full bg-white mt-1 text-xs h-10 rounded-xl border border-slate-200"
+                        value={selectedPolicy?.id || watch('policyId') || ''}
+                        placeholder={selectedContact ? (activeContactPolicies.length === 0 ? 'No policies found for this customer' : 'Select Policy Number (e.g. 2023-24)') : 'Select Customer First'}
+                        disabled={!selectedContact || activeContactPolicies.length === 0}
+                        options={activeContactPolicies.map((p: any) => {
+                          const polNo = p.policyNumber || p.policyNo || 'Policy #' + p.id?.slice(-6);
+                          const yr = getPolicyYearString(p);
+                          const label = yr ? `${polNo} (${yr})` : polNo;
+                          const compName = p.plan?.company?.name || p.companyName || '';
+                          const plName = p.plan?.name || p.productName || '';
+                          const sublabel = [compName, plName].filter(Boolean).join(' · ');
+                          return {
+                            value: p.id,
+                            label,
+                            sublabel: sublabel || undefined,
+                            badge: p.status || p.displayStatus || undefined,
+                          };
+                        })}
+                        onChange={(pId) => {
+                          const p = activeContactPolicies.find((pol: any) => pol.id === pId);
+                          if (p) {
+                            setSelectedPolicy(p);
+                            setValue('policyId', p.id, { shouldValidate: true });
+                            setValue('insuranceCompany', p.plan?.company?.name || p.companyName || '');
+                            setValue('insuranceCompanyCategory', p.plan?.company?.category || p.category || 'Health');
+                            setValue('insuranceProductName', p.plan?.name || p.productName || '');
+                            setValue('agentName', p.agent?.firstName ? `${p.agent.firstName} ${p.agent.lastName}` : (p.agentName || ''));
+                            const sa = p.sumAssured != null ? p.sumAssured : (p.sumInsured != null ? p.sumInsured : (p.plan?.sumInsured != null ? p.plan.sumInsured : ''));
+                            setValue('deathSumInsured', sa !== '' ? String(sa) : '');
+                            const fetchedNoms = extractNomineesFromPolicy(p);
+                            setNewNominees(fetchedNoms);
+                            if (fetchedNoms.length > 0) {
+                              setCollapsedSections(prev => ({ ...prev, newNominee: false }));
+                            }
+                          } else {
+                            setSelectedPolicy(null);
+                            setValue('policyId', '');
+                            setValue('insuranceCompany', '');
+                            setValue('insuranceProductName', '');
+                            setValue('agentName', '');
+                            setValue('deathSumInsured', '');
+                          }
+                        }}
+                      />
+                      {selectedContact && activeContactPolicies.length === 0 && (
+                        <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200/80 rounded-lg p-2 mt-1.5 flex items-center gap-1.5 font-medium">
+                          <AlertTriangle size={14} className="text-amber-600 shrink-0" />
+                          <span>No policy found for {selectedContact.firstName} {selectedContact.lastName}. A policy is required to file a claim.</span>
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Patient / Insured Person Name */}
+                    <div>
+                      <label className="label text-xs font-bold text-slate-700">Insured Person Name / Patient Name</label>
+                      <select
+                        className="input w-full bg-white mt-1 text-xs h-10 rounded-xl border border-slate-200"
+                        {...register('patientName')}
+                      >
+                        <option value="">Select Insured Person / Patient Name</option>
+                        {selectedContact ? (
+                          <>
+                            <option value={`${selectedContact.firstName} ${selectedContact.lastName}`}>
+                              SELF - {selectedContact.firstName} {selectedContact.lastName}
+                            </option>
+                            {(contactDetail?.data?.relationships || []).map((r: any) => {
+                              const c = r.relatedContact;
+                              if (!c) return null;
+                              const fullName = `${c.firstName} ${c.lastName}`;
+                              return (
+                                <option key={c.id} value={fullName}>
+                                  {r.relationshipType} - {fullName}
+                                </option>
+                              );
+                            })}
+                          </>
+                        ) : (
+                          <option value="Self / Primary Insured">Self / Primary Insured</option>
+                        )}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Auto-Fetched Policy Details & Assigned Employee */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="label text-slate-700 font-bold">Insurance Company Category</label>
+                      <input {...register('insuranceCompanyCategory')} placeholder="e.g. Health" className="input mt-1 bg-white text-slate-800" />
+                    </div>
+                    <div>
+                      <label className="label text-slate-700 font-bold">Insurance Company</label>
+                      <input {...register('insuranceCompany')} placeholder="e.g. Star Health" className="input mt-1 bg-white text-slate-800" />
+                    </div>
+                    <div>
+                      <label className="label text-slate-700 font-bold">Product Name</label>
+                      <input {...register('insuranceProductName')} placeholder="Product Name..." className="input mt-1 bg-white text-slate-800" />
+                    </div>
+                    <div>
+                      <label className="label text-slate-700 font-bold">Agent Name</label>
+                      <input {...register('agentName')} placeholder="Agent Name..." className="input mt-1 bg-white text-slate-800" />
+                    </div>
+                    <div>
+                      <label className="label text-slate-700 font-bold flex items-center gap-1.5">
+                        Sum Insured / Sum Assured
+                        {watch('deathSumInsured') && (
+                          <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 border border-emerald-100 px-1.5 py-0.5 rounded-full">
+                            Auto-fetched: ₹{Number(watch('deathSumInsured')).toLocaleString('en-IN')}
+                          </span>
+                        )}
+                      </label>
+                      <input
+                        {...register('deathSumInsured')}
+                        placeholder="Auto-fetched from policy"
+                        className="input mt-1 bg-white text-slate-800 font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="label">Assigned Employee</label>
+                      <CustomSelect
+                        className="input mt-1 bg-white"
+                        value={watch('assignedEmployeeId') || ''}
+                        onChange={val => setValue('assignedEmployeeId', val)}
+                        placeholder="Unassigned"
+                        options={[
+                          { value: '', label: 'Unassigned' },
+                          ...employees.map((e: any) => ({
+                            value: e.userId || e.id,
+                            label: `${e.firstName} ${e.lastName}`
+                          }))
+                        ]}
+                      />
+                    </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+              
+              {/* Claim Details Collapsible */}
+                <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden">
+                  <div
+                    className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none"
+                    onClick={() => toggleCollapse('newClaim')}
+                  >
+                    <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">2</span>
+                      Claim Details
+                    </h4>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-slate-400 font-semibold">Diagnosis & Status</span>
+                      <ChevronDown size={16} className={`text-slate-500 transition-transform duration-200 ${collapsedSections['newClaim'] ? 'rotate-180' : ''}`} />
+                    </div>
+                  </div>
+                  {!collapsedSections['newClaim'] && (
+                    <div className="p-4 space-y-4">
+                      {/* Row: Claim Type | Claim Number | Sub Claim No */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div>
+                      <label className="label">Claim Type <span className="text-red-500">*</span></label>
+                      <CustomSelect
+                        className="input mt-1"
+                        value={watch('claimType') || 'Cashless'}
+                        onChange={val => setValue('claimType', val)}
+                        options={getActiveDropdownOptions('Claim', 'Claim Type', CLAIM_TYPES_OPTIONS)}
+                      />
+                    </div>
+                    <div>
+                      <label className="label">Claim Number <span className="text-red-500">*</span></label>
+                      <input {...register('claimNumber')} className="input mt-1" placeholder="CLM-XXXXXXXX" />
+                    </div>
+                    <div>
+                      <label className="label">Sub Claim No</label>
+                      <input {...register('subClaimNo')} className="input mt-1" placeholder="Optional" />
+                    </div>
+                  </div>
+
+                  {/* Row: Status | Intimation Date */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="label">Claim Status</label>
+                      <CustomSelect
+                        className="input mt-1"
+                        value={watch('uiClaimStatus') || ''}
+                        onChange={val => setValue('uiClaimStatus', val)}
+                        placeholder="Select Status"
+                        options={getActiveDropdownOptions('Claim', 'Claim Status', CLAIM_STATUS_OPTIONS)}
+                      />
+                    </div>
+                    <div>
+                      <label className="label">Intimation Date <span className="text-red-500">*</span></label>
+                      <input type="date" max={getTodayDateInputValue()} {...register('intimatedAt')} className="input mt-1 py-1 text-xs" />
+                    </div>
+                  </div>
+
+                  {/* Row: Diagnosis | Comment */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="label">Diagnosis / Ailment</label>
+                      <input {...register('diagnosis')} className="input mt-1" placeholder="e.g. Dengue Fever" />
+                    </div>
+                    <div>
+                      <label className="label">Comment</label>
+                      <textarea {...register('comment')} className="input mt-1" rows={2} placeholder="Add a comment..." />
+                    </div>
+                  </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Incident & Death Details Collapsible */}
+                <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden mt-4">
+                  <div
+                    className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none"
+                    onClick={() => toggleCollapse('newDeath')}
+                  >
+                    <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-700 text-[10px] font-bold flex items-center justify-center shadow-2xs">3</span>
+                      Incident &amp; Death Details <span className="text-[10px] lowercase text-slate-400 font-normal">(optional)</span>
+                    </h4>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-slate-400 font-semibold">Only for Death claims</span>
+                      <ChevronDown size={16} className={`text-slate-500 transition-transform duration-200 ${collapsedSections['newDeath'] ? 'rotate-180' : ''}`} />
+                    </div>
+                  </div>
+                  {!collapsedSections['newDeath'] && (
+                    <div className="p-4 bg-slate-50/40 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                      <div>
+                        <label className="label text-slate-700 font-bold">Date of Admission <br/><span className="text-[10px] font-normal text-slate-500">(In case of hosp.)</span></label>
+                        <input
+                          type="date"
+                          max={new Date().toISOString().substring(0, 10)}
+                          {...register('deathAdmissionDate', {
+                            onChange: (e: any) => {
+                              const val = e.target.value;
+                              if (val && new Date(val) > new Date()) {
+                                toast.error("Date of Admission cannot be a future date");
+                                setValue('deathAdmissionDate', '');
+                              }
+                            }
+                          })}
+                          className="input mt-1 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-slate-700 font-bold">Cause of Death</label>
+                        <CustomSelect
+                          className="input mt-1 bg-white"
+                          value={watch('causeOfDeath') || ''}
+                          onChange={val => setValue('causeOfDeath', val)}
+                          placeholder="Select Cause"
+                          options={['Accidental', 'Non-Accidental', 'Murder', 'Natural', 'Suicide', 'Other']}
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-slate-700 font-bold">Date of Occurrence <br/><span className="text-[10px] font-normal text-slate-500">(Accident, Attack, etc)</span></label>
+                        <input
+                          type="date"
+                          max={new Date().toISOString().substring(0, 10)}
+                          {...register('dateOfOccurance', {
+                            onChange: (e: any) => {
+                              const val = e.target.value;
+                              if (val && new Date(val) > new Date()) {
+                                toast.error("Date of Occurrence cannot be a future date");
+                                setValue('dateOfOccurance', '');
+                              }
+                            }
+                          })}
+                          className="input mt-1 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-slate-700 font-bold">Date of Death</label>
+                        <input
+                          type="date"
+                          max={new Date().toISOString().substring(0, 10)}
+                          {...register('dateOfDeath', {
+                            onChange: (e: any) => {
+                              const val = e.target.value;
+                              if (val && new Date(val) > new Date()) {
+                                toast.error("Date of Death cannot be a future date");
+                                setValue('dateOfDeath', '');
+                              }
+                            }
+                          })}
+                          className="input mt-1 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-slate-700 font-bold">Was in Coma?</label>
+                        <CustomSelect
+                          className="input mt-1 bg-white"
+                          value={watch('wasInComa') || ''}
+                          onChange={val => setValue('wasInComa', val)}
+                          placeholder="Select"
+                          options={['Yes', 'No']}
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-slate-700 font-bold">Sum Insured</label>
+                        <input {...register('deathSumInsured')} className="input mt-1 bg-white" placeholder="Auto-fetch or manual" />
+                      </div>
+                      <div>
+                        <label className="label text-slate-700 font-bold">
+                          Total Claimed Amount (Optional)
+                        </label>
+                        <input {...register('deathTotalClaimedAmount')} className="input mt-1 bg-white" placeholder="₹0" />
+                      </div>
+                      <div className="sm:col-span-2 lg:col-span-1">
+                        <label className="label text-slate-700 font-bold">Comment</label>
+                        <textarea {...register('deathComment')} className="input mt-1 bg-white" rows={1} />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Nominee Details Collapsible */}
+                <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden mt-4">
+                  <div
+                    className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none"
+                    onClick={() => toggleCollapse('newNominee')}
+                  >
+                    <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-700 text-[10px] font-bold flex items-center justify-center shadow-2xs">4</span>
+                      Nominee Details
+                      {availableConnectedPersonsInCreate.length > 0 ? (
+                        <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-full normal-case flex items-center gap-1">
+                          <Users size={11} className="text-emerald-600" />
+                          {availableConnectedPersonsInCreate.length} Available from Policy/Contact
+                        </span>
+                      ) : newNominees.length > 0 ? (
+                        <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-full normal-case">
+                          {newNominees.length} Added
+                        </span>
+                      ) : null}
+                    </h4>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-slate-400 font-semibold">Multiple allowed</span>
+                      <ChevronDown size={16} className={`text-slate-500 transition-transform duration-200 ${collapsedSections['newNominee'] ? 'rotate-180' : ''}`} />
+                    </div>
+                  </div>
+                  {!collapsedSections['newNominee'] && (
+                    <div className="p-4 space-y-3">
+                      {/* Quick action chips for available connected persons and policy nominees */}
+                      {availableConnectedPersonsInCreate.length > 0 && (
+                        <div className="p-3 rounded-xl bg-gradient-to-r from-blue-50/80 via-indigo-50/40 to-slate-50 border border-blue-100/90 space-y-2">
+                          <div className="flex items-center justify-between flex-wrap gap-1">
+                            <span className="text-xs font-bold text-blue-900 flex items-center gap-1.5">
+                              <Users size={14} className="text-blue-600" />
+                              Connected Persons & Nominees from Policy / Contact:
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setNewNominees(availableConnectedPersonsInCreate.map(p => ({
+                                  name: p.name,
+                                  relationship: p.relationship,
+                                  phone: p.phone,
+                                  dob: p.dob,
+                                  percentage: p.percentage || (availableConnectedPersonsInCreate.length === 1 ? '100' : ''),
+                                  comment: p.comment || '',
+                                })));
+                              }}
+                              className="text-[10px] font-bold text-blue-700 bg-white hover:bg-blue-100 px-2.5 py-1 rounded-md border border-blue-200 shadow-2xs transition-colors"
+                            >
+                              Auto-fill All ({availableConnectedPersonsInCreate.length})
+                            </button>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {availableConnectedPersonsInCreate.map((p, idx) => (
+                              <button
+                                key={idx}
+                                type="button"
+                                onClick={() => {
+                                  setNewNominees(prev => {
+                                    const emptyIdx = prev.findIndex(n => !(n.name || '').trim());
+                                    if (emptyIdx !== -1) {
+                                      const updated = [...prev];
+                                      updated[emptyIdx] = {
+                                        ...updated[emptyIdx],
+                                        name: p.name,
+                                        relationship: p.relationship,
+                                        phone: p.phone,
+                                        dob: p.dob,
+                                        percentage: p.percentage || updated[emptyIdx].percentage || '',
+                                        comment: p.comment || updated[emptyIdx].comment || '',
+                                      };
+                                      return updated;
+                                    }
+                                    return [...prev, {
+                                      name: p.name,
+                                      relationship: p.relationship,
+                                      phone: p.phone,
+                                      dob: p.dob,
+                                      percentage: p.percentage || (prev.length === 0 ? '100' : ''),
+                                      comment: p.comment || '',
+                                    }];
+                                  });
+                                }}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white hover:bg-blue-100/80 text-slate-800 rounded-lg text-xs font-medium border border-blue-200/80 shadow-2xs transition-all hover:scale-[1.01]"
+                                title="Click to fill or add this connected person as nominee"
+                              >
+                                <span className="font-bold text-blue-700">+ {p.name}</span>
+                                {p.relationship && <span className="text-[10px] text-slate-500 font-normal">({p.relationship})</span>}
+                                {p.phone && <span className="text-[10px] text-slate-400 font-normal">· {p.phone}</span>}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {newNominees.length === 0 && (
+                        <p className="text-xs text-slate-400 italic text-center py-2">No nominees yet. Select a policy or contact to auto-fetch, or add manually below.</p>
+                      )}
+                      {newNominees.map((nom, index) => (
+                        <div key={index} className="rounded-xl border border-slate-100 bg-slate-50/60 p-3 space-y-2">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Nominee #{index + 1}</span>
+                            <div className="flex items-center gap-2">
+                              {nom.name && <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 border border-emerald-100 px-1.5 py-0.5 rounded-full">Auto-fetched</span>}
+                              <button type="button" onClick={() => removeNewNominee(index)} className="bg-red-50 text-red-500 hover:bg-red-100 px-2 py-0.5 rounded-lg text-[10px] font-bold transition-colors">Remove</button>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <label className="label text-[10px]">Nominee Name</label>
+                                {availableConnectedPersonsInCreate.length > 0 && (
+                                  <select
+                                    className="text-[9px] py-0 px-1 border border-blue-200 rounded text-blue-700 bg-white cursor-pointer max-w-[100px] truncate"
+                                    value=""
+                                    onChange={e => {
+                                      const selectedName = e.target.value;
+                                      const found = availableConnectedPersonsInCreate.find(p => p.name === selectedName);
+                                      if (found) {
+                                        handleNewNomineeChange(index, 'name', found.name);
+                                        handleNewNomineeChange(index, 'relationship', found.relationship);
+                                        handleNewNomineeChange(index, 'phone', found.phone);
+                                        handleNewNomineeChange(index, 'dob', found.dob);
+                                        if (found.percentage) handleNewNomineeChange(index, 'percentage', String(found.percentage));
+                                      }
+                                    }}
+                                  >
+                                    <option value="">Select Person</option>
+                                    {availableConnectedPersonsInCreate.map((p, pIdx) => (
+                                      <option key={pIdx} value={p.name}>
+                                        {p.name} {p.relationship ? `(${p.relationship})` : ''}
+                                      </option>
+                                    ))}
+                                  </select>
+                                )}
+                              </div>
+                              <input 
+                                value={nom.name} 
+                                onChange={e => {
+                                  const val = e.target.value;
+                                  handleNewNomineeChange(index, 'name', val);
+                                  const match = availableConnectedPersonsInCreate.find(p => p.name.toLowerCase() === val.trim().toLowerCase());
+                                  if (match) {
+                                    if (match.relationship && !nom.relationship) handleNewNomineeChange(index, 'relationship', match.relationship);
+                                    if (match.phone && !nom.phone) handleNewNomineeChange(index, 'phone', match.phone);
+                                    if (match.dob && !nom.dob) handleNewNomineeChange(index, 'dob', match.dob);
+                                    if (match.percentage && !nom.percentage) handleNewNomineeChange(index, 'percentage', String(match.percentage));
+                                  }
+                                }} 
+                                className="input py-1 text-xs bg-white" 
+                                list={`claim-create-connected-suggestions-${index}`}
+                                placeholder="Full Name" 
+                              />
+                              <datalist id={`claim-create-connected-suggestions-${index}`}>
+                                {availableConnectedPersonsInCreate.map((p, pIdx) => (
+                                  <option key={pIdx} value={p.name}>{p.relationship ? `${p.relationship} - ` : ''}{p.phone}</option>
+                                ))}
+                              </datalist>
+                            </div>
+                            <div>
+                              <label className="label text-[10px]">Relationship</label>
+                              <input value={nom.relationship} onChange={e => handleNewNomineeChange(index, 'relationship', e.target.value)} className="input mt-1 py-1 text-xs bg-white" placeholder="e.g. Spouse" />
+                            </div>
+                            <div>
+                              <label className="label text-[10px]">Contact No.</label>
+                              <input
+                                value={nom.phone}
+                                maxLength={10}
+                                placeholder="10 digits"
+                                onChange={e => handleNewNomineeChange(index, 'phone', e.target.value.replace(/\D/g, '').slice(0, 10))}
+                                className="input mt-1 py-1 text-xs bg-white"
+                              />
+                            </div>
+                            <div>
+                              <label className="label text-[10px]">Date of Birth</label>
+                              <input type="date" value={nom.dob} onChange={e => handleNewNomineeChange(index, 'dob', e.target.value)} className="input mt-1 py-1 text-xs bg-white" />
+                            </div>
+                            <div>
+                              <label className="label text-[10px]">Share (%)</label>
+                              <input type="number" value={nom.percentage} onChange={e => handleNewNomineeChange(index, 'percentage', e.target.value)} className="input mt-1 py-1 text-xs bg-white" placeholder="100" />
+                            </div>
+                          </div>
+                          <div>
+                            <label className="label text-[10px]">Comment (optional)</label>
+                            <input value={nom.comment} onChange={e => handleNewNomineeChange(index, 'comment', e.target.value)} placeholder="Any remarks..." className="input mt-1 py-1 text-xs bg-white w-full" />
+                          </div>
+                        </div>
+                      ))}
+                      <div className="flex items-center gap-2 pt-1">
+                        <button type="button" onClick={addNewNomineeRow} className="text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors border border-blue-100">
+                          + Add Nominee
+                        </button>
+                        {availableConnectedPersonsInCreate.length > 0 && (
+                          <button 
+                            type="button" 
+                            onClick={() => {
+                              setNewNominees(availableConnectedPersonsInCreate.map(p => ({
+                                name: p.name,
+                                relationship: p.relationship,
+                                phone: p.phone,
+                                dob: p.dob,
+                                percentage: p.percentage || (availableConnectedPersonsInCreate.length === 1 ? '100' : ''),
+                                comment: p.comment || '',
+                              })));
+                            }}
+                            className="text-xs font-medium text-slate-600 bg-slate-100 px-3 py-1.5 rounded-lg hover:bg-slate-200 transition-colors border border-slate-200"
+                          >
+                            Reset & Auto-fill from Policy/Contact
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeClaimTab === 'Policy Details' && (
+              <ClaimPolicyDetailsTab
+                policy={selectedPolicy}
+                policyId={selectedPolicy?.id}
+                contact={selectedContact}
+                onGoToClaimTab={() => setActiveClaimTab('Claim Details')}
+              />
+            )}
+
+            {activeClaimTab === 'Hospital Details' && (
+              <div className="space-y-4 animate-fadeIn">
+                <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden">
+                  <div
+                    className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none"
+                    onClick={() => toggleCollapse('newHospital')}
+                  >
+                    <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">H</span>
+                      Hospital Details
+                    </h4>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-slate-400 font-semibold">Location & Contact</span>
+                      <ChevronDown size={16} className={`text-slate-500 transition-transform duration-200 ${collapsedSections['newHospital'] ? 'rotate-180' : ''}`} />
+                    </div>
+                  </div>
+                  {!collapsedSections['newHospital'] && (
+                    <div className="p-4 space-y-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                        {/* Row 1: Hospital Name (span-2) | State | City */}
+                        <div className="md:col-span-2">
+                          <label className="label text-[10px]">Hospital Name</label>
+                          <input
+                            type="text"
+                            className="input mt-1 py-1 text-xs font-medium"
+                            {...register('hospitalName')}
+                            list="hospital-name-suggestions"
+                            placeholder="Type hospital name..."
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setValue('hospitalName', val);
+                              const hosp = hospitals.find((h: any) => (h.name || h.hospitalName) === val);
+                              if (hosp) {
+                                setValue('hospitalState', hosp.state || hosp.hospitalState || '');
+                                setValue('hospitalCity', hosp.city || hosp.hospitalCity || '');
+                                setValue('hospitalAddress', hosp.address || hosp.hospitalAddress || '');
+                                setValue('hospitalPincode', hosp.pincode || hosp.hospitalPincode || '');
+                                setValue('hospitalContactNo', hosp.phone || hosp.hospitalContactNo || '');
+                                setValue('hospitalEmail', hosp.email || hosp.hospitalEmail || '');
+                                const hType = hosp.type || hosp.hospitalType || '';
+                                if (hType) {
+                                  setValue('hospitalType', hType);
+                                  if (!['Network', 'Non-Network', 'Blacklisted'].includes(hType)) {
+                                    setIsCustomHospitalType(true);
+                                    setCustomHospitalTypeText(hType === 'Other' ? '' : hType);
+                                  } else {
+                                    setIsCustomHospitalType(false);
+                                    setCustomHospitalTypeText('');
+                                  }
+                                }
+                                setValue('hospitalRating', hosp.rating || hosp.hospitalRating || '');
+                                setValue('claimsPerson1Name', hosp.claimsPerson1Name || '');
+                                setValue('claimsPerson1Contact', hosp.claimsPerson1Contact || '');
+                                setValue('claimsPerson2Name', hosp.claimsPerson2Name || '');
+                                setValue('claimsPerson2Contact', hosp.claimsPerson2Contact || '');
+                                setValue('hospitalComment', hosp.comment || hosp.hospitalComment || '');
+                                const docs = hosp.doctors || hosp.hospitalDoctors || [];
+                                if (docs.length > 0 && newDoctors.length === 0) {
+                                  setNewDoctors(docs.map((d: any) => ({
+                                    name: d.name || '',
+                                    degree: d.degree || '',
+                                    registrationNo: d.registrationNo || d.regNo || '',
+                                    contactNo: d.contactNo || d.phone || '',
+                                    speciality: d.speciality || '',
+                                    charges: d.charges || ''
+                                  })));
+                                }
+                              }
+                            }}
+                          />
+                          <datalist id="hospital-name-suggestions">
+                            {hospitals.map((h: any) => (
+                              <option key={h.id} value={h.name || h.hospitalName}>
+                                {h.name || h.hospitalName} {h.city ? `(${h.city})` : ''}
+                              </option>
+                            ))}
+                          </datalist>
+                        </div>
+                        <div>
+                          <label className="label text-[10px]">Hospital State</label>
+                          <input type="text" className="input mt-1 py-1 text-xs" {...register('hospitalState')} placeholder="e.g. Maharashtra" />
+                        </div>
+                        <div>
+                          <label className="label text-[10px]">Hospital City</label>
+                          <input type="text" className="input mt-1 py-1 text-xs" {...register('hospitalCity')} placeholder="e.g. Pune" />
+                        </div>
+
+                        {/* Row 2: Address (span-2) | Pincode | Contact No */}
+                        <div className="md:col-span-2">
+                          <label className="label text-[10px]">Hospital Address</label>
+                          <input type="text" className="input mt-1 py-1 text-xs" {...register('hospitalAddress')} placeholder="Full hospital address..." />
+                        </div>
+                        <div>
+                          <label className="label text-[10px]">Hospital Pincode</label>
+                          <input type="text" className="input mt-1 py-1 text-xs" {...register('hospitalPincode')} />
+                        </div>
+                        <div>
+                          <label className="label text-[10px]">Hospital Contact No</label>
+                          <input 
+                            type="text" 
+                            className="input mt-1 py-1 text-xs" 
+                            placeholder="Enter contact number"
+                            {...register('hospitalContactNo')} 
+                          />
+                        </div>
+
+                        {/* Row 3: Email | Rating | Type */}
+                        <div>
+                          <label className="label text-[10px]">Hospital Email ID</label>
+                          <input type="email" className="input mt-1 py-1 text-xs" {...register('hospitalEmail')} placeholder="hospital@email.com" />
+                        </div>
+                        <div>
+                          <label className="label text-[10px]">Hospital Rating</label>
+                          <CustomSelect
+                            className="input mt-1 py-1 text-xs"
+                            value={watch('hospitalRating') || ''}
+                            onChange={val => setValue('hospitalRating', val)}
+                            placeholder="Select Rating"
+                            options={['5 Star', '4 Star', '3 Star', '2 Star', '1 Star']}
+                          />
+                        </div>
+                        <div>
+                          <label className="label text-[10px]">Hospital Type</label>
+                          {!isCustomHospitalType ? (
+                            <CustomSelect
+                              className="input mt-1 py-1 text-xs"
+                              value={['Network', 'Non-Network', 'Blacklisted'].includes(watchHospitalType || '') ? watchHospitalType : (watchHospitalType ? 'Other' : '')}
+                              onChange={val => {
+                                if (val === 'Other') {
+                                  setIsCustomHospitalType(true);
+                                  setCustomHospitalTypeText('');
+                                  setValue('hospitalType', 'Other');
+                                } else {
+                                  setIsCustomHospitalType(false);
+                                  setCustomHospitalTypeText('');
+                                  setValue('hospitalType', val);
+                                }
+                              }}
+                              placeholder="Select Type"
+                              options={['Network', 'Non-Network', 'Blacklisted', 'Other']}
+                            />
+                          ) : (
+                            <div className="relative mt-1">
+                              <input
+                                type="text"
+                                className="input py-1 pr-7 text-xs w-full"
+                                placeholder="Type hospital type..."
+                                value={customHospitalTypeText}
+                                onChange={e => {
+                                  const val = e.target.value;
+                                  setCustomHospitalTypeText(val);
+                                  setValue('hospitalType', val.trim() ? val : 'Other');
+                                }}
+                                onKeyDown={e => { if (e.key === 'Enter') e.preventDefault(); }}
+                                autoFocus
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsCustomHospitalType(false);
+                                  setCustomHospitalTypeText('');
+                                  setValue('hospitalType', '');
+                                }}
+                                title="Back to list options"
+                                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-blue-600 p-1 rounded hover:bg-slate-100 transition-colors cursor-pointer"
+                              >
+                                <ChevronDown size={14} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-100">
+                        <div className="flex items-center justify-between mb-2">
+                          <h5 className="text-[11px] font-bold text-slate-700">Doctors / Consulting Providers</h5>
+                          {watchHospitalName && ((hospitals.find((h: any) => (h.name || h.hospitalName) === watchHospitalName)?.doctors?.length ?? hospitals.find((h: any) => (h.name || h.hospitalName) === watchHospitalName)?.hospitalDoctors?.length) ?? 0) > 0 && (
+                            <select 
+                              className="input py-0.5 text-[10px] w-auto h-auto font-medium text-blue-700 bg-blue-50 border-blue-200"
+                              onChange={(e) => {
+                                if (e.target.value) {
+                                  const hosp = hospitals.find((h: any) => (h.name || h.hospitalName) === watchHospitalName);
+                                  const docs = hosp?.doctors || hosp?.hospitalDoctors || [];
+                                  const selectedDoc = docs.find((d: any) => d.name === e.target.value);
+                                  if (selectedDoc) {
+                                    setNewDoctors([...newDoctors, { 
+                                      name: selectedDoc.name || '', 
+                                      degree: selectedDoc.degree || '', 
+                                      registrationNo: selectedDoc.registrationNo || selectedDoc.regNo || '', 
+                                      contactNo: selectedDoc.contactNo || selectedDoc.phone || '', 
+                                      speciality: selectedDoc.speciality || '',
+                                      charges: selectedDoc.charges || '' 
+                                    }]);
+                                  } else {
+                                    setNewDoctors([...newDoctors, { name: e.target.value, degree: '', registrationNo: '', contactNo: '', speciality: '', charges: '' }]);
+                                  }
+                                  e.target.value = '';
+                                }
+                              }}
+                            >
+                              <option value="">+ Add Doctor from Hospital</option>
+                              {(hospitals.find((h: any) => (h.name || h.hospitalName) === watchHospitalName)?.doctors || hospitals.find((h: any) => (h.name || h.hospitalName) === watchHospitalName)?.hospitalDoctors || []).map((d: any) => (
+                                <option key={d.id || d.name} value={d.name}>
+                                  {d.name} {d.degree ? `(${d.degree})` : ''} {d.speciality ? `- ${d.speciality}` : ''}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
+                        {newDoctors.map((doc, index) => (
+                          <div key={index} className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-3 items-end border-b border-gray-100 pb-4 mb-2">
+                            <div>
+                              <label className="label text-[10px]">Doctor Name</label>
+                              <input value={doc.name} onChange={e => handleNewDoctorChange(index, 'name', e.target.value)} className="input mt-1 py-1 text-xs" list={`doc-list-${index}`} />
+                              <datalist id={`doc-list-${index}`}>
+                                {watchHospitalName && (hospitals.find((h: any) => h.name === watchHospitalName || h.hospitalName === watchHospitalName)?.doctors || hospitals.find((h: any) => h.name === watchHospitalName || h.hospitalName === watchHospitalName)?.hospitalDoctors || []).map((d: any) => (
+                                  <option key={d.id} value={d.name} />
+                                ))}
+                              </datalist>
+                            </div>
+                            <div>
+                              <label className="label text-[10px]">Doctor Degree</label>
+                              <select
+                                value={doc.degree}
+                                onChange={e => handleNewDoctorChange(index, 'degree', e.target.value)}
+                                className="input mt-1 py-1 text-xs"
+                              >
+                                <option value="">Select Degree</option>
+                                {['MBBS', 'MD', 'MS', 'DM', 'MCh', 'DNB', 'BDS', 'MDS'].map(deg => (
+                                  <option key={deg} value={deg}>{deg}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="label text-[10px]">Doctor Contact No</label>
+                              <input 
+                                value={doc.contactNo} 
+                                maxLength={10}
+                                placeholder="10 digits"
+                                onChange={e => handleNewDoctorChange(index, 'contactNo', e.target.value.replace(/\D/g, '').slice(0, 10))} 
+                                className="input mt-1 py-1 text-xs" 
+                              />
+                            </div>
+                            <div>
+                              <label className="label text-[10px]">Email ID</label>
+                              <input type="email" value={doc.email || ''} onChange={e => handleNewDoctorChange(index, 'email', e.target.value)} placeholder="doctor@email.com" className="input mt-1 py-1 text-xs" />
+                            </div>
+                            <div>
+                              <label className="label text-[10px]">Doctor Speciality</label>
+                              <input value={doc.speciality} onChange={e => handleNewDoctorChange(index, 'speciality', e.target.value)} className="input mt-1 py-1 text-xs" />
+                            </div>
+                            <div className="flex gap-2">
+                              <button type="button" onClick={() => removeNewDoctor(index)} className="mt-1 bg-red-50 text-red-500 hover:bg-red-100 px-2 rounded-lg text-xs font-bold transition-colors">X</button>
+                            </div>
+                          </div>
+                        ))}
+                        <button type="button" onClick={addNewDoctorRow} className="text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors">
+                          + Add Doctor
+                        </button>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-100">
+                        <h5 className="text-[11px] font-bold text-slate-700 mb-2">Enquiry Call / Claims Department Contact</h5>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                          <div>
+                            <label className="label text-[10px]">Person 1 Name</label>
+                            <input type="text" className="input mt-1 py-1 text-xs" {...register('claimsPerson1Name')} />
+                          </div>
+                          <div>
+                            <label className="label text-[10px]">Person 1 Contact No</label>
+                            <input 
+                              type="text" 
+                              className="input mt-1 py-1 text-xs" 
+                              placeholder="Enter contact number"
+                              {...register('claimsPerson1Contact')} 
+                            />
+                          </div>
+                          <div>
+                            <label className="label text-[10px]">Person 2 Name</label>
+                            <input type="text" className="input mt-1 py-1 text-xs" {...register('claimsPerson2Name')} />
+                          </div>
+                          <div>
+                            <label className="label text-[10px]">Person 2 Contact No</label>
+                            <input 
+                              type="text" 
+                              className="input mt-1 py-1 text-xs" 
+                              placeholder="Enter contact number"
+                              {...register('claimsPerson2Contact')} 
+                            />
+                          </div>
+                          <div className="md:col-span-4">
+                            <label className="label text-[10px]">Comment</label>
+                            <textarea className="input mt-1 py-1 text-xs" rows={2} {...register('hospitalComment')} />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Hospitalisation Details Collapsible */}
+                <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden mt-4">
+                  <div
+                    className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none"
+                    onClick={() => toggleCollapse('newHospitalisation')}
+                  >
+                    <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">H</span>
+                      Hospitalisation Details
+                    </h4>
+                    <div className="flex items-center gap-2">
+                      <ChevronDown size={16} className={`text-slate-500 transition-transform duration-200 ${collapsedSections['newHospitalisation'] ? 'rotate-180' : ''}`} />
+                    </div>
+                  </div>
+                  {!collapsedSections['newHospitalisation'] && (
+                    <div className="p-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                        <div>
+                          <label className="label text-[10px]">Date of Admission</label>
+                          <input
+                            type="date"
+                            className="input mt-1 py-1 text-xs"
+                            {...register('admissionAt', {
+                              onBlur: () => {
+                                const adm = formatDateForInput(watchAdmissionAt);
+                                const dis = formatDateForInput(watchDischargeAt);
+                                if (adm && dis && adm > dis) {
+                                  toast.error("Date of Admission cannot be after Date of Discharge");
+                                }
+                              }
+                            })}
+                          />
+                        </div>
+                        <div>
+                          <label className="label text-[10px]">Date of Discharge</label>
+                          <input
+                            type="date"
+                            className="input mt-1 py-1 text-xs"
+                            min={watchAdmissionAt ? formatDateForInput(watchAdmissionAt) : undefined}
+                            onClick={(e) => {
+                              if (!watchAdmissionAt || !formatDateForInput(watchAdmissionAt)) {
+                                e.preventDefault();
+                                toast.error("Please enter Date of Admission first", { id: 'admission-required' });
+                              }
+                            }}
+                            onFocus={() => {
+                              if (!watchAdmissionAt || !formatDateForInput(watchAdmissionAt)) {
+                                toast.error("Please enter Date of Admission first", { id: 'admission-required' });
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (!watchAdmissionAt || !formatDateForInput(watchAdmissionAt)) {
+                                e.preventDefault();
+                                toast.error("Please enter Date of Admission first", { id: 'admission-required' });
+                              }
+                            }}
+                            {...register('dischargeAt', {
+                              onChange: (e: any) => {
+                                if (!watchAdmissionAt || !formatDateForInput(watchAdmissionAt)) {
+                                  toast.error("Please enter Date of Admission first", { id: 'admission-required' });
+                                  setValue('dischargeAt', '');
+                                  return;
+                                }
+                                const val = e.target.value;
+                                if (val && val.length === 10 && Number(val.slice(0, 4)) >= 1900 && formatDateForInput(watchAdmissionAt) && val < formatDateForInput(watchAdmissionAt)) {
+                                  toast.error("Date of Discharge cannot be earlier than Date of Admission", { id: 'discharge-earlier' });
+                                  setValue('dischargeAt', '');
+                                  return;
+                                }
+                              },
+                              onBlur: () => {
+                                const adm = formatDateForInput(watchAdmissionAt);
+                                const dis = formatDateForInput(watchDischargeAt);
+                                if (adm && dis && dis < adm) {
+                                  toast.error("Date of Discharge cannot be earlier than Date of Admission", { id: 'discharge-earlier' });
+                                  setValue('dischargeAt', '');
+                                }
+                              }
+                            })}
+                          />
+                        </div>
+                        <div>
+                          <label className="label text-[10px]">Diagnosis / Ailment (Exact as written on DS)</label>
+                          <input type="text" className="input mt-1 py-1 text-xs" {...register('diagnosis')} />
+                        </div>
+                        <div>
+                          <label className="label text-[10px]">Diagnosis in simple words</label>
+                          <input type="text" className="input mt-1 py-1 text-xs" {...register('diagnosisSimple')} />
+                        </div>
+                        <div>
+                          <label className="label text-[10px]">Room Category</label>
+                          <input type="text" className="input mt-1 py-1 text-xs" {...register('roomCategory')} />
+                        </div>
+                        <div>
+                          <label className="label text-[10px]">Type of Management</label>
+                          <CustomSelect
+                            className="input mt-1 py-1 text-xs"
+                            value={watch('typeOfManagement') || ''}
+                            onChange={val => setValue('typeOfManagement', val)}
+                            placeholder="Select Option"
+                            options={['Surgical', 'Medicinal', 'Other']}
+                          />
+                        </div>
+                        <div>
+                          <label className="label text-[10px]">Type of Admission</label>
+                          <CustomSelect
+                            className="input mt-1 py-1 text-xs"
+                            value={watch('typeOfAdmission') || ''}
+                            onChange={val => setValue('typeOfAdmission', val)}
+                            placeholder="Select Option"
+                            options={['Emergency', 'Planned', 'Day-Care', 'Maternity', 'Other']}
+                          />
+                        </div>
+                        <div>
+                          <label className="label text-[10px]">Is Medico Legal Case?</label>
+                          <CustomSelect
+                            className="input mt-1 py-1 text-xs"
+                            value={watch('isMedicoLegalCase') || ''}
+                            onChange={val => {
+                              setValue('isMedicoLegalCase', val);
+                              if (val !== 'Yes') {
+                                setValue('isFirLegalDocAvailable', '');
+                              }
+                            }}
+                            placeholder="Select Option"
+                            options={['Yes', 'No']}
+                          />
+                        </div>
+                        {watch('isMedicoLegalCase') === 'Yes' && (
+                          <div>
+                            <label className="label text-[10px]">"FIR" / "Legal Doc" Available?</label>
+                            <CustomSelect
+                              className="input mt-1 py-1 text-xs"
+                              value={watch('isFirLegalDocAvailable') || ''}
+                              onChange={val => setValue('isFirLegalDocAvailable', val)}
+                              placeholder="Select Option"
+                              options={['Yes', 'No']}
+                            />
+                          </div>
+                        )}
+                        <div>
+                          <label className="label text-[10px]">Comment</label>
+                          <input type="text" className="input mt-1 py-1 text-xs" {...register('hospitalisationComment')} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Billing Details Collapsible */}
+                <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden mt-4">
+                  <div
+                    className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none"
+                    onClick={() => toggleCollapse('newBilling')}
+                  >
+                    <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">B</span>
+                      Billing Details
+                    </h4>
+                    <div className="flex items-center gap-2">
+                      <ChevronDown size={16} className={`text-slate-500 transition-transform duration-200 ${collapsedSections['newBilling'] ? 'rotate-180' : ''}`} />
+                    </div>
+                  </div>
+                  {!collapsedSections['newBilling'] && (
+                    <div className="p-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                        <div>
+                          <label className="label text-[10px]">Pre Hospitalisation Bill</label>
+                          <input type="number" className="input mt-1 py-1 text-xs" {...register('amtPreHosp')} placeholder="0" />
+                        </div>
+                        <div>
+                          <label className="label text-[10px]">Hospital Final Bill</label>
+                          <input type="number" className="input mt-1 py-1 text-xs" {...register('amtHospital')} placeholder="0" />
+                        </div>
+                        <div>
+                          <label className="label text-[10px]">Anesthesia Bill</label>
+                          <input type="number" className="input mt-1 py-1 text-xs" {...register('amtAnesthesia')} placeholder="0" />
+                        </div>
+                        <div>
+                          <label className="label text-[10px]">Medicine Bill Total</label>
+                          <input type="number" className="input mt-1 py-1 text-xs" {...register('amtMedicine')} placeholder="0" />
+                        </div>
+                        <div>
+                          <label className="label text-[10px]">Lab Bill Total</label>
+                          <input type="number" className="input mt-1 py-1 text-xs" {...register('amtLab')} placeholder="0" />
+                        </div>
+                        <div>
+                          <label className="label text-[10px]">Post Hospitalisation Bill</label>
+                          <input type="number" className="input mt-1 py-1 text-xs" {...register('amtPostHosp')} placeholder="0" />
+                        </div>
+                        <div>
+                          <label className="label text-[10px]">Others (Amount)</label>
+                          <input type="number" className="input mt-1 py-1 text-xs" {...register('amtOthers')} placeholder="0" />
+                        </div>
+                        <div>
+                          <label className="label text-[10px] font-bold text-slate-700">
+                            Total Claimed Amount (₹) {isFieldRequired('claimAmount', true) && <span className="text-red-500">*</span>}
+                          </label>
+                          <input type="number" className="input mt-1 py-1 text-xs bg-slate-50 cursor-not-allowed" {...register('claimAmount')} placeholder="0" readOnly />
+                        </div>
+                        <div>
+                          <label className="label text-[10px]">Comment</label>
+                          <input type="text" className="input mt-1 py-1 text-xs" {...register('billingComment')} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeClaimTab === 'Claim Approval Details' && (
+              <div className="space-y-4 animate-fadeIn">
+                <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden mt-4">
+                  <div
+                    className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none"
+                    onClick={() => toggleCollapse('newClaimApproval')}
+                  >
+                    <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">CA</span>
+                      Claim Approval Details
+                    </h4>
+                    <div className="flex items-center gap-2">
+                      <ChevronDown size={16} className={`text-slate-500 transition-transform duration-200 ${collapsedSections['newClaimApproval'] ? 'rotate-180' : ''}`} />
+                    </div>
+                  </div>
+                  {!collapsedSections['newClaimApproval'] && (
+                    <div className="p-4 space-y-4">
+                      {/* Final Bill Amount */}
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div>
+                          <label className="label text-[10px]">Final Bill Amount</label>
+                          <input type="number" className="input mt-1 py-1 text-xs" {...register('amtFinalBill')} />
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-100">
+                        <h5 className="text-[11px] font-bold text-slate-700 mb-2">Less: To be Paid by the Patient / Insured</h5>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                          <div>
+                            <label className="label text-[10px]">Non-Payables as per policy terms</label>
+                            <input type="number" className="input mt-1 py-1 text-xs" {...register('amtNonPayables')} />
+                          </div>
+                          <div>
+                            <label className="label text-[10px]">Co-pay, if applicable as per policy</label>
+                            <input type="number" className="input mt-1 py-1 text-xs" {...register('amtCopay')} />
+                          </div>
+                          <div>
+                            <label className="label text-[10px]">Policy Deductible / Defined Limits / Voluntary Deductible</label>
+                            <input type="number" className="input mt-1 py-1 text-xs" {...register('amtDeductible')} />
+                          </div>
+                          <div>
+                            <label className="label text-[10px]">Balance EMIs to be paid by the insured (if applicable)</label>
+                            <input type="number" className="input mt-1 py-1 text-xs" {...register('amtBalanceEMIs')} />
+                          </div>
+                          <div>
+                            <label className="label text-[10px]">Recovery towards No Claim Discount in the renewed policy</label>
+                            <input type="number" className="input mt-1 py-1 text-xs" {...register('amtNcdRecovery')} />
+                          </div>
+                          <div>
+                            <label className="label text-[10px]">Excess Over Sum Insured / Sublimit</label>
+                            <input type="number" className="input mt-1 py-1 text-xs" {...register('amtExcessSumInsured')} />
+                          </div>
+                          <div>
+                            <label className="label text-[10px]">Excess Over Defined ailment / procedure Sub-limit</label>
+                            <input type="number" className="input mt-1 py-1 text-xs" {...register('amtExcessAilmentLimit')} />
+                          </div>
+                          <div>
+                            <label className="label text-[10px]">Higher room rent occupancy and related medical services</label>
+                            <input type="number" className="input mt-1 py-1 text-xs" {...register('amtHigherRoomRent')} />
+                          </div>
+                          <div>
+                            <label className="label text-[10px]">Reasonable cost</label>
+                            <input type="number" className="input mt-1 py-1 text-xs" {...register('amtReasonableCost')} />
+                          </div>
+                          <div>
+                            <label className="label text-[10px]">Other recoveries, if any</label>
+                            <input type="number" className="input mt-1 py-1 text-xs" {...register('amtOtherRecoveries')} />
+                          </div>
+                          <div>
+                            <label className="label text-[10px] font-semibold text-blue-600">Total amount to be paid by the patient / insured</label>
+                            <input type="number" className="input mt-1 py-1 text-xs bg-blue-50 cursor-not-allowed font-semibold text-blue-700" {...register('amtPatientToPay')} readOnly />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-100">
+                        <h5 className="text-[11px] font-bold text-slate-700 mb-2">Less: Amounts NOT to be Collected from the Patient</h5>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                          <div>
+                            <label className="label text-[10px]">Excess amount charged over the agreed package / SOC</label>
+                            <input type="number" className="input mt-1 py-1 text-xs" {...register('amtExcessAgreedPackage')} />
+                          </div>
+                          <div>
+                            <label className="label text-[10px]">Network hospital discount (not to be collected from the patient)</label>
+                            <input type="number" className="input mt-1 py-1 text-xs" {...register('amtNetworkDiscount')} />
+                          </div>
+                          <div>
+                            <label className="label text-[10px] font-semibold text-green-600">Total Amount NOT to be collected from the patient</label>
+                            <input type="number" className="input mt-1 py-1 text-xs bg-green-50 cursor-not-allowed font-semibold text-green-700" {...register('amtNotCollected')} readOnly />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-100">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="label text-[10px] font-bold text-indigo-700">Amount payable by Insurance Company to the Insured/Hospital</label>
+                            <input
+                              type="number"
+                              className="input mt-1 py-1 text-xs bg-indigo-50/50 border-indigo-200 font-bold text-indigo-700 focus:bg-white"
+                              {...register('amtPayableToInsured')}
+                            />
+                          </div>
+                          <div>
+                            <label className="label text-[10px]">Comment</label>
+                            <input type="text" className="input mt-1 py-1 text-xs" {...register('approvalComment')} />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeClaimTab === 'Amounts' && (
+              <div className="space-y-4 animate-fadeIn">
+                {/* CLAIMED AMOUNT BREAKDOWN Card */}
+                <div className="bg-emerald-50/20 border border-emerald-100/50 p-5 rounded-2xl space-y-4">
+                  <span className="text-[10px] font-extrabold text-emerald-600 uppercase tracking-widest block">Claimed Amount Breakdown</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="label">Hospital Amount</label>
+                      <div className="relative mt-1">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">₹</span>
+                        <input {...register('amtHospital')} type="number" className="input pl-7 w-full bg-white" placeholder="0" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="label">Medicine Amount</label>
+                      <div className="relative mt-1">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">₹</span>
+                        <input {...register('amtMedicine')} type="number" className="input pl-7 w-full bg-white" placeholder="0" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="label">Lab Amount</label>
+                      <div className="relative mt-1">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">₹</span>
+                        <input {...register('amtLab')} type="number" className="input pl-7 w-full bg-white" placeholder="0" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="label">Pre Hospitalisation Bill</label>
+                      <div className="relative mt-1">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">₹</span>
+                        <input {...register('amtPreHosp')} type="number" className="input pl-7 w-full bg-white" placeholder="0" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="label">Post Hospitalisation Bill</label>
+                      <div className="relative mt-1">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">₹</span>
+                        <input {...register('amtPostHosp')} type="number" className="input pl-7 w-full bg-white" placeholder="0" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="label">Others</label>
+                      <div className="relative mt-1">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">₹</span>
+                        <input {...register('amtOthers')} type="number" className="input pl-7 w-full bg-white" placeholder="0" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Total Amount Green Banner */}
+                  <div className="bg-emerald-50 border border-emerald-100 px-4 py-3 rounded-lg flex items-center justify-between text-sm font-bold text-emerald-800">
+                    <span>Total Amount</span>
+                    <span>₹{Number(watch('claimAmount') || 0).toLocaleString('en-IN')}</span>
+                  </div>
+                </div>
+
+                {/* Approved Amount & Other/Deductions */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="label">Approved Amount</label>
+                    <input {...register('approvedAmount')} type="number" className="input mt-1" placeholder="0" />
+                  </div>
+                  <div>
+                    <label className="label">Other/Deductions</label>
+                    <input {...register('deductionsNotes')} className="input mt-1" placeholder="Notes on deductions..." />
+                  </div>
+                </div>
+
+                {/* Notes */}
+                <div>
+                  <label className="label">Notes / Remarks</label>
+                  <textarea {...register('notes')} className="input mt-1" rows={2} placeholder="Timeline logs details..." />
+                </div>
+              </div>
+            )}
+
+        {activeClaimTab === 'File Uploads' && (
+          <div className="space-y-4 animate-fadeIn">
+            <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden mt-4">
+              <div
+                className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none"
+                onClick={() => toggleCollapse('newDocuments')}
+              >
+                <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                  <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">F</span>
+                  File Uploads
+                  {newDocsList.length > 0 && (
+                    <span className="ml-1 px-2 py-0.5 rounded-full bg-blue-600 text-white text-[10px] font-black">{newDocsList.length}</span>
+                  )}
+                </h4>
+                <div className="flex items-center gap-2">
+                  <ChevronDown size={16} className={`text-slate-500 transition-transform duration-200 ${collapsedSections['newDocuments'] ? 'rotate-180' : ''}`} />
+                </div>
+              </div>
+              {!collapsedSections['newDocuments'] && (
+                <div className="p-4 space-y-4">
+                  {/* Upload button */}
+                  <button
+                    type="button"
+                    onClick={e => { e.preventDefault(); e.stopPropagation(); setDocUploadOpen(true); setDocUploadFields({ type: 'CLAIM_FORM', title: '', description: '', file: null }); }}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition-all hover:scale-[1.02]"
+                  >
+                    <Upload size={14} />
+                    Upload Document
+                  </button>
+
+                  {/* Uploaded docs list */}
+                  {newDocsList.length === 0 ? (
+                    <div className="border-2 border-dashed border-slate-200 rounded-xl p-8 text-center">
+                      <FileText size={32} className="mx-auto text-slate-300 mb-2" />
+                      <p className="text-xs text-slate-400 font-semibold">No documents added yet.</p>
+                      <p className="text-[11px] text-slate-300 mt-1">Click "Upload Document" to attach files.</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+                      <table className="w-full border-collapse text-left">
+                        <thead>
+                          <tr className="border-b border-slate-200 bg-slate-50 text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
+                            <th className="px-3 py-2.5">Uploaded Date</th>
+                            <th className="px-3 py-2.5">Document Name</th>
+                            <th className="px-3 py-2.5 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-xs">
+                          {newDocsList.map((doc, idx) => {
+                            const fileName = doc.file?.name || 'Document';
+                            const docTitle = doc.title || fileName;
+                            const docTypeLabel = CLAIM_DOC_TYPES.find(t => t.value === doc.type)?.label || doc.type || 'Claim Doc';
+                            const desc = doc.description || '';
+                            const extension = (fileName.split('.').pop()?.toUpperCase() || 'FILE').slice(0, 4);
+                            const fileSize = formatBytes(doc.file?.size);
+                            const phone = (watch() as any).proposerPhone || (watch() as any).patientPhone || '';
+                            const waText = `Document Title: ${docTitle}\nType: ${docTypeLabel}`;
+                            const waUrl = phone
+                              ? `https://api.whatsapp.com/send?phone=91${phone.slice(-10)}&text=${encodeURIComponent(waText)}`
+                              : `https://api.whatsapp.com/send?text=${encodeURIComponent(waText)}`;
+
+                            return (
+                              <tr key={idx} className="transition-colors hover:bg-slate-50/80">
+                                <td className="whitespace-nowrap px-3 py-2.5 font-semibold text-slate-600">
+                                  <span className="inline-flex items-center gap-1.5">
+                                    <CalendarDays size={13} className="text-slate-400" />
+                                    {format(new Date(), 'dd MMM yyyy')}
+                                  </span>
+                                </td>
+                                <td className="min-w-[220px] px-3 py-2.5">
+                                  <div className="flex min-w-0 items-center gap-2">
+                                    <span className="flex h-8 min-w-8 shrink-0 items-center justify-center rounded-lg border border-blue-100 bg-blue-50 px-1 font-mono text-[9px] font-bold text-blue-600">
+                                      {extension}
+                                    </span>
+                                    <div className="min-w-0">
+                                      <p className="truncate font-extrabold text-slate-800" title={fileName}>{fileName}</p>
+                                      <div className="mt-0.5 flex items-center gap-1.5">
+                                        <span className="truncate font-semibold text-slate-600" title={docTitle}>{docTitle}</span>
+                                        <span className="rounded border border-indigo-100 bg-indigo-50 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-indigo-700">
+                                          {docTypeLabel}
+                                        </span>
+                                        {fileSize && (
+                                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold text-slate-500">
+                                            {fileSize}
+                                          </span>
+                                        )}
+                                      </div>
+                                      {desc && desc !== '-' && (
+                                        <p className="mt-0.5 truncate text-[10px] text-slate-500" title={desc}>{desc}</p>
+                                      )}
+                                    </div>
+                                    <FileText size={14} className="ml-auto hidden shrink-0 text-slate-300 sm:block" />
+                                  </div>
+                                </td>
+                                <td className="whitespace-nowrap px-3 py-2.5 text-right">
+                                  <div className="flex items-center justify-end gap-1.5">
+                                    <a
+                                      href={waUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[11px] font-bold text-emerald-700 transition-colors hover:bg-emerald-100"
+                                      title="Share document"
+                                    >
+                                      <MessageCircle size={13} />
+                                      <span className="hidden sm:inline">WhatsApp</span>
+                                    </a>
+                                    {doc.file && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const objectUrl = URL.createObjectURL(doc.file);
+                                          setDocPreviewModal({ open: true, title: docTitle, url: objectUrl });
+                                        }}
+                                        className="rounded-lg border border-blue-100 bg-blue-50 p-1.5 text-blue-600 transition-colors hover:bg-blue-100"
+                                        title="View document"
+                                        aria-label={`View ${fileName}`}
+                                      >
+                                        <Eye size={14} />
+                                      </button>
+                                    )}
+                                    {doc.file && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const objectUrl = URL.createObjectURL(doc.file);
+                                          const a = document.createElement('a');
+                                          a.href = objectUrl;
+                                          a.download = fileName;
+                                          a.click();
+                                          window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+                                        }}
+                                        className="rounded-lg border border-slate-200 bg-slate-100 p-1.5 text-slate-700 transition-colors hover:bg-slate-200"
+                                        title="Download document"
+                                        aria-label={`Download ${fileName}`}
+                                      >
+                                        <Download size={14} />
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => setNewDocsList(prev => prev.filter((_, i) => i !== idx))}
+                                      className="rounded-lg border border-rose-100 bg-rose-50 p-1.5 text-rose-600 transition-colors hover:bg-rose-100"
+                                      title="Delete document"
+                                      aria-label={`Delete ${fileName}`}
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* Comment */}
+                  <div>
+                    <label className="label text-[11px]">Comment</label>
+                    <input type="text" {...register('fileUploadComment')} className="input w-full bg-white mt-1 text-xs py-1" placeholder="Optional notes about these documents" />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* ── Doc Upload Sub-Modal ─────────────────────────────────────── */}
+            <Modal
+              open={docUploadOpen}
+              onClose={() => { setDocUploadOpen(false); setDocUploadFields({ type: 'CLAIM_FORM', title: '', description: '', file: null }); }}
+              closeOnEscapeAndBackdrop={false}
+              title="Upload Document"
+              size="md"
+            >
+              <div className="space-y-4">
+                <div>
+                  <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Document Type <span className="text-red-500">*</span></label>
+                  <select
+                    value={docUploadFields.type}
+                    onChange={e => setDocUploadFields(p => ({ ...p, type: e.target.value }))}
+                    className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200"
+                  >
+                    {CLAIM_DOC_TYPES.map(t => (
+                      <option key={t.value} value={t.value}>{t.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Document Title <span className="text-red-500">*</span></label>
+                  <input
+                    type="text"
+                    value={docUploadFields.title}
+                    onChange={e => setDocUploadFields(p => ({ ...p, title: e.target.value }))}
+                    className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200"
+                    placeholder="e.g. Discharge Summary – Apollo Jan 2025"
+                  />
+                </div>
+                <div>
+                  <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Description</label>
+                  <textarea
+                    rows={2}
+                    value={docUploadFields.description}
+                    onChange={e => setDocUploadFields(p => ({ ...p, description: e.target.value }))}
+                    className="input w-full p-2.5 text-xs rounded-xl bg-white border border-slate-200"
+                    placeholder="Optional notes about this document"
+                  />
+                </div>
+                <div>
+                  <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Choose File <span className="text-red-500">*</span></label>
+                  <div className="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center hover:border-blue-500 hover:bg-blue-50/30 transition-colors">
+                    <input
+                      type="file"
+                      onChange={e => setDocUploadFields(p => {
+                        const file = e.target.files?.[0] || null;
+                        return {
+                          ...p,
+                          file,
+                          title: file ? file.name.replace(/\.[^.]+$/, '') : '',
+                        };
+                      })}
+                      className="w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-wrap justify-end gap-2 pt-4 border-t border-slate-100">
+                  <button
+                    type="button"
+                    className="btn-secondary px-4 py-2 text-xs"
+                    onClick={() => { setDocUploadOpen(false); setDocUploadFields({ type: 'CLAIM_FORM', title: '', description: '', file: null }); }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-primary px-4 py-2 text-xs"
+                    onClick={() => {
+                      if (!docUploadFields.title.trim()) { toast.error('Please enter a document title.'); return; }
+                      if (!docUploadFields.file) { toast.error('Please choose a file.'); return; }
+                      // Map the selected file to the corresponding state setter so it gets uploaded on form submit
+                      const setterMap: Record<string, (f: File | null) => void> = {
+                        CLAIM_FORM: setClaimFormFile,
+                        DISCHARGE_SUMMARY: setDischargeSummaryFile,
+                        OT_NOTES_IPD_PAPERS: setOtNotesFile,
+                        HOSPITAL_BILL: setHospitalBillFile,
+                        PHARMACY_MEDICINES_BILL: setPharmacyBillFile,
+                        INVESTIGATION_LAB_BILL: setInvestigationBillFile,
+                        BLOOD_ANESTHESIA_BILL: setBloodBagsBillFile,
+                        IMPORTANT_LAB_REPORTS: setLabReportsFile,
+                        IMP_BILLS: setBillsFile,
+                        OTHER_IMP_DOCS: setOtherImpDocsFile,
+                        QUERY_LETTER: setQueryLetterFile,
+                        REPLY_DOCS: setReplyDocsFile,
+                        SETTLEMENT_LETTER: setSettlementLetterFile,
+                        REJECTION_LETTER: setRejectionLetterFile,
+                      };
+                      setterMap[docUploadFields.type]?.(docUploadFields.file);
+                      setNewDocsList(prev => [...prev, { type: docUploadFields.type, title: docUploadFields.title, description: docUploadFields.description, file: docUploadFields.file! }]);
+                      setDocUploadOpen(false);
+                      setDocUploadFields({ type: 'CLAIM_FORM', title: '', description: '', file: null });
+                      toast.success('Document added!');
+                    }}
+                  >
+                    Add Document
+                  </button>
+                </div>
+              </div>
+            </Modal>
+          </div>
+        )}
+
+        {/* ════════════════ TAB 6: New Claim History & Activity Log ════════════════ */}
+        {activeClaimTab === 'History' && (
+          <ActivityTimeline
+            events={[]}
+            subtitle="Activity tracking starts after the claim is saved."
+          />
+        )}
+          </div>
+
+          </form>
+        </>
+      </Modal>
+
+      {/* Edit Claim */}
+      {editTarget && (
+        <ClaimEditForm
+          key={editTarget.id}
+          initial={editTarget}
+          isPending={updateClaimMutation.isPending}
+          onSave={body => updateClaimMutation.mutate({ id: editTarget.id, body })}
+          onCancel={() => setEditTarget(null)}
+          employees={employees}
+        />
+      )}
+
+      {/* Delete Confirmation */}
+      <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)} closeOnEscapeAndBackdrop={false} title="Delete Claim" size="sm">
+        <p className="text-sm text-gray-600 mb-4">Delete claim <strong>{deleteTarget?.claimNumber}</strong>?</p>
+        <div className="flex flex-wrap justify-end gap-2">
+          <button className="btn-secondary" onClick={() => setDeleteTarget(null)}>Cancel</button>
+          <button className="btn-danger" onClick={async () => {
+            const isAdmin = authUser?.role === 'SUPERADMIN' || authUser?.role === 'OWNER';
+            if (isAdmin) {
+              await deleteClaim.mutateAsync(deleteTarget!.id);
+            } else {
+              const toastId = toast.loading('Submitting delete request to admin...');
+              try {
+                await deletionRequestsService.requestDeletion('Claim', deleteTarget!.id, `Employee requested deletion of claim ${deleteTarget?.claimNumber}`);
+                toast.success('Deletion request submitted to admin successfully!', { id: toastId });
+              } catch (err: any) {
+                toast.error(err.response?.data?.message || 'Failed to submit request', { id: toastId });
+              }
+            }
+            setDeleteTarget(null);
+          }}>
+            Delete
+          </button>
+        </div>
+      </Modal>
+
+      {/* Claim Detail Sheet */}
+      <Modal open={detailOpen} onClose={() => setDetailOpen(false)} closeOnEscapeAndBackdrop={false} title="Claim Details" size="2xl">
+        {selectedClaim ? (
+          <ClaimDetailView claim={selectedClaim} onEdit={() => { setDetailOpen(false); setEditTarget(selectedClaim); }} />
+        ) : null}
+      </Modal>
+      {/* Document Preview Modal */}
+      <Modal
+        open={docPreviewModal.open}
+        onClose={() => setDocPreviewModal({ open: false, title: '', url: '' })}
+        closeOnEscapeAndBackdrop={false}
+        title={docPreviewModal.title || 'Document Preview'}
+        size="2xl"
+        zIndexClass="z-[70]"
+        icon={<Eye className="text-blue-600" size={20} />}
+      >
+        <div className="space-y-4">
+          <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-200">
+            <span className="text-xs font-bold text-slate-700 truncate max-w-[400px]">
+              {docPreviewModal.title}
+            </span>
+            <a
+              href={docPreviewModal.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              download
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white transition-colors cursor-pointer"
+            >
+              <Download size={14} /> Download File
+            </a>
+          </div>
+
+          <div className="border border-slate-200 rounded-xl overflow-hidden bg-slate-900 min-h-[400px] flex items-center justify-center">
+            {docPreviewModal.url.match(/\.(jpg|jpeg|png|gif|webp)|data:image/i) ? (
+              <img
+                src={docPreviewModal.url}
+                alt={docPreviewModal.title}
+                className="max-h-[600px] w-auto object-contain mx-auto"
+              />
+            ) : (
+              <iframe
+                src={docPreviewModal.url}
+                title={docPreviewModal.title}
+                className="w-full h-[600px] border-0"
+              />
+            )}
+          </div>
+        </div>
+      </Modal>
+
+      <ImportFormatModal
+        open={importFormatOpen}
+        onClose={() => setImportFormatOpen(false)}
+        onChooseFile={() => fileInputRef.current?.click()}
+        title="Import Claims from CSV or Excel"
+        description="Download the sample file and keep the column headers unchanged."
+        warning="Claim Number, Policy Number, and Contact Phone are required. Contact Phone and Policy Number must match existing records."
+        columns={[
+          { name: 'Claim Number', requirement: 'Required. Must be unique.' },
+          { name: 'Status', requirement: 'Optional. Use INTIMATED, DOC_COLLECTION, FILED, IN_REVIEW, APPROVED, REJECTED, or SETTLED.' },
+          { name: 'Claim Type', requirement: 'Optional. Example: HEALTH, LIFE, or MOTOR; defaults to HEALTH.' },
+          { name: 'Claim Amount', requirement: 'Optional. Use a number; defaults to 0.' },
+          { name: 'Intimated At', requirement: 'Optional. Recommended format: YYYY-MM-DD; defaults to today.' },
+          { name: 'Policy Number', requirement: 'Required. Must match an existing policy.' },
+          { name: 'Contact Phone', requirement: 'Required. Must match an existing contact phone.' },
+        ]}
+        sampleRow={['CLM-SAMPLE-001', 'INTIMATED', 'HEALTH', '50000', '2026-01-15', 'POL-SAMPLE-001', '9000000001']}
+        fileFormats="CSV, XLS, and XLSX"
+        sampleFileName="claims-sample.csv"
+      />
+
+    </div>
+    </>
+  );
+}
+
+// Subcomponent showing custom Claim Detail View (Jh details layout)
+export function ClaimDetailView({ claim, onEdit }: { claim: any; onEdit?: () => void }) {
+  const notesData = getClaimNotesData(claim.notes);
+  const displayStatus = getClaimUiStatus(claim);
+  const parsedDoctors: any[] = (() => {
+    try {
+      const list = JSON.parse(notesData.hospitalDoctors || '[]');
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
+  })();
+
+  const statusIcons: Record<string, any> = {
+    Settled: <ShieldCheck className="text-green-600" />,
+    Approved: <FileCheck2 className="text-emerald-600" />,
+    Rejected: <X className="text-red-600" />,
+    'In Progress': <Clock className="text-amber-600" />,
+    Pending: <Clock className="text-blue-600" />,
+  };
+
+  const statusColors: Record<string, string> = {
+    Settled: 'bg-green-100 text-green-800 border-green-200',
+    Approved: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+    Rejected: 'bg-red-100 text-red-800 border-red-200',
+    'In Progress': 'bg-amber-100 text-amber-800 border-amber-200',
+    Pending: 'bg-blue-100 text-blue-800 border-blue-200',
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header card matching Jh details card */}
+      <div className="flex justify-between items-start bg-gray-50 p-4 rounded-xl border border-gray-100">
+        <div className="flex gap-4">
+          <div className="w-12 h-12 rounded-full bg-white flex items-center justify-center border shadow-sm">
+            {statusIcons[displayStatus] || <Clock/>}
+          </div>
+          <div>
+            <h2 className="text-lg font-bold text-gray-900">₹{Number(claim?.claimAmount || 0).toLocaleString('en-IN')}</h2>
+            <div className="flex gap-2 items-center mt-1">
+              <span className={clsx('text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider border', statusColors[displayStatus])}>
+                {displayStatus}
+              </span>
+              <span className="text-xs text-gray-500">• {claim?.claimType || 'General'}</span>
+            </div>
+          </div>
+        </div>
+        {onEdit && (
+          <button onClick={onEdit} className="btn-secondary text-[10px] sm:text-xs flex flex-wrap items-center gap-1">
+            <Pencil size={12}/> Update Claim
+          </button>
+        )}
+      </div>
+
+      {/* Info Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 text-sm bg-white border border-gray-100 rounded-xl p-4 shadow-sm">
+        <div>
+          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Patient / Client</label>
+          <div className="flex flex-wrap items-center gap-1.5 font-semibold text-gray-800">
+            <UserCircle2 size={14} className="text-gray-400" />
+            <span>{claim?.contact ? `${claim.contact.firstName || ''} ${claim.contact.lastName || ''}`.trim() || 'Unknown' : 'Unknown'}</span>
+          </div>
+        </div>
+        <div>
+          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Policy Reference</label>
+          <div className="flex flex-wrap items-center gap-1.5 font-semibold text-gray-800">
+            <FileText size={14} className="text-gray-400" />
+            <span>{claim.policy?.policyNumber ? `${claim.policy.policyNumber}${getPolicyYearString(claim.policy) ? ` (${getPolicyYearString(claim.policy)})` : ''}` : 'N/A'}</span>
+          </div>
+        </div>
+        <div>
+          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Policy Sum Assured</label>
+          <div className="flex flex-wrap items-center gap-1.5 font-bold text-emerald-700">
+            <Shield size={14} className="text-emerald-600" />
+            <span>
+              {claim.policy?.sumAssured != null || (claim.policy as any)?.sumInsured != null || notesData.deathSumInsured
+                ? `₹${Number(claim.policy?.sumAssured ?? (claim.policy as any)?.sumInsured ?? notesData.deathSumInsured).toLocaleString('en-IN')}`
+                : 'N/A'}
+            </span>
+          </div>
+        </div>
+        <div>
+          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Hospital / Location</label>
+          <div className="flex flex-wrap items-center gap-1.5 font-semibold text-gray-800">
+            <MapPin size={14} className="text-gray-400" />
+            <span>{notesData.hospital || 'N/A'}</span>
+          </div>
+        </div>
+        <div>
+          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Date Filed</label>
+          <div className="flex flex-wrap items-center gap-1.5 font-semibold text-gray-800">
+            <Calendar size={14} className="text-gray-400" />
+            <span>{claim.intimatedAt ? format(new Date(claim.intimatedAt), 'dd/MMM/yyyy') : '—'}</span>
+          </div>
+        </div>
+        <div>
+          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Insurance Plan</label>
+          <div className="flex flex-wrap items-center gap-1.5 font-semibold text-gray-800">
+            <Shield size={14} className="text-blue-500" />
+            <span>{claim.policy?.plan?.name || claim.claimType || '—'}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Expense breakdown calculator sums */}
+      <div className="space-y-2">
+        <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider block">Expense Breakdown Calculator Sums</label>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs bg-gray-50/50 border border-gray-100 rounded-xl p-4 shadow-sm">
+          <div className="flex justify-between border-b pb-1">
+            <span className="text-gray-500">Hospital Room / Bed:</span>
+            <span className="font-bold text-gray-800">₹{(notesData.amtHospital || 0).toLocaleString('en-IN')}</span>
+          </div>
+          <div className="flex justify-between border-b pb-1">
+            <span className="text-gray-500">Medicines / Consumables:</span>
+            <span className="font-bold text-gray-800">₹{(notesData.amtMedicine || 0).toLocaleString('en-IN')}</span>
+          </div>
+          <div className="flex justify-between border-b pb-1">
+            <span className="text-gray-500">Lab tests / Radiology:</span>
+            <span className="font-bold text-gray-800">₹{(notesData.amtLab || 0).toLocaleString('en-IN')}</span>
+          </div>
+          <div className="flex justify-between border-b pb-1">
+            <span className="text-gray-500">Pre-hospitalization:</span>
+            <span className="font-bold text-gray-800">₹{(notesData.amtPreHosp || 0).toLocaleString('en-IN')}</span>
+          </div>
+          <div className="flex justify-between border-b pb-1">
+            <span className="text-gray-500">Post-hospitalization:</span>
+            <span className="font-bold text-gray-800">₹{(notesData.amtPostHosp || 0).toLocaleString('en-IN')}</span>
+          </div>
+          <div className="flex justify-between border-b pb-1">
+            <span className="text-gray-500">Others / Misc:</span>
+            <span className="font-bold text-gray-800">₹{(notesData.amtOthers || 0).toLocaleString('en-IN')}</span>
+          </div>
+          <div className="flex justify-between col-span-2 pt-2 border-t font-semibold text-sm text-blue-800">
+            <span>Total Claim Amount:</span>
+            <span>₹{Number(claim?.claimAmount || 0).toLocaleString('en-IN')}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Hospital & Consulting Doctors */}
+      {(notesData.hospitalName || notesData.hospital || parsedDoctors.length > 0) && (
+        <div className="space-y-3">
+          <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider block">Hospital &amp; Consulting Team</label>
+          <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-4 text-xs space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+              <div>
+                <span className="text-gray-400 block text-[10px] uppercase font-bold">Hospital Name</span>
+                <span className="font-bold text-slate-800 text-sm">{notesData.hospitalName || notesData.hospital || '—'}</span>
+                {notesData.hospitalType && (
+                  <span className="inline-block mt-1 ml-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-100 text-blue-800">
+                    {notesData.hospitalType}
+                  </span>
+                )}
+                {notesData.hospitalRating && (
+                  <span className="inline-block mt-1 ml-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800">
+                    ⭐ {notesData.hospitalRating}
+                  </span>
+                )}
+              </div>
+              <div>
+                <span className="text-gray-400 block text-[10px] uppercase font-bold">Location</span>
+                <span className="text-slate-700 font-medium">
+                  {[notesData.hospitalAddress, notesData.hospitalCity, notesData.hospitalState, notesData.hospitalPincode].filter(Boolean).join(', ') || '—'}
+                </span>
+              </div>
+              <div>
+                <span className="text-gray-400 block text-[10px] uppercase font-bold">Hospital Contact</span>
+                <span className="text-slate-700 font-medium">{notesData.hospitalContactNo || '—'}</span>
+              </div>
+              {(notesData.claimsPerson1Name || notesData.claimsPerson1Contact) && (
+                <div>
+                  <span className="text-gray-400 block text-[10px] uppercase font-bold">Claims Dept Person 1</span>
+                  <span className="text-slate-700 font-medium">
+                    {notesData.claimsPerson1Name} {notesData.claimsPerson1Contact ? `(${notesData.claimsPerson1Contact})` : ''}
+                  </span>
+                </div>
+              )}
+              {(notesData.claimsPerson2Name || notesData.claimsPerson2Contact) && (
+                <div>
+                  <span className="text-gray-400 block text-[10px] uppercase font-bold">Claims Dept Person 2</span>
+                  <span className="text-slate-700 font-medium">
+                    {notesData.claimsPerson2Name} {notesData.claimsPerson2Contact ? `(${notesData.claimsPerson2Contact})` : ''}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {parsedDoctors.length > 0 && (
+              <div className="pt-2.5 border-t border-slate-200">
+                <span className="text-[10px] uppercase font-bold text-slate-500 block mb-2">Assigned / Consulting Doctors ({parsedDoctors.length})</span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                  {parsedDoctors.map((doc: any, i: number) => (
+                    <div key={i} className="bg-white border border-slate-200 rounded-lg p-2.5 shadow-2xs">
+                      <div className="font-bold text-slate-800 flex items-center justify-between">
+                        <span>{doc.name || 'Doctor'}</span>
+                        {doc.degree && <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-semibold">{doc.degree}</span>}
+                      </div>
+                      {doc.speciality && <div className="text-[11px] text-slate-500 mt-0.5">{doc.speciality}</div>}
+                      {doc.contactNo && <div className="text-[10px] text-slate-400 mt-1">📞 {doc.contactNo}</div>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Claim Summary notes */}
+      <div className="space-y-2">
+        <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider block">Diagnosis &amp; Summary</label>
+        <div className="text-sm bg-gray-50 border border-gray-100 rounded-xl p-4 text-gray-700">
+          <div className="font-semibold text-gray-900 mb-1">Diagnosis: {notesData.diagnosis || 'General Treatment'}</div>
+          <div>{notesData.notes || 'No treatment summary or claims details recorded.'}</div>
+        </div>
+      </div>
+    </div>
+  );
+}

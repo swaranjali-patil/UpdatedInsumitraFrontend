@@ -1,0 +1,7335 @@
+import { isFieldRequired as isFieldRequiredHelper, COMPULSORY_RULES_UPDATED_EVENT } from '../../utils/compulsoryFieldRules';
+import { useState, useRef, useEffect, useMemo } from 'react';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
+import { useLeadKanban, useMoveLeadStage, useCreateLead, useUpdateLead, useDeleteLead } from '@hooks/useLeads';
+import Modal from '@comps/common/Modal';
+import CreatePolicyModal from '../Policies/CreatePolicyModal';
+import PolicyDetailModal from '../Policies/PolicyDetailModal';
+import {
+  Plus, Search, Pencil, Trash2, Shield, Upload, Phone, Calendar,
+  MessageCircle, LayoutGrid, List, Filter, X, UserPlus, Users,
+  UserCircle2, Mail, ChevronDown, Flame, Thermometer, Snowflake,
+  Columns, ArrowUpDown, ChevronUp, ChevronRight, Send, RefreshCw, Save, FileText, History, Lock, Download, Activity, ExternalLink, CalendarDays, Eye
+} from 'lucide-react';
+import { useForm } from 'react-hook-form';
+import { z } from 'zod';
+import { zodResolver } from '@hookform/resolvers/zod';
+import clsx from 'clsx';
+import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
+import { contactsService, policiesService, leadsService, employeesService, insuranceService, documentsService } from '@api/index';
+import DocumentUploadModal, { DocumentUploadMeta } from '@comps/common/DocumentUploadModal';
+import DocumentsTable from '@comps/common/DocumentsTable';
+import toast from 'react-hot-toast';
+import { useAuthStore } from '@store/auth.store';
+import { useLookupStore } from '@store/lookup.store';
+import { format } from 'date-fns';
+import { DatePicker } from '@comps/common/DatePicker';
+import { CountryPhoneInput } from '@comps/common/CountryPhoneInput';
+import { DatalistInput } from '@comps/common/DatalistInput';
+import { sortData } from '../../utils/sortUtils';
+
+const LEAD_DOC_TYPES = [
+  { value: 'IDENTITY_PROOF', label: 'Aadhaar / PAN / Identity Proof' },
+  { value: 'POLICY_BOND', label: 'Policy Bond / Endorsement' },
+  { value: 'PROPOSAL_FORM', label: 'Proposal Form' },
+  { value: 'QUOTATION', label: 'Quotation / Comparison' },
+  { value: 'MEDICAL_RECORDS', label: 'Medical Records / Reports' },
+  { value: 'PAYMENT_RECEIPTS', label: 'Payment Receipts' },
+  { value: 'OTHER', label: 'Other Document' },
+];
+
+const EDUCATION_OPTIONS = [
+  'Metric',
+  'Intermediate',
+  'Graduate',
+  'Post Graduate',
+  'Up to 9th class passed',
+  '10th class passed',
+  'Post Graduate (Gen)',
+  'Med Graduate',
+  'Post Graduate, Eng',
+  'Law Graduate / Post Graduate',
+  'CA/ICWA/MBA/CFA',
+  'Computer degree other',
+  'Other',
+];
+
+const SUM_INSURED_OPTIONS = [
+  { value: '50000', label: '₹50,000' },
+  { value: '100000', label: '₹1,000,000 (1 Lakh)' },
+  { value: '200000', label: '₹2,000,000 (2 Lakh)' },
+  { value: '300000', label: '₹3,000,000 (3 Lakh)' },
+  { value: '500000', label: '₹5,000,000 (5 Lakh)' },
+  { value: '750000', label: '₹7,50,000 (7.5 Lakh)' },
+  { value: '1000000', label: '₹10,000,000 (10 Lakh)' },
+  { value: '1500000', label: '₹15,000,000 (15 Lakh)' },
+  { value: '2000000', label: '₹20,000,000 (20 Lakh)' },
+  { value: '2500000', label: '₹25,000,000 (25 Lakh)' },
+  { value: '5000000', label: '₹50,000,000 (50 Lakh)' },
+  { value: '10000000', label: '₹100,000,000 (1 Crore)' },
+];
+
+const RIDER_OPTIONS = [
+  'None',
+  'Zero Depreciation',
+  'Engine Protect',
+  'NCB Protector',
+  'Consumables Cover',
+  'Personal Accident',
+  'Hospital Daily Cash',
+  'Critical Illness Rider',
+  'Waiver of Premium',
+];
+
+const MAX_REALISTIC_TENURE_YEARS = 50;
+
+function parseTenureYears(tenureStr: string): number {
+  if (!tenureStr) return 0;
+  const tLower = tenureStr.trim().toLowerCase();
+  const yearMatch = tLower.match(/(\d+)\s*(year|years|yr|yrs|y)/);
+  const numOnlyMatch = tLower.match(/^(\d+)$/);
+  if (yearMatch) return parseInt(yearMatch[1], 10);
+  if (numOnlyMatch) return parseInt(numOnlyMatch[1], 10);
+  return 0;
+}
+
+function calculateTenureFromDates(startDateStr: string, endDateStr: string): string {
+  if (!startDateStr || !endDateStr) return '';
+  const start = new Date(startDateStr);
+  const end = new Date(endDateStr);
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start) return '';
+
+  let years = end.getFullYear() - start.getFullYear();
+  let months = end.getMonth() - start.getMonth();
+  let days = end.getDate() - start.getDate();
+
+  if (days < 0) {
+    months -= 1;
+    const prevMonthDays = new Date(end.getFullYear(), end.getMonth(), 0).getDate();
+    days += prevMonthDays;
+  }
+
+  if (months < 0) {
+    years -= 1;
+    months += 12;
+  }
+
+  if (years > MAX_REALISTIC_TENURE_YEARS) {
+    years = MAX_REALISTIC_TENURE_YEARS;
+  }
+
+  const parts: string[] = [];
+  if (years > 0) parts.push(`${years} ${years === 1 ? 'Year' : 'Years'}`);
+  if (months > 0) parts.push(`${months} ${months === 1 ? 'Month' : 'Months'}`);
+  if (days > 0) parts.push(`${days} ${days === 1 ? 'Day' : 'Days'}`);
+
+  return parts.length > 0 ? parts.join(' ') : '1 Year';
+}
+
+function calculateEndDateFromTenure(startDateStr: string, tenureStr: string): string | null {
+  if (!startDateStr || !tenureStr) return null;
+  const start = new Date(startDateStr);
+  if (isNaN(start.getTime())) return null;
+
+  const tLower = tenureStr.trim().toLowerCase();
+  let yearsToAdd = 0;
+  let monthsToAdd = 0;
+  let daysToAdd = 0;
+
+  const yearMatch = tLower.match(/(\d+)\s*(year|years|yr|yrs|y)/);
+  const monthMatch = tLower.match(/(\d+)\s*(month|months|m)/);
+  const dayMatch = tLower.match(/(\d+)\s*(day|days|d)/);
+  const numOnlyMatch = tLower.match(/^(\d+)$/);
+
+  if (yearMatch) yearsToAdd = parseInt(yearMatch[1], 10);
+  if (monthMatch) monthsToAdd = parseInt(monthMatch[1], 10);
+  if (dayMatch) daysToAdd = parseInt(dayMatch[1], 10);
+  if (!yearMatch && !monthMatch && !dayMatch && numOnlyMatch) {
+    yearsToAdd = parseInt(numOnlyMatch[1], 10);
+  }
+
+  if (yearsToAdd > MAX_REALISTIC_TENURE_YEARS) {
+    toast.error(`Premium payment period cannot exceed ${MAX_REALISTIC_TENURE_YEARS} years.`);
+    yearsToAdd = MAX_REALISTIC_TENURE_YEARS;
+  }
+
+  if (yearsToAdd === 0 && monthsToAdd === 0 && daysToAdd === 0) return null;
+
+  const end = new Date(start);
+  if (yearsToAdd > 0) end.setFullYear(end.getFullYear() + yearsToAdd);
+  if (monthsToAdd > 0) end.setMonth(end.getMonth() + monthsToAdd);
+  if (daysToAdd > 0) end.setDate(end.getDate() + daysToAdd);
+
+  return end.toISOString().split('T')[0];
+}
+
+const OCCUPATION_TYPE_OPTIONS = [
+  'Salaried Private',
+  'Salaried Gov',
+  'Salaried/Service',
+  'Business Owner',
+  'Business',
+  'Industrialist',
+  'Self Employed Professional',
+  'Agriculture',
+  'Student',
+  'Retired',
+  'Homemaker',
+  'Other',
+];
+
+const formatPreview = (dateStr?: string) => {
+  if (!dateStr) return '';
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '';
+    return format(d, 'dd/MMM/yyyy');
+  } catch {
+    return '';
+  }
+};
+
+// ── Stage Mappings ────────────────────────────────────────────────────────────
+
+export const STAGE_LABELS: Record<string, string> = {
+  TO_CONTACT: 'To Contact',
+  CONTACTED: 'Contacted',
+  PROPOSAL_SENT: 'Proposal Sent',
+  LOGIN_PROGRESS: 'Login Progress',
+  PAYMENT_DONE: 'Payment Done',
+  PROCESS_COMPLETED: 'Process Completed',
+};
+
+const UI_STAGES = ['To Contact', 'Contacted', 'Proposal Sent', 'Login Progress', 'Payment Done', 'Process Completed'];
+
+const STAGE_MAPPINGS: Record<string, string> = {
+  'To Contact': 'TO_CONTACT',
+  'Contacted': 'CONTACTED',
+  'Proposal Sent': 'PROPOSAL_SENT',
+  'Login Progress': 'LOGIN_PROGRESS',
+  'Payment Done': 'PAYMENT_DONE',
+  'Process Completed': 'PROCESS_COMPLETED',
+};
+
+const STAGE_ORDER = ['TO_CONTACT', 'CONTACTED', 'PROPOSAL_SENT', 'LOGIN_PROGRESS', 'PAYMENT_DONE', 'PROCESS_COMPLETED'];
+
+const BACKEND_TO_UI: Record<string, string> = {
+  TO_CONTACT: 'To Contact',
+  CONTACTED: 'Contacted',
+  PROPOSAL_SENT: 'Proposal Sent',
+  LOGIN_PROGRESS: 'Login Progress',
+  PAYMENT_DONE: 'Payment Done',
+  PROCESS_COMPLETED: 'Process Completed',
+};
+
+const STAGE_COLORS: Record<string, string> = {
+  'To Contact': 'bg-blue-50/20 border-blue-100',
+  'Contacted': 'bg-indigo-50/20 border-indigo-100',
+  'Proposal Sent': 'bg-purple-50/20 border-purple-100',
+  'Login Progress': 'bg-orange-50/20 border-orange-100',
+  'Payment Done': 'bg-green-50/20 border-green-100',
+  'Process Completed': 'bg-emerald-50/20 border-emerald-100',
+};
+
+const BADGE_STYLES: Record<string, string> = {
+  TO_CONTACT: 'bg-blue-50 text-blue-700 border-blue-200',
+  CONTACTED: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+  PROPOSAL_SENT: 'bg-purple-50 text-purple-700 border-purple-200',
+  LOGIN_PROGRESS: 'bg-orange-50 text-orange-700 border-orange-200',
+  PAYMENT_DONE: 'bg-green-50 text-green-700 border-green-200',
+  PROCESS_COMPLETED: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+};
+
+// ── Hotness Level ─────────────────────────────────────────────────────────────
+type HotnessLevel = 'HOT' | 'WARM' | 'COLD';
+
+function deriveHotness(lead: any): HotnessLevel {
+  if (!lead.followUpDate) return 'COLD';
+  const daysUntil = Math.ceil((new Date(lead.followUpDate).getTime() - Date.now()) / 86400000);
+  if (daysUntil < 0) return 'HOT';
+  if (daysUntil <= 3) return 'HOT';
+  if (daysUntil <= 7) return 'WARM';
+  return 'COLD';
+}
+
+const HOTNESS_CONFIG: Record<HotnessLevel, { label: string; cls: string; iconName: string }> = {
+  HOT: { label: 'Hot', cls: 'text-red-600 bg-red-50 border-red-200', iconName: 'Flame' },
+  WARM: { label: 'Warm', cls: 'text-amber-600 bg-amber-50 border-amber-200', iconName: 'Thermometer' },
+  COLD: { label: 'Cold', cls: 'text-blue-500 bg-blue-50 border-blue-200', iconName: 'Snowflake' },
+};
+
+function HotnessIcon({ level }: { level: HotnessLevel }) {
+  if (level === 'HOT') return <Flame size={10} />;
+  if (level === 'WARM') return <Thermometer size={10} />;
+  return <Snowflake size={10} />;
+}
+
+function parseLeadNotes(notes?: string | null): Record<string, any> {
+  if (!notes) return {};
+  try {
+    const parsed = JSON.parse(notes);
+    return typeof parsed === 'object' && parsed !== null ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function isMutualFundLead(lead: any): boolean {
+  if (!lead) return false;
+
+  const checkString = (str?: string) => {
+    if (!str || typeof str !== 'string') return false;
+    const lower = str.toLowerCase();
+    return lower.includes('mutual') || lower.includes('fund') || lower === 'mf';
+  };
+
+  if (checkString(lead.plan?.category)) return true;
+  if (checkString(lead.leadType)) return true;
+
+  if (Array.isArray(lead.interests) && lead.interests.some(checkString)) return true;
+
+  if (Array.isArray(lead.contact?.productInterests)) {
+    for (const pi of lead.contact.productInterests) {
+      if (Array.isArray(pi.interestedIn) && pi.interestedIn.some(checkString)) return true;
+      if (checkString(pi.leadType)) return true;
+    }
+  }
+
+  if (lead.notes) {
+    let parsedNotes: any = null;
+    if (typeof lead.notes === 'string' && lead.notes.trim().startsWith('{')) {
+      try {
+        parsedNotes = JSON.parse(lead.notes);
+      } catch (e) { }
+    } else if (typeof lead.notes === 'object' && lead.notes !== null) {
+      parsedNotes = lead.notes;
+    }
+
+    if (parsedNotes) {
+      if (Array.isArray(parsedNotes.productInterests)) {
+        for (const pi of parsedNotes.productInterests) {
+          if (Array.isArray(pi.interestedIn) && pi.interestedIn.some(checkString)) return true;
+          if (checkString(pi.leadType)) return true;
+        }
+      }
+      if (Array.isArray(parsedNotes.interestedIn) && parsedNotes.interestedIn.some(checkString)) return true;
+      if (checkString(parsedNotes.leadType)) return true;
+    } else if (typeof lead.notes === 'string') {
+      if (checkString(lead.notes)) return true;
+    }
+  }
+
+  return false;
+}
+
+// ── Form schema ───────────────────────────────────────────────────────────────
+export const leadFormSchema = z.object({
+  // System fields mapping
+  firstName: z.string().min(1, 'Required'),
+  lastName: z.string().min(1, 'Required'),
+  phone: z.string().refine(v => {
+    const d = (v || '').replace(/\D/g, '');
+    return d.length === 10 || (d.length > 10 && d.slice(-10).length === 10);
+  }, 'Mobile number must be exactly 10 digits'),
+  alternatePhone: z.string().optional().refine(v => {
+    if (!v) return true;
+    const d = v.replace(/\D/g, '');
+    return d.length === 10 || (d.length > 10 && d.slice(-10).length === 10);
+  }, 'Alternate phone must be exactly 10 digits').or(z.literal('')),
+  email: z.string().email('Invalid email').optional().or(z.literal('')),
+  gender: z.enum(['MALE', 'FEMALE', 'OTHER', '']).optional(),
+  dateOfBirth: z.string().optional(),
+  height: z.coerce.number().optional().or(z.literal('')),
+  weight: z.coerce.number().optional().or(z.literal('')),
+  panNumber: z.string().optional(),
+  aadhaarNumber: z.string().optional(),
+  annualIncome: z.coerce.number().min(0).optional().or(z.literal('')),
+  notes: z.string().optional(),
+  tags: z.string().optional(),
+  isActive: z.string().optional(),
+  city: z.string().optional(),
+  source: z.string().optional(),
+  assignedEmployeeId: z.string().optional(),
+  leadStage: z.string().optional(),
+  leadStatus: z.string().optional(),
+  leadType: z.string().optional(),
+  followUpDate: z.string().optional(),
+  occupationType: z.string().optional(),
+  state: z.string().optional(),
+  district: z.string().optional(),
+});
+const schema = leadFormSchema;
+type Form = z.infer<typeof schema>;
+
+// ── Column definitions ────────────────────────────────────────────────────────
+const ALL_TABLE_COLUMNS = [
+  { key: 'leadId', label: 'Lead ID', defaultVisible: true },
+  { key: 'name', label: 'Client Name', defaultVisible: true },
+  { key: 'phone', label: 'Phone', defaultVisible: false },
+  { key: 'email', label: 'Email', defaultVisible: false },
+  { key: 'plan', label: 'Product', defaultVisible: true },
+  { key: 'hotness', label: 'Hotness', defaultVisible: true },
+  { key: 'employee', label: 'Assigned To', defaultVisible: true },
+  { key: 'premiumBudget', label: 'Exp. Premium', defaultVisible: true },
+  { key: 'followUpDate', label: 'Next Follow-up', defaultVisible: true },
+  { key: 'source', label: 'Source', defaultVisible: false },
+  { key: 'createdAt', label: 'Created Date', defaultVisible: false },
+  { key: 'stage', label: 'Stage', defaultVisible: true },
+  { key: 'actions', label: '', defaultVisible: true },
+];
+
+const PLAN_CATEGORIES = [
+  { value: 'LIFE', label: 'Life Insurance' },
+  { value: 'HEALTH', label: 'Health Insurance' },
+  { value: 'ACCIDENT', label: 'Accident Policy' },
+  { value: 'MOTOR', label: 'Motor Insurance' },
+  { value: 'TRAVEL', label: 'Travel Insurance' },
+  { value: 'GENERAL', label: 'General Insurance' },
+];
+
+const FILTER_STAGE_OPTIONS = [
+  { value: 'TO_CONTACT', label: 'To Contact' },
+  { value: 'CONTACTED', label: 'Contacted' },
+  { value: 'PROPOSAL_SENT', label: 'Proposal Sent' },
+  { value: 'LOGIN_PROGRESS', label: 'Login Progress' },
+  { value: 'PAYMENT_DONE', label: 'Payment Done' },
+  { value: 'PROCESS_COMPLETED', label: 'Process Completed' },
+];
+
+const LEAD_STATUS_OPTIONS = [
+  { value: 'NOT_INTERESTED', label: 'Not Interested' },
+  { value: 'LEAD_LOST', label: 'Lead Lost' },
+  { value: 'INTERESTED', label: 'Interested' },
+  { value: 'HOT', label: 'Hot' },
+  { value: 'VERY_HOT', label: 'Very Hot' },
+];
+
+const normalizeLeadStatus = (status?: string) => {
+  if (!status) return 'INTERESTED';
+  return LEAD_STATUS_OPTIONS.find(option =>
+    option.value === status || option.label.toLowerCase() === status.toLowerCase()
+  )?.value ?? status;
+};
+
+const MEDICAL_CONDITIONS_LIST = [
+  'Diabetes Mellitus',
+  'High BP / Cholesterol',
+  'Heart Disease',
+  'Tuberculosis',
+  'Asthma',
+  'Other Respiratory Infection',
+  'Disease of bones/joints',
+  'Slip disc',
+  'Spinal Disorder',
+  'Ligament Injury',
+  'Cancer',
+  'Gynecological disorder (DUB, Fibroid Uterus, Ovarian cyst)',
+  'Undergone Cesarean / Hysterectomy',
+  'Disease of Stomach / Intestine',
+  'Liver / Gall Bladder / Pancreas',
+  'Kidney / Urinary Bladder / Urinary Tract Disease',
+  'Disease of Prostate / Fistula / Piles / Genital Disease',
+  'Cataract or Other Disease of Eye and ENT',
+  'Thyroid',
+  'Others'
+];
+
+function MultiSelectBox({
+  label,
+  selectedValues,
+  onChange,
+  badgeColor = 'blue',
+  placeholder = 'Select Conditions...'
+}: {
+  label: string;
+  selectedValues: string[];
+  onChange: (vals: string[]) => void;
+  badgeColor?: 'blue' | 'orange';
+  placeholder?: string;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+
+  const filteredOptions = MEDICAL_CONDITIONS_LIST.filter(opt =>
+    opt.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const toggleOption = (opt: string) => {
+    if (selectedValues.includes(opt)) {
+      onChange(selectedValues.filter(o => o !== opt));
+    } else {
+      onChange([...selectedValues, opt]);
+    }
+  };
+
+  return (
+    <div className="relative">
+      <label className="label text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">{label}</label>
+      <div
+        onClick={() => setIsOpen(!isOpen)}
+        className="input min-h-[40px] w-full cursor-pointer flex items-center justify-between gap-2 flex-wrap py-1.5 px-3 bg-white border border-slate-200 rounded-xl hover:border-slate-300 transition-all"
+      >
+        {selectedValues.length === 0 ? (
+          <span className="text-slate-400 text-xs font-normal">{placeholder}</span>
+        ) : (
+          <div className="flex flex-wrap gap-1">
+            {selectedValues.map((val, idx) => (
+              <span
+                key={idx}
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold border ${badgeColor === 'orange'
+                  ? 'bg-orange-50 text-orange-700 border-orange-200'
+                  : 'bg-blue-50 text-blue-700 border-blue-200'
+                  }`}
+              >
+                {val}
+                <span
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onChange(selectedValues.filter(v => v !== val));
+                  }}
+                  className="hover:text-red-600 font-bold cursor-pointer ml-0.5"
+                >
+                  ×
+                </span>
+              </span>
+            ))}
+          </div>
+        )}
+        <span className="text-slate-400 text-[10px] ml-auto">▼</span>
+      </div>
+
+      {isOpen && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
+          <div className="absolute z-50 mt-1 w-full bg-white border border-slate-200 rounded-xl shadow-xl p-2.5 max-h-60 overflow-y-auto">
+            <input
+              type="text"
+              className="input w-full text-xs py-1.5 px-2.5 mb-2 border border-slate-200 rounded-lg"
+              placeholder="Type to search condition..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+            />
+            <div className="space-y-0.5">
+              {filteredOptions.map((opt) => {
+                const isChecked = selectedValues.includes(opt);
+                return (
+                  <label
+                    key={opt}
+                    className="flex flex-wrap items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer text-xs select-none"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      className={`w-3.5 h-3.5 rounded cursor-pointer ${badgeColor === 'orange' ? 'accent-orange-500' : 'accent-blue-600'}`}
+                      checked={isChecked}
+                      onChange={() => toggleOption(opt)}
+                    />
+                    <span className={`font-medium ${isChecked ? 'text-slate-900 font-bold' : 'text-slate-600'}`}>
+                      {opt}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Contact Search & Select Dropdown Component ───────────────────────────────
+function ContactSearchSelect({
+  contacts,
+  selectedContactId,
+  onSelect,
+  loading,
+}: {
+  contacts: any[];
+  selectedContactId: string | null;
+  onSelect: (contactId: string | null) => void;
+  loading: boolean;
+}) {
+  const [query, setQuery] = useState('');
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const getContactPhone = (contact: any) => contact.phone || contact.alternatePhone || '';
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const selectedContact = useMemo(() => {
+    return contacts.find(c => (c.id === selectedContactId || c._id === selectedContactId));
+  }, [contacts, selectedContactId]);
+
+  const filtered = useMemo(() => {
+    if (!query.trim()) return contacts.slice(0, 30);
+    const q = query.toLowerCase().trim();
+    return contacts.filter(c => {
+      const name = `${c.firstName || ''} ${c.lastName || ''}`.toLowerCase();
+      const phone = getContactPhone(c);
+      const email = (c.email || '').toLowerCase();
+      const city = (c.addresses?.[0]?.city || c.city || '').toLowerCase();
+      return name.includes(q) || phone.includes(q) || email.includes(q) || city.includes(q);
+    }).slice(0, 30);
+  }, [contacts, query]);
+
+  return (
+    <div ref={containerRef} className="relative w-full">
+      <div className="relative flex items-center">
+        <div className="absolute left-3.5 text-slate-400 pointer-events-none">
+          <Search size={15} />
+        </div>
+        <input
+          type="text"
+          className="w-full text-xs pl-9 pr-9 py-2.5 bg-white border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-xl font-medium text-slate-800 placeholder-slate-400 outline-none transition-all shadow-xs cursor-text"
+          placeholder={loading ? "Loading contacts list..." : "Search existing contact by Name, Mobile Number, or Email..."}
+          value={isOpen ? query : (selectedContact ? `${selectedContact.firstName || ''} ${selectedContact.lastName || ''} (${getContactPhone(selectedContact) || 'No Phone'})` : query)}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setIsOpen(true);
+          }}
+          onFocus={() => setIsOpen(true)}
+          onClick={() => setIsOpen(true)}
+        />
+        {query && isOpen && (
+          <button
+            type="button"
+            onClick={() => {
+              setQuery('');
+            }}
+            className="absolute right-3 text-slate-400 hover:text-slate-600 cursor-pointer p-1"
+          >
+            <X size={14} />
+          </button>
+        )}
+      </div>
+
+      {isOpen && (
+        <div className="absolute z-[9999] left-0 right-0 mt-1.5 max-h-64 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-xl divide-y divide-slate-100 custom-scrollbar">
+          {loading ? (
+            <div className="p-4 text-center text-xs text-slate-400 font-medium">
+              Loading contacts list...
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="p-4 text-center text-xs text-slate-400 font-medium">
+              No contacts found matching "{query}".
+            </div>
+          ) : (
+            filtered.map((c) => {
+              const cId = c.id || c._id;
+              const isSel = selectedContactId === cId;
+              const fullName = `${c.firstName || ''} ${c.lastName || ''}`.trim() || 'Unnamed Contact';
+              const city = c.addresses?.[0]?.city || c.city || '';
+
+              return (
+                <div
+                  key={cId}
+                  className={clsx(
+                    "p-3 text-xs cursor-pointer transition-all flex items-center justify-between gap-2 hover:bg-blue-50/80",
+                    isSel ? "bg-blue-50 font-bold border-l-4 border-blue-600" : ""
+                  )}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    onSelect(cId);
+                    setIsOpen(false);
+                    setQuery('');
+                  }}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white font-black text-[11px] flex items-center justify-center shrink-0 shadow-2xs">
+                      {c.firstName?.[0]?.toUpperCase() || 'C'}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-bold text-slate-900 truncate">{fullName}</p>
+                      <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-500 font-normal">
+                        {getContactPhone(c) && <span>📱 {getContactPhone(c)}</span>}
+                        {c.email && <span className="truncate">✉️ {c.email}</span>}
+                        {city && <span>📍 {city}</span>}
+                      </div>
+                    </div>
+                  </div>
+                  {isSel && (
+                    <span className="text-[10px] font-black bg-blue-600 text-white px-2 py-0.5 rounded-full shrink-0">
+                      Selected
+                    </span>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main Component ────────────────────────────────────────────────────────────
+export default function Leads() {
+  const [searchParams] = useSearchParams();
+  const [viewMode, setViewMode] = useState<'board' | 'table'>('board');
+  const [showFilters, setShowFilters] = useState(false);
+  const [createInitialStage, setCreateInitialStage] = useState<string>('TO_CONTACT');
+
+  // Filters
+  const [filterPlans, setFilterPlans] = useState<string[]>([]);
+  const [filterStatuses, setFilterStatuses] = useState<string[]>([]);
+  const [filterStages, setFilterStages] = useState<string[]>([]);
+  const [filterTypes, setFilterTypes] = useState<string[]>([]);
+  const [filterEmployee, setFilterEmployee] = useState('');
+  const [filterDateFrom, setFilterDateFrom] = useState('');
+  const [filterDateTo, setFilterDateTo] = useState('');
+  const [filterEnquiryDateFrom, setFilterEnquiryDateFrom] = useState('');
+  const [filterEnquiryDateTo, setFilterEnquiryDateTo] = useState('');
+  const [filterFinalSellsFrom, setFilterFinalSellsFrom] = useState('');
+  const [filterFinalSellsTo, setFilterFinalSellsTo] = useState('');
+  const [filterExpectedPremiumMin, setFilterExpectedPremiumMin] = useState('');
+  const [filterExpectedPremiumMax, setFilterExpectedPremiumMax] = useState('');
+  const [filterLeadSource, setFilterLeadSource] = useState('');
+  const [selectedQuickFilters, setSelectedQuickFilters] = useState<string[]>([]);
+  const [search, setSearch] = useState(() => searchParams.get('search') || searchParams.get('q') || '');
+
+  useEffect(() => {
+    const q = searchParams.get('search') ?? searchParams.get('q');
+    if (q !== null && q !== undefined) {
+      setSearch(q);
+    } else if (!searchParams.has('search') && !searchParams.has('q')) {
+      setSearch('');
+    }
+  }, [searchParams]);
+
+  const toggleQuickFilter = (key: string) => {
+    if (key === 'ALL') {
+      setSelectedQuickFilters([]);
+      return;
+    }
+    setSelectedQuickFilters(prev =>
+      prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+    );
+  };
+
+  const [planFilterOpen, setPlanFilterOpen] = useState(false);
+  const [statusFilterOpen, setStatusFilterOpen] = useState(false);
+  const [stageFilterOpen, setStageFilterOpen] = useState(false);
+  const [typeFilterOpen, setTypeFilterOpen] = useState(false);
+  const planFilterRef = useRef<HTMLDivElement>(null);
+  const statusFilterRef = useRef<HTMLDivElement>(null);
+  const stageFilterRef = useRef<HTMLDivElement>(null);
+  const typeFilterRef = useRef<HTMLDivElement>(null);
+
+  // Table sort
+  const [sortKey, setSortKey] = useState<string>('');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
+  // Table column visibility
+  const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>(
+    Object.fromEntries(ALL_TABLE_COLUMNS.map(c => [c.key, c.defaultVisible]))
+  );
+  const [colMenuOpen, setColMenuOpen] = useState(false);
+  const colMenuRef = useRef<HTMLDivElement>(null);
+
+  // Modals
+  const [modalOpen, setModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (searchParams.get('action') === 'add') {
+      openCreate();
+    }
+  }, [searchParams]);
+  const [editTarget, setEditTarget] = useState<any | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
+
+  // Detail popup
+  const [detailTarget, setDetailTarget] = useState<any | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailTab, setDetailTab] = useState<'overview' | 'comments' | 'history'>('overview');
+  const [isDetailEditing, setIsDetailEditing] = useState(false);
+  const detailSaveHandlerRef = useRef<(() => void) | null>(null);
+  const detailIsSavingRef = useRef<boolean>(false);
+
+  const [activeLeadTab, setActiveLeadTab] = useState('Product Interest');
+  const [editContactId, setEditContactId] = useState<string | null>(null);
+  const [loadedContact, setLoadedContact] = useState<any | null>(null);
+  const [duplicateContactMatched, setDuplicateContactMatched] = useState<any | null>(null);
+  const [maxRenewalWindow, setMaxRenewalWindow] = useState<number>(45);
+
+  const [leadDocUploadOpen, setLeadDocUploadOpen] = useState(false);
+  const [docPreviewModal, setDocPreviewModal] = useState<{ open: boolean; title: string; url: string }>({ open: false, title: '', url: '' });
+  const [viewConnectedPolicyId, setViewConnectedPolicyId] = useState<string | null>(null);
+
+  const handleOpenConnectedPolicy = async (leadOrCard: any) => {
+    if (!leadOrCard) return;
+    const pNotes: any = parseLeadNotes(leadOrCard.notes);
+    const polId = leadOrCard?.connectedPolicy?.id || pNotes?.policyId;
+    if (polId) {
+      setViewConnectedPolicyId(polId);
+      return;
+    }
+    const polNo = leadOrCard?.connectedPolicy?.policyNumber || pNotes?.policyNumber;
+    if (polNo) {
+      try {
+        const res: any = await policiesService.list({ search: polNo, limit: 10 });
+        const list = res?.data?.data || res?.data || res || [];
+        const match = Array.isArray(list) ? list.find((p: any) => p.policyNumber === polNo) : null;
+        if (match?.id) {
+          setViewConnectedPolicyId(match.id);
+          return;
+        }
+      } catch { /* ignore */ }
+      window.open(`/policies?search=${encodeURIComponent(polNo)}`, '_blank');
+    } else {
+      toast.error('No connected policy information found for this lead');
+    }
+  };
+
+  const currentContactDocId = editContactId || loadedContact?.id || editTarget?.contactId || (editTarget as any)?.contact?.id || (editTarget as any)?.contact?._id;
+
+  const { data: leadDocsResponse } = useQuery({
+    queryKey: ['contact-documents-list', currentContactDocId],
+    queryFn: () => documentsService.list({ contactId: String(currentContactDocId) }),
+    enabled: !!currentContactDocId && modalOpen,
+  });
+  const leadDocsList = leadDocsResponse?.data?.data || leadDocsResponse?.data || [];
+
+  // Contacts picker query for Add New Lead dropdown
+  const { data: contactsPickerRes, isLoading: contactsLoading } = useQuery({
+    queryKey: ['contacts-list-picker'],
+    queryFn: () => contactsService.list({ limit: 500 }),
+    enabled: modalOpen && !editTarget,
+  });
+  const contactsPickerList: any[] = useMemo(() => {
+    const raw = contactsPickerRes?.data ?? contactsPickerRes ?? [];
+    return Array.isArray(raw) ? raw : [];
+  }, [contactsPickerRes]);
+
+  const loadContactById = async (contactId: string) => {
+    if (!contactId) return;
+    setEditContactId(contactId);
+    try {
+      const res = await contactsService.get(contactId);
+      const contact = res?.data?.data ?? res?.data ?? res;
+      if (!contact || typeof contact !== 'object') {
+        throw new Error('Contact data is invalid');
+      }
+      setLoadedContact(contact);
+
+      const primaryAddr = Array.isArray(contact.addresses)
+        ? (contact.addresses.find((a: any) => a.isPrimary) || contact.addresses[0])
+        : null;
+      const primaryOcc = Array.isArray(contact.occupations)
+        ? (contact.occupations.find((o: any) => o.isPrimary) || contact.occupations[0])
+        : null;
+
+      const toDateOnly = (val: any) => {
+        if (!val) return '';
+        if (typeof val === 'string') return val.split('T')[0];
+        try {
+          return new Date(val).toISOString().split('T')[0];
+        } catch {
+          return '';
+        }
+      };
+
+      setPersonalFields({
+        role: contact.role || contact.user?.role || 'Contact',
+        contactStatus: contact.isActive !== false ? 'Active' : 'Inactive',
+        isActive: contact.isActive !== false,
+        fullName: `${contact.firstName || ''} ${contact.lastName || ''}`.trim(),
+        firstName: contact.firstName || '',
+        middleName: contact.middleName || '',
+        lastName: contact.lastName || '',
+        gender: contact.gender || '',
+        maritalStatus: contact.maritalStatus || '',
+        dateOfBirth: toDateOnly(contact.dateOfBirth),
+        birthPlace: contact.birthPlace || '',
+        email: contact.email || '',
+        aadhaarNumber: contact.aadhaarNumber || '',
+        panNumber: contact.panNumber || contact.pan || '',
+        whatsappNumber: contact.phone || '',
+        sameAsWhatsapp: true,
+        callingNumber: contact.alternatePhone || '',
+        education: contact.education || '',
+        annualIncome: contact.annualIncome != null ? String(contact.annualIncome) : '',
+        height: contact.height != null ? String(contact.height) : '',
+        weight: contact.weight != null ? String(contact.weight) : '',
+        occupationType: primaryOcc?.type || '',
+        companyName: primaryOcc?.companyName || '',
+        state: primaryAddr?.state || '',
+        district: primaryAddr?.district || '',
+        city: primaryAddr?.city || '',
+        pincode: primaryAddr?.pincode || '',
+        streetAddress: primaryAddr?.line1 || '',
+        declaredMedicalHistory: [],
+        notDeclaredMedicalHistory: [],
+        medicalHistoryDetails: ''
+      });
+
+      if (Array.isArray(contact.relationships)) {
+        setFamilyMembers(contact.relationships.map((r: any) => ({
+          id: r.id,
+          firstName: r.relatedContact?.firstName || r.name || '',
+          lastName: r.relatedContact?.lastName || '',
+          relation: r.relationshipType || 'OTHER',
+          dob: toDateOnly(r.relatedContact?.dateOfBirth || r.dateOfBirth),
+          whatsapp: r.relatedContact?.phone || r.phone || '',
+          contactId: r.relatedContactId || undefined
+        })));
+      }
+
+      if (Array.isArray(contact.policies)) {
+        setPolicies(contact.policies.map((p: any) => ({
+          id: p.id,
+          policyType: p.plan?.category || 'Health',
+          entries: [{
+            company: p.plan?.company?.name || '',
+            planName: p.plan?.name || '',
+            policyNo: p.policyNumber || '',
+            sumAssured: p.sumAssured != null ? String(p.sumAssured) : '',
+            premium: p.premiumAmount != null ? String(p.premiumAmount) : '',
+            startDate: toDateOnly(p.startDate),
+            endDate: toDateOnly(p.endDate),
+          }]
+        })));
+      }
+    } catch (err: any) {
+      console.error('Error loading contact:', err);
+      toast.error('Failed to load contact details');
+    }
+  };
+
+  useEffect(() => {
+    leadsService.getRenewalWindow()
+      .then((res: any) => {
+        if (res?.data?.maxWindow) {
+          setMaxRenewalWindow(res.data.maxWindow);
+        }
+      })
+      .catch((err: any) => console.error(err));
+  }, []);
+
+  // Policy & Mutual Fund Modal States for PAYMENT_DONE -> PROCESS_COMPLETED transition
+  const [policyModalOpen, setPolicyModalOpen] = useState(false);
+  const [policyLead, setPolicyLead] = useState<any>(null);
+  const [policySelectedType, setPolicySelectedType] = useState('');
+  const [policySelectedCompany, setPolicySelectedCompany] = useState('');
+  const [policySelectedPlanId, setPolicySelectedPlanId] = useState('');
+
+  // Mutual Fund Modal States
+  const [mfModalOpen, setMfModalOpen] = useState(false);
+  const [mfLead, setMfLead] = useState<any>(null);
+  const [mfNumberOfSips, setMfNumberOfSips] = useState('');
+  const [mfSipAmount, setMfSipAmount] = useState('');
+  const [mfOnboardingDone, setMfOnboardingDone] = useState<'YES' | 'NO'>('YES');
+  const [mfLumpsumAmount, setMfLumpsumAmount] = useState('');
+  const [mfSubmitting, setMfSubmitting] = useState(false);
+
+  const triggerMutualFundFormForLead = (leadObj: any) => {
+    setDetailOpen(false);
+    setMfLead(leadObj);
+    const notes: any = parseLeadNotes(leadObj.notes);
+    const mfDetails = notes.mutualFundDetails || {};
+    setMfNumberOfSips(notes.numberOfSips ?? mfDetails.numberOfSips ? String(notes.numberOfSips ?? mfDetails.numberOfSips) : '');
+    setMfSipAmount(notes.sipAmount ?? mfDetails.sipAmount ? String(notes.sipAmount ?? mfDetails.sipAmount) : '');
+    const isNo = notes.onboardingDone === 'NO' || notes.onboardingDone === false || mfDetails.onboardingDone === false;
+    setMfOnboardingDone(isNo ? 'NO' : 'YES');
+    setMfLumpsumAmount(notes.lumpsumAmount ?? mfDetails.lumpsumAmount ? String(notes.lumpsumAmount ?? mfDetails.lumpsumAmount) : '');
+    setMfModalOpen(true);
+  };
+
+  const handleProcessCompleted = (leadObj: any) => {
+    if (isMutualFundLead(leadObj)) {
+      triggerMutualFundFormForLead(leadObj);
+    } else {
+      triggerPolicyCreationForLead(leadObj);
+    }
+  };
+
+  const handleMutualFundFormSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!mfLead) return;
+
+    setMfSubmitting(true);
+    const toastId = toast.loading('Saving Mutual Fund details...');
+    try {
+      let existingNotesObj: Record<string, any> = {};
+      if (mfLead.notes) {
+        if (typeof mfLead.notes === 'string' && mfLead.notes.trim().startsWith('{')) {
+          try {
+            existingNotesObj = JSON.parse(mfLead.notes);
+          } catch (err) {
+            existingNotesObj = { cleanNotes: mfLead.notes };
+          }
+        } else if (typeof mfLead.notes === 'object' && mfLead.notes !== null) {
+          existingNotesObj = { ...mfLead.notes };
+        } else {
+          existingNotesObj = { cleanNotes: mfLead.notes };
+        }
+      }
+
+      const updatedNotesObj = {
+        ...existingNotesObj,
+        mutualFundDetails: {
+          numberOfSips: mfNumberOfSips ? Number(mfNumberOfSips) : 0,
+          sipAmount: mfSipAmount ? Number(mfSipAmount) : 0,
+          onboardingDone: mfOnboardingDone === 'YES',
+          lumpsumAmount: mfLumpsumAmount ? Number(mfLumpsumAmount) : 0,
+        },
+        numberOfSips: mfNumberOfSips ? Number(mfNumberOfSips) : 0,
+        sipAmount: mfSipAmount ? Number(mfSipAmount) : 0,
+        onboardingDone: mfOnboardingDone,
+        lumpsumAmount: mfLumpsumAmount ? Number(mfLumpsumAmount) : 0,
+      };
+
+      await leadsService.update(mfLead.id, {
+        notes: JSON.stringify(updatedNotesObj),
+      });
+
+      await moveStage.mutateAsync({ id: mfLead.id, stage: 'PROCESS_COMPLETED' });
+
+      toast.success('Mutual Fund details saved and lead moved to Process Completed!', { id: toastId });
+      setMfModalOpen(false);
+      qc.invalidateQueries({ queryKey: ['leads'] });
+      qc.invalidateQueries({ queryKey: ['contacts'] });
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || 'Failed to complete process', { id: toastId });
+    } finally {
+      setMfSubmitting(false);
+    }
+  };
+
+  const triggerPolicyCreationForLead = (leadObj: any) => {
+    setDetailOpen(false); // Close the detail popup
+    setPolicyLead(leadObj);
+    setPolicyModalOpen(true);
+  };
+
+  const handlePolicyCreateSuccess = async () => {
+    if (policyLead) {
+      try {
+        await moveStage.mutateAsync({ id: policyLead.id, stage: 'PROCESS_COMPLETED' });
+        toast.success('Policy created and lead moved to Process Completed!');
+      } catch (err: any) {
+        toast.error(err.response?.data?.message || 'Failed to update lead status');
+      }
+    }
+    setPolicyModalOpen(false);
+    setPolicyLead(null);
+    qc.invalidateQueries({ queryKey: ['leads'] });
+    qc.invalidateQueries({ queryKey: ['policies'] });
+  };
+
+  type PersonalFields = Record<string, any>;
+
+  const [personalFields, setPersonalFields] = useState<PersonalFields>({
+    role: 'Contact',
+    contactStatus: 'Active',
+    isActive: true,
+    firstName: '',
+    middleName: '',
+    lastName: '',
+    fullName: '',
+    gender: '',
+    maritalStatus: '',
+    dateOfBirth: '',
+    birthPlace: '',
+    age: '',
+    height: '',
+    weight: '',
+    email: '',
+    aadhaarNumber: '',
+    panNumber: '',
+    pan: '',
+    whatsappNumber: '',
+    sameAsWhatsapp: false,
+    callingNumber: '',
+    education: '',
+    annualIncome: '',
+    occupationType: '',
+    companyName: '',
+    state: '',
+    district: '',
+    city: '',
+    pincode: '',
+    streetAddress: '',
+    declaredMedicalHistory: [] as string[],
+    notDeclaredMedicalHistory: [] as string[],
+    medicalHistoryDetails: '',
+    bankName: '',
+    bankAccountNumber: '',
+    bankIfsc: '',
+    bankBranch: '',
+    chewTobacco: false,
+    smoke: false,
+    consumeAlcohol: false,
+    surgeryDetails: '',
+    prescriptionDetails: ''
+  });
+
+  const [leadInfoFields, setLeadInfoFields] = useState({
+    profileType: 'Lead Profile',
+    leadStatus: 'TO_CONTACT',
+    leadStage: '',
+    leadType: '',
+    interestedIn: ['Health'],
+    leadSource: 'By Agent',
+    assignedEmployeeId: '',
+    followUpDate: '',
+  });
+
+  const [leadComments, setLeadComments] = useState<string[]>([]);
+  const [newComment, setNewComment] = useState('');
+
+  type ProductComment = { text: string; author: string; datetime: string };
+  type ProductInterestCard = {
+    id: string;
+    collapsed: boolean;
+    interestedIn: string[];
+    otherProduct: string;
+    descriptionDetails?: string;
+    initialStage?: string;
+    leadStage: string;
+    leadStatus: string;
+    dependencyType?: string;
+    dependentDetails?: string;
+    leadType: string;
+    leadSource: string;
+    assignedEmployeeId: string;
+    followUpDate: string;
+    expectedPremium: string;
+    comments: ProductComment[];
+    newComment: string;
+    showAllComments?: boolean;
+  };
+
+  function parseLeadNotes(notesText?: string | null): Record<string, any> {
+    const res: Record<string, any> = {
+      leadStatus: 'INTERESTED',
+      leadType: 'FRESH',
+      cleanNotes: '',
+      dependencyType: 'SELF',
+      dependentDetails: '',
+      descriptionDetails: '',
+    };
+    if (!notesText) return res;
+    if (notesText.trim().startsWith('{')) {
+      try {
+        const parsed = JSON.parse(notesText);
+        Object.assign(res, parsed);
+        res.leadStatus = parsed.leadStatus || 'INTERESTED';
+        res.leadType = parsed.leadType || 'FRESH';
+        res.cleanNotes = parsed.cleanNotes || '';
+        res.dependencyType = parsed.dependencyType || 'SELF';
+        res.dependentDetails = parsed.dependentDetails || '';
+        res.descriptionDetails = parsed.descriptionDetails || '';
+        return res;
+      } catch (e) { }
+    }
+    const lines = notesText.split('\n');
+    const cleanLines: string[] = [];
+    lines.forEach(line => {
+      if (line.startsWith('Status: ')) {
+        res.leadStatus = line.replace('Status: ', '').trim();
+      } else if (line.startsWith('Type: ')) {
+        res.leadType = line.replace('Type: ', '').trim();
+      } else if (line.startsWith('Dependency: ')) {
+        res.dependencyType = line.replace('Dependency: ', '').trim();
+      } else if (line.startsWith('Dependent Details: ')) {
+        res.dependentDetails = line.replace('Dependent Details: ', '').trim();
+      } else if (line.startsWith('Description Details: ')) {
+        res.descriptionDetails = line.replace('Description Details: ', '').trim();
+      } else {
+        cleanLines.push(line);
+      }
+    });
+    res.cleanNotes = cleanLines.join('\n').trim();
+    return res;
+  }
+
+  function serializeLeadNotes(card: ProductInterestCard) {
+    return JSON.stringify({
+      leadStatus: card.leadStatus,
+      leadType: card.leadType,
+      dependencyType: card.dependencyType || 'SELF',
+      dependentDetails: card.dependencyType === 'DEPENDENT' ? (card.dependentDetails || '') : '',
+      descriptionDetails: card.descriptionDetails || '',
+      cleanNotes: card.otherProduct ? `Other Product: ${card.otherProduct}` : '',
+    });
+  }
+
+  const newProductInterestCard = (stage?: string): ProductInterestCard => ({
+    id: 'temp-' + Math.random().toString(36).slice(2),
+    collapsed: false,
+    interestedIn: [],
+    otherProduct: '',
+    descriptionDetails: '',
+    initialStage: stage || 'TO_CONTACT',
+    leadStage: stage || 'TO_CONTACT',
+    leadStatus: 'INTERESTED',
+    dependencyType: 'SELF',
+    dependentDetails: '',
+    leadType: 'FRESH',
+    leadSource: 'Social Media',
+    assignedEmployeeId: '',
+    followUpDate: '',
+    expectedPremium: '',
+    comments: [],
+    newComment: '',
+    showAllComments: false,
+  });
+
+  const [productInterests, setProductInterests] = useState<ProductInterestCard[]>([]);
+  const [cardEditModes, setCardEditModes] = useState<Record<string, boolean>>({});
+  const [allowEditPersonal, setAllowEditPersonal] = useState(false);
+
+  const toggleCardEditMode = (cardId: string) => {
+    setCardEditModes(prev => ({
+      ...prev,
+      [cardId]: !prev[cardId],
+    }));
+  };
+
+  const addProductInterest = () =>
+    setProductInterests(prev => [...prev, newProductInterestCard()]);
+
+  const removeProductInterest = async (id: string) => {
+    const isExisting = id.length === 24 || /^[0-9a-fA-F]{24}$/.test(id);
+    if (isExisting) {
+      if (!confirm('Are you sure you want to delete this product interest from the server?')) return;
+      const toastId = toast.loading('Deleting product interest...');
+      try {
+        await leadsService.remove(id);
+        toast.success('Product interest deleted from server successfully!', { id: toastId });
+        qc.invalidateQueries({ queryKey: ['contacts'] });
+        qc.invalidateQueries({ queryKey: ['leads'] });
+      } catch (err: any) {
+        toast.error('Failed to delete product interest from server', { id: toastId });
+        return;
+      }
+    }
+    setProductInterests(prev => prev.filter(c => c.id !== id));
+  };
+
+  const updateProductInterest = (id: string, field: keyof ProductInterestCard, value: any) => {
+    let actualValue = value;
+    if (field === 'followUpDate' && typeof value === 'object' && value !== null) {
+      actualValue = value.target?.value ?? value.value ?? '';
+    }
+    if (field === 'leadStage') {
+      const card = productInterests.find(c => c.id === id);
+      if (card) {
+        const baseline = card.initialStage || 'TO_CONTACT';
+        const curIdx = STAGE_ORDER.indexOf(baseline);
+        const tarIdx = STAGE_ORDER.indexOf(value);
+        if (curIdx !== -1 && tarIdx !== -1 && tarIdx < curIdx) {
+          toast.error('Moving lead to a previous stage is not allowed.');
+          return;
+        }
+      }
+    }
+    setProductInterests(prev => prev.map(c => c.id === id ? { ...c, [field]: actualValue } : c));
+  };
+
+  const toggleProductCollapse = (id: string) =>
+    setProductInterests(prev => prev.map(c => c.id === id ? { ...c, collapsed: !c.collapsed } : c));
+
+  const addProductComment = async (id: string) => {
+    const card = productInterests.find(c => c.id === id);
+    if (!card || !card.newComment.trim()) return;
+
+    const user = useAuthStore.getState().user;
+    const author = user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email || 'User' : 'User';
+    const commentText = card.newComment.trim();
+
+    const isExisting = id.length === 24 || /^[0-9a-fA-F]{24}$/.test(id);
+    if (isExisting) {
+      const toastId = toast.loading('Adding comment...');
+      try {
+        await leadsService.addConsultation(id, { notes: commentText });
+        toast.success('Comment added successfully!', { id: toastId });
+        qc.invalidateQueries({ queryKey: ['contacts'] });
+        qc.invalidateQueries({ queryKey: ['leads'] });
+      } catch (err: any) {
+        toast.error('Failed to save comment to server', { id: toastId });
+      }
+    }
+
+    const comment = {
+      text: commentText,
+      author,
+      datetime: new Date().toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+    };
+
+    setProductInterests(prev => prev.map(c => {
+      if (c.id !== id) return c;
+      return { ...c, comments: [...c.comments, comment], newComment: '' };
+    }));
+  };
+
+  const [selectedCampaigns, setSelectedCampaigns] = useState<string[]>([]);
+  const [familyMembers, setFamilyMembers] = useState<any[]>([]);
+  const [policies, setPolicies] = useState<any[]>([]);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const { data: kanbanRes, isLoading } = useLeadKanban();
+  const moveStage = useMoveLeadStage();
+  const createLead = useCreateLead();
+  const updateLead = useUpdateLead();
+  const deleteLead = useDeleteLead();
+  const qc = useQueryClient();
+  const user = useAuthStore(s => s.user);
+  const isOwner = user?.role === 'OWNER';
+  const isAdminOrSuperadmin = user?.role === 'OWNER' || user?.role === 'SUPERADMIN' || user?.role === 'ADMIN';
+
+  const LEAD_SOURCES = useMemo(() => [
+    'Social Media',
+    'Our Customer Self',
+    'Refered by our customer',
+    'Walkin',
+    'BNI'
+  ], []);
+
+
+
+
+
+
+
+  const [draggedOverStage, setDraggedOverStage] = useState<string | null>(null);
+
+  const { data: empRes } = useQuery({
+    queryKey: ['employees-list-leads'],
+    queryFn: () => employeesService.list({ limit: 100 }),
+    staleTime: 5 * 60_000,
+  });
+  const employeesList = useMemo(() => {
+    const raw = empRes?.data?.data || empRes?.data || [];
+    return Array.isArray(raw) ? raw : [];
+  }, [empRes]);
+
+  // Flat leads
+  const leadsFlat = useMemo(() => {
+    const rawData = kanbanRes?.data ?? {};
+    const flat: any[] = [];
+
+    const processCard = (card: any, defaultBackendStage?: string) => {
+      let st = card.stage || defaultBackendStage || 'TO_CONTACT';
+      if (st === 'OPEN' || st === 'NEW') st = 'TO_CONTACT';
+      const ui = BACKEND_TO_UI[st] || 'To Contact';
+      return { ...card, stage: st, uiStage: ui };
+    };
+
+    if (Array.isArray(rawData)) {
+      rawData.forEach((card: any) => flat.push(processCard(card)));
+    } else if (typeof rawData === 'object' && rawData !== null) {
+      Object.keys(rawData).forEach(backendStage => {
+        const list = Array.isArray(rawData[backendStage]) ? rawData[backendStage] : [];
+        list.forEach((card: any) => flat.push(processCard(card, backendStage)));
+      });
+    }
+    return flat;
+  }, [kanbanRes]);
+
+  // Client-side filter
+  const filteredLeads = useMemo(() => {
+    const sTerm = search.toLowerCase();
+    const matchingLeads = leadsFlat.filter(lead => {
+      // Must have product interest exclusively selected
+      if (!lead.interests || !Array.isArray(lead.interests) || lead.interests.length === 0 || lead.interests.every((i: any) => !i || !String(i).trim())) {
+        return false;
+      }
+
+      // Employee role data isolation safeguard: only see self-assigned or unassigned
+      if (user?.role === 'EMPLOYEE') {
+        const currentUserId = user.id;
+        const assignedEmpId = lead.assignedEmployeeId || lead.assignedEmployee?.id || lead.assignedEmployee?.userId;
+        if (assignedEmpId) {
+          const myEmp = employeesList.find((e: any) => e.userId === currentUserId || e.user?.id === currentUserId || e.id === currentUserId);
+          const validMyIds = [currentUserId];
+          if (myEmp?.id) validMyIds.push(myEmp.id);
+          if (myEmp?.userId) validMyIds.push(myEmp.userId);
+          if (myEmp?.user?.id) validMyIds.push(myEmp.user.id);
+          if (!validMyIds.includes(assignedEmpId)) {
+            return false;
+          }
+        }
+      }
+      const fullName = `${lead.contact?.firstName || ''} ${lead.contact?.lastName || ''}`.trim().toLowerCase();
+      if (search && !fullName.includes(sTerm) && !(lead.contact?.phone || '').includes(sTerm) && !(lead.contact?.email || '').toLowerCase().includes(sTerm) && !(lead.leadId || '').toLowerCase().includes(sTerm)) return false;
+      if (filterPlans.length > 0) {
+        const planCategory = String(lead.plan?.category || '').toUpperCase();
+        const interests = (lead.interests || []).map((interest: string) => interest.toLowerCase());
+        const matchesPlanCategory = filterPlans.some(category => {
+          if (category === 'ACCIDENT') {
+            return planCategory.includes('ACCIDENT') || interests.some((interest: string) => interest.includes('accident'));
+          }
+          return planCategory === category;
+        });
+        if (!matchesPlanCategory) return false;
+      }
+      if (filterEmployee && lead.assignedEmployeeId !== filterEmployee) return false;
+      if (filterStages.length > 0 && !filterStages.includes(lead.stage ?? '')) return false;
+
+      const extra = parseLeadNotes(lead.notes);
+      const curStatus = extra.leadStatus || lead.leadStatus || lead.status || 'INTERESTED';
+      if (filterStatuses.length > 0) {
+        if (!filterStatuses.includes(curStatus)) return false;
+      } else {
+        // Exclude Lost and Not Interested leads by default
+        if (curStatus === 'LEAD_LOST' || curStatus === 'NOT_INTERESTED' || lead.stage === 'LOST') {
+          return false;
+        }
+      }
+      if (filterTypes.length > 0) {
+        const rawType = (extra.leadType || lead.type || 'FRESH').toUpperCase();
+        const matchesFilter = filterTypes.some(ft => {
+          const ftUpper = ft.toUpperCase();
+          if (ftUpper === 'RENEWAL') return rawType.includes('RENEWAL');
+          if (ftUpper === 'PORTING') return rawType.includes('PORT');
+          if (ftUpper.includes('RENEWAL') && ftUpper.includes('PORT')) return rawType.includes('RENEWAL') || rawType.includes('PORT');
+          return rawType === ftUpper;
+        });
+        if (!matchesFilter) return false;
+      }
+
+      if (filterDateFrom) {
+        const fromDate = new Date(filterDateFrom); fromDate.setHours(0, 0, 0, 0);
+        if (!lead.followUpDate || new Date(lead.followUpDate) < fromDate) return false;
+      }
+      if (filterDateTo) {
+        const toDate = new Date(filterDateTo); toDate.setHours(23, 59, 59, 999);
+        if (!lead.followUpDate || new Date(lead.followUpDate) > toDate) return false;
+      }
+
+      // Date of First Enquiry (Lead Creation Date)
+      if (filterEnquiryDateFrom) {
+        const fromDate = new Date(filterEnquiryDateFrom); fromDate.setHours(0, 0, 0, 0);
+        if (!lead.createdAt || new Date(lead.createdAt) < fromDate) return false;
+      }
+      if (filterEnquiryDateTo) {
+        const toDate = new Date(filterEnquiryDateTo); toDate.setHours(23, 59, 59, 999);
+        if (!lead.createdAt || new Date(lead.createdAt) > toDate) return false;
+      }
+
+      // Date of Final Sells (Completed / Payment Done stage date)
+      if (filterFinalSellsFrom) {
+        const fromDate = new Date(filterFinalSellsFrom); fromDate.setHours(0, 0, 0, 0);
+        const isClosed = lead.stage === 'PAYMENT_DONE' || lead.stage === 'PROCESS_COMPLETED';
+        const sellDate = lead.updatedAt || lead.createdAt;
+        if (!isClosed || !sellDate || new Date(sellDate) < fromDate) return false;
+      }
+      if (filterFinalSellsTo) {
+        const toDate = new Date(filterFinalSellsTo); toDate.setHours(23, 59, 59, 999);
+        const isClosed = lead.stage === 'PAYMENT_DONE' || lead.stage === 'PROCESS_COMPLETED';
+        const sellDate = lead.updatedAt || lead.createdAt;
+        if (!isClosed || !sellDate || new Date(sellDate) > toDate) return false;
+      }
+
+      // Expected Premium Range Filter
+      if (filterExpectedPremiumMin) {
+        if ((lead.premiumBudget ?? 0) < Number(filterExpectedPremiumMin)) return false;
+      }
+      if (filterExpectedPremiumMax) {
+        if ((lead.premiumBudget ?? 0) > Number(filterExpectedPremiumMax)) return false;
+      }
+
+      // Lead Source Filter
+      if (filterLeadSource) {
+        const lSource = (lead.source || '').toLowerCase();
+        if (!lSource.includes(filterLeadSource.toLowerCase())) return false;
+      }
+
+      // Quick Select Filter (Multi-select)
+      if (selectedQuickFilters.length > 0) {
+        // Hotness group
+        const hasHot = selectedQuickFilters.includes('HOT');
+        const hasVeryHot = selectedQuickFilters.includes('VERY_HOT');
+        if (hasHot || hasVeryHot) {
+          let matchesHotness = false;
+          if (hasHot) {
+            const isHotStatus = extra.leadStatus === 'HOT';
+            const isHotDerived = deriveHotness(lead) === 'HOT';
+            if (isHotStatus || isHotDerived) matchesHotness = true;
+          }
+          if (hasVeryHot) {
+            if (extra.leadStatus === 'VERY_HOT') matchesHotness = true;
+          }
+          if (!matchesHotness) return false;
+        }
+
+        // Product group
+        const hasHealth = selectedQuickFilters.includes('HEALTH');
+        const hasLife = selectedQuickFilters.includes('LIFE');
+        const hasAccident = selectedQuickFilters.includes('ACCIDENT');
+        const hasMf = selectedQuickFilters.includes('MF');
+        if (hasHealth || hasLife || hasAccident || hasMf) {
+          let matchesProduct = false;
+          const cat = (lead.plan?.category || '').toUpperCase();
+          const leadInterests = (lead.interests || []).map((i: string) => i.toLowerCase());
+
+          if (hasHealth) {
+            if (cat === 'HEALTH' || leadInterests.some((i: string) => i.includes('health'))) matchesProduct = true;
+          }
+          if (hasLife) {
+            if (cat === 'LIFE' || leadInterests.some((i: string) => i.includes('life'))) matchesProduct = true;
+          }
+          if (hasAccident) {
+            if (cat.includes('ACCIDENT') || leadInterests.some((i: string) => i.includes('accident'))) matchesProduct = true;
+          }
+          if (hasMf) {
+            if (cat === 'MF' || cat === 'MUTUAL_FUNDS' || leadInterests.some((i: string) => i.includes('mutual') || i.includes('fund') || i === 'mf')) matchesProduct = true;
+          }
+          if (!matchesProduct) return false;
+        }
+
+        // Date group
+        if (selectedQuickFilters.includes('THIS_WEEK')) {
+          if (!lead.followUpDate) return false;
+          const fDate = new Date(lead.followUpDate);
+          const now = new Date();
+          now.setHours(0, 0, 0, 0);
+          const weekFromNow = new Date(now.getTime() + 7 * 86400000);
+          weekFromNow.setHours(23, 59, 59, 999);
+          if (fDate < now || fDate > weekFromNow) return false;
+        }
+      }
+
+      return true;
+    }).sort((a: any, b: any) => {
+      const extraA = parseLeadNotes(a.notes);
+      const extraB = parseLeadNotes(b.notes);
+      const statusA = extraA.leadStatus || a.leadStatus || a.status;
+      const statusB = extraB.leadStatus || b.leadStatus || b.status;
+
+      const isClosedA = a.stage === 'PROCESS_COMPLETED' || a.stage === 'PAYMENT_DONE' || statusA === 'LEAD_LOST' || statusA === 'NOT_INTERESTED';
+      const isClosedB = b.stage === 'PROCESS_COMPLETED' || b.stage === 'PAYMENT_DONE' || statusB === 'LEAD_LOST' || statusB === 'NOT_INTERESTED';
+
+      if (isClosedA !== isClosedB) {
+        return isClosedA ? 1 : -1;
+      }
+
+      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return timeB - timeA;
+    });
+
+    const groupedLeads = new Map<string, any>();
+    matchingLeads.forEach((lead: any) => {
+      const phone = String(lead.contact?.phone || '').replace(/\D/g, '');
+      const contactKey = lead.contactId || lead.contact?.id || (phone ? `phone:${phone}` : `lead:${lead.id}`);
+      const existing = groupedLeads.get(contactKey);
+      const products = lead.plan?.name
+        ? [lead.plan.name]
+        : (lead.interests || []).filter((interest: string) => Boolean(interest?.trim()));
+
+      if (!existing) {
+        groupedLeads.set(contactKey, {
+          ...lead,
+          relatedLeads: [lead],
+          relatedLeadCount: 1,
+          displayProducts: [...new Set(products)],
+          relatedStages: lead.uiStage ? [lead.uiStage] : [],
+        });
+        return;
+      }
+
+      existing.relatedLeads.push(lead);
+      existing.relatedLeadCount += 1;
+      existing.displayProducts = [...new Set([...existing.displayProducts, ...products])];
+      if (lead.uiStage && !existing.relatedStages.includes(lead.uiStage)) {
+        existing.relatedStages.push(lead.uiStage);
+      }
+
+      const currentUpdatedAt = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+      const leadUpdatedAt = lead.updatedAt ? new Date(lead.updatedAt).getTime() : 0;
+      if (leadUpdatedAt > currentUpdatedAt) {
+        const { relatedLeads, relatedLeadCount, displayProducts, relatedStages } = existing;
+        Object.assign(existing, lead, { relatedLeads, relatedLeadCount, displayProducts, relatedStages });
+      }
+    });
+
+    return Array.from(groupedLeads.values());
+  }, [leadsFlat, search, filterPlans, filterEmployee, filterStatuses, filterStages, filterTypes, filterDateFrom, filterDateTo, filterEnquiryDateFrom, filterEnquiryDateTo, filterFinalSellsFrom, filterFinalSellsTo, filterExpectedPremiumMin, filterExpectedPremiumMax, filterLeadSource, selectedQuickFilters]);
+
+  // Sorted leads for table
+  const sortedLeads = useMemo(() => {
+    return sortData(filteredLeads, sortKey, sortDir as 'asc' | 'desc', (row: any, key: string) => {
+      if (key === 'name') return `${row.contact?.firstName ?? ''} ${row.contact?.lastName ?? ''}`;
+      if (key === 'plan') return row.plan?.name || (row.interests && row.interests.length > 0 ? row.interests.join(', ') : '');
+      if (key === 'premiumBudget') return row.premiumBudget ?? 0;
+      if (key === 'followUpDate') return row.followUpDate ? new Date(row.followUpDate).getTime() : 0;
+      if (key === 'stage') return row.stage ?? '';
+
+      const parts = key.split('.');
+      let val = row;
+      for (const part of parts) {
+        if (val == null) break;
+        val = val[part];
+      }
+      return val !== undefined ? val : row[key];
+    });
+  }, [filteredLeads, sortKey, sortDir]);
+
+  // Board columns
+  const filteredBoard = useMemo(() => {
+    const b: Record<string, any[]> = {};
+    UI_STAGES.forEach(s => {
+      b[s] = filteredLeads.filter(l => l.uiStage === s || (s === 'To Contact' && (!l.uiStage || !UI_STAGES.includes(l.uiStage))));
+    });
+    return b;
+  }, [filteredLeads]);
+
+  const expectedBusiness = (uiStage: string) =>
+    (filteredBoard[uiStage] ?? []).reduce((sum, c) => sum + (c.premiumBudget ?? 0), 0);
+
+  const exportLeadsToExcel = () => {
+    const headers = ['Client Name', 'Phone', 'Email', 'Product Category', 'Expected Premium', 'Hotness', 'Assigned To', 'Stage', 'Next Follow-up'];
+    const rows = sortedLeads.map((l: any) => [
+      `"${((l.contact?.firstName || '') + ' ' + (l.contact?.lastName || '')).trim().replace(/"/g, '""')}"`,
+      `"${(l.contact?.phone || '').replace(/"/g, '""')}"`,
+      `"${(l.contact?.email || '').replace(/"/g, '""')}"`,
+      `"${(l.planCategory || '').replace(/"/g, '""')}"`,
+      l.premiumBudget ?? '',
+      `"${(l.hotness || '').replace(/"/g, '""')}"`,
+      `"${((l.assignedEmployee?.firstName || '') + ' ' + (l.assignedEmployee?.lastName || '')).trim().replace(/"/g, '""')}"`,
+      `"${(l.uiStage || '').replace(/"/g, '""')}"`,
+      l.followUpDate ? new Date(l.followUpDate).toLocaleDateString() : ''
+    ].join(',')).join('\n');
+
+    const content = headers.join(',') + '\n' + rows;
+    const blob = new Blob(['\uFEFF' + content], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `leads_export_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success('Leads exported to Excel successfully');
+  };
+
+  const exportLeadsToPdf = () => {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      toast.error('Pop-up blocked. Please allow pop-ups to print PDF');
+      return;
+    }
+
+    const rowsHtml = sortedLeads.map((l: any) => `
+      <tr style="border-bottom: 1px solid #e2e8f0; font-size: 11px;">
+        <td style="padding: 8px;">${((l.contact?.firstName || '') + ' ' + (l.contact?.lastName || '')).trim() || 'N/A'}</td>
+        <td style="padding: 8px;">${l.contact?.phone || 'N/A'}</td>
+        <td style="padding: 8px;">${l.planCategory || 'N/A'}</td>
+        <td style="padding: 8px; text-align: right;">₹${l.premiumBudget?.toLocaleString() || 0}</td>
+        <td style="padding: 8px; text-align: center;"><span style="padding: 2px 6px; border-radius: 4px; background: ${l.hotness === 'HOT' ? '#fde8e8; color: #9b1c1c;' : l.hotness === 'WARM' ? '#feecdc; color: #b43c08;' : '#f3f4f6; color: #374151;'} font-size: 10px; font-weight: bold;">${l.hotness || 'COLD'}</span></td>
+        <td style="padding: 8px;">${((l.assignedEmployee?.firstName || '') + ' ' + (l.assignedEmployee?.lastName || '')).trim() || 'Unassigned'}</td>
+        <td style="padding: 8px; text-align: center;">${l.uiStage || 'N/A'}</td>
+        <td style="padding: 8px; text-align: center;">${l.followUpDate ? new Date(l.followUpDate).toLocaleDateString() : 'N/A'}</td>
+      </tr>
+    `).join('');
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Leads Report</title>
+          <style>
+            body { font-family: system-ui, -apple-system, sans-serif; color: #1e293b; padding: 24px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th { background: #f8fafc; border-bottom: 2px solid #e2e8f0; padding: 10px 8px; text-align: left; font-size: 11px; font-weight: bold; text-transform: uppercase; color: #64748b; }
+            .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #3b82f6; padding-bottom: 12px; }
+            .title { font-size: 20px; font-weight: 800; color: #1e3a8a; }
+            .meta { font-size: 11px; color: #64748b; text-align: right; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div>
+              <div class="title">INSU-MITRA</div>
+              <div style="font-size: 12px; color: #475569; font-weight: 600;">Leads Export Report</div>
+            </div>
+            <div class="meta">
+              <div>Date: ${new Date().toLocaleString()}</div>
+              <div>Record Count: ${sortedLeads.length}</div>
+            </div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 20%;">Client Name</th>
+                <th style="width: 15%;">Phone</th>
+                <th style="width: 15%;">Product</th>
+                <th style="width: 10%; text-align: right;">Exp. Premium</th>
+                <th style="width: 10%; text-align: center;">Hotness</th>
+                <th style="width: 15%;">Assigned To</th>
+                <th style="width: 15%; text-align: center;">Stage</th>
+                <th style="width: 10%; text-align: center;">Follow-up</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
+          </table>
+          <script>
+            window.onload = function() {
+              window.print();
+              setTimeout(() => { window.close(); }, 500);
+            };
+          </script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
+  // Click-outside
+  useEffect(() => {
+    function handleOutside(e: MouseEvent) {
+      if (planFilterRef.current && !planFilterRef.current.contains(e.target as Node)) setPlanFilterOpen(false);
+      if (statusFilterRef.current && !statusFilterRef.current.contains(e.target as Node)) setStatusFilterOpen(false);
+      if (stageFilterRef.current && !stageFilterRef.current.contains(e.target as Node)) setStageFilterOpen(false);
+      if (typeFilterRef.current && !typeFilterRef.current.contains(e.target as Node)) setTypeFilterOpen(false);
+      if (colMenuRef.current && !colMenuRef.current.contains(e.target as Node)) setColMenuOpen(false);
+    }
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, []);
+
+  const handleWhatsApp = (phone?: string) => {
+    if (!phone) return;
+    window.open(`https://wa.me/91${phone.replace(/\D/g, '')}`, '_blank');
+  };
+  const handleCall = (phone?: string) => {
+    if (!phone) return;
+    window.location.href = `tel:${phone}`;
+  };
+
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const toastId = toast.loading('Importing leads...');
+    try {
+      const res = await leadsService.importCsv(file);
+      toast.success(res.message || 'Successfully imported leads!', { id: toastId });
+      qc.invalidateQueries({ queryKey: ['leads'] });
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message ?? 'Failed to import leads', { id: toastId });
+    }
+  };
+
+  const { data: compulsoryRulesRes, isLoading: isLoadingRules } = useQuery({
+    queryKey: ['compulsory-rules'],
+    queryFn: () => insuranceService.getCompulsoryRules(),
+  });
+  const compulsoryRules = useMemo(() => compulsoryRulesRes?.data ?? [], [compulsoryRulesRes]);
+
+  const isFieldRequired = (key: string, defaultRequired: boolean) => {
+    return isFieldRequiredHelper(compulsoryRules, 'Lead', key, defaultRequired);
+  };
+
+  useEffect(() => {
+    const onCompRulesUpdated = () => {
+      qc.invalidateQueries({ queryKey: ['compulsory-rules'] });
+    };
+    window.addEventListener(COMPULSORY_RULES_UPDATED_EVENT, onCompRulesUpdated);
+    window.addEventListener('storage', onCompRulesUpdated);
+    return () => {
+      window.removeEventListener(COMPULSORY_RULES_UPDATED_EVENT, onCompRulesUpdated);
+      window.removeEventListener('storage', onCompRulesUpdated);
+    };
+  }, [qc]);
+
+  const activeSchema = useMemo(() => {
+    return z.object({
+      firstName: isFieldRequired('firstName', true) ? z.string().min(1, 'Required') : z.string().optional().or(z.literal('')),
+      lastName: isFieldRequired('lastName', true) ? z.string().min(1, 'Required') : z.string().optional().or(z.literal('')),
+      phone: isFieldRequired('phone', true)
+        ? z.string().refine(v => {
+            const d = (v || '').replace(/\D/g, '');
+            return d.length === 10 || (d.length > 10 && d.slice(-10).length === 10);
+          }, 'Mobile number must be exactly 10 digits')
+        : z.string().optional().refine(v => {
+            if (!v) return true;
+            const d = v.replace(/\D/g, '');
+            return d.length === 10 || (d.length > 10 && d.slice(-10).length === 10);
+          }, 'Mobile number must be exactly 10 digits').or(z.literal('')),
+      alternatePhone: isFieldRequired('alternatePhone', false)
+        ? z.string().refine(v => {
+            const d = (v || '').replace(/\D/g, '');
+            return d.length === 10 || (d.length > 10 && d.slice(-10).length === 10);
+          }, 'Alternate phone must be exactly 10 digits')
+        : z.string().optional().refine(v => {
+            if (!v) return true;
+            const d = v.replace(/\D/g, '');
+            return d.length === 10 || (d.length > 10 && d.slice(-10).length === 10);
+          }, 'Alternate phone must be exactly 10 digits').or(z.literal('')),
+      email: isFieldRequired('email', false) ? z.string().email('Invalid email') : z.string().email('Invalid email').optional().or(z.literal('')),
+      gender: isFieldRequired('gender', false) ? z.enum(['MALE', 'FEMALE', 'OTHER']).refine(val => !!val, { message: 'Required' }) : z.enum(['MALE', 'FEMALE', 'OTHER', '']).optional(),
+      dateOfBirth: isFieldRequired('dateOfBirth', false) ? z.string().min(1, 'Required') : z.string().optional().or(z.literal('')),
+      height: isFieldRequired('height', false) ? z.coerce.number() : z.coerce.number().optional().or(z.literal('')),
+      weight: isFieldRequired('weight', false) ? z.coerce.number() : z.coerce.number().optional().or(z.literal('')),
+      panNumber: isFieldRequired('panNumber', false) ? z.string().min(1, 'Required') : z.string().optional().or(z.literal('')),
+      aadhaarNumber: isFieldRequired('aadhaarNumber', false) ? z.string().min(1, 'Required') : z.string().optional().or(z.literal('')),
+      annualIncome: isFieldRequired('annualIncome', false) ? z.coerce.number().min(0) : z.coerce.number().min(0).optional().or(z.literal('')),
+      notes: isFieldRequired('notes', false) ? z.string().min(1, 'Required') : z.string().optional().or(z.literal('')),
+      tags: isFieldRequired('tags', false) ? z.string().min(1, 'Required') : z.string().optional().or(z.literal('')),
+      isActive: z.string().optional(),
+      city: isFieldRequired('city', false) ? z.string().min(1, 'Required') : z.string().optional().or(z.literal('')),
+      source: isFieldRequired('source', false) ? z.string().min(1, 'Required') : z.string().optional().or(z.literal('')),
+      assignedEmployeeId: isFieldRequired('assignedEmployeeId', false) ? z.string().min(1, 'Required') : z.string().optional().or(z.literal('')),
+      leadStage: isFieldRequired('leadStage', false) ? z.string().min(1, 'Required') : z.string().optional().or(z.literal('')),
+      leadStatus: isFieldRequired('leadStatus', false) ? z.string().min(1, 'Required') : z.string().optional().or(z.literal('')),
+      leadType: isFieldRequired('leadType', false) ? z.string().min(1, 'Required') : z.string().optional().or(z.literal('')),
+      followUpDate: isFieldRequired('followUpDate', false) ? z.string().min(1, 'Required') : z.string().optional().or(z.literal('')),
+    });
+  }, [compulsoryRules]);
+
+  const { register, handleSubmit, reset, setValue, watch } = useForm<Form>({ resolver: zodResolver(activeSchema) });
+
+  const calculateAge = (dob: string): number => {
+    if (!dob) return 0;
+    try {
+      const birthDate = new Date(dob);
+      const today = new Date();
+      let age = today.getFullYear() - birthDate.getFullYear();
+      const monthDiff = today.getMonth() - birthDate.getMonth();
+      if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+        age--;
+      }
+      return age > 0 ? age : 0;
+    } catch {
+      return 0;
+    }
+  };
+
+  const handleDOBChange = (val: string) => {
+    const age = calculateAge(val);
+    setPersonalFields(p => ({ ...p, dateOfBirth: val, age: String(age) }));
+  };
+
+  const handleLeadSubmit = async (e: React.FormEvent, shouldClose: boolean = true) => {
+    if (e) e.preventDefault();
+
+    if (!editTarget && !editContactId) {
+      toast.error('Please select an existing Contact for this lead.');
+      return;
+    }
+
+    if (!editContactId) {
+      if (isFieldRequired('firstName', true) && !(personalFields.firstName || '').trim()) {
+        toast.error('First Name is required');
+        return;
+      }
+      if (isFieldRequired('lastName', true) && !(personalFields.lastName || '').trim()) {
+        toast.error('Last Name is required');
+        return;
+      }
+      if (isFieldRequired('phone', true) && !(personalFields.whatsappNumber || '').trim()) {
+        toast.error('WhatsApp Number is required');
+        return;
+      }
+      // Strip known country code prefix before validating (CountryPhoneInput stores code+number together)
+      const KNOWN_CODES = ['971', '966', '974', '968', '965', '973', '880', '977', '234', '254', '353', '91', '44', '49', '33', '81', '86', '94', '60', '62', '63', '66', '84', '27', '55', '52', '39', '34', '31', '41', '46', '47', '45', '64', '65', '61', '86', '1', '7'];
+      const rawWaDigits = (personalFields.whatsappNumber || '').trim().replace(/\D/g, '');
+      const sortedCodes = [...KNOWN_CODES].sort((a, b) => b.length - a.length);
+      const matchedCode = sortedCodes.find(c => rawWaDigits.startsWith(c));
+      const waLocalDigits = matchedCode ? rawWaDigits.slice(matchedCode.length) : rawWaDigits;
+      if ((personalFields.whatsappNumber || '').trim() && !/^\d{10}$/.test(waLocalDigits) && !/^\d{10}$/.test(rawWaDigits)) {
+        toast.error('WhatsApp Number must be exactly 10 digits');
+        return;
+      }
+
+      if (personalFields.callingNumber?.trim()) {
+        const rawCallDigits = personalFields.callingNumber.trim().replace(/\D/g, '');
+        const matchedCallCode = sortedCodes.find(c => rawCallDigits.startsWith(c));
+        const callLocalDigits = matchedCallCode ? rawCallDigits.slice(matchedCallCode.length) : rawCallDigits;
+        if (!/^\d{10}$/.test(callLocalDigits) && !/^\d{10}$/.test(rawCallDigits)) {
+          toast.error('Calling Number must be exactly 10 digits');
+          return;
+        }
+      }
+
+      const hasAadhaar = !!(personalFields.aadhaarNumber || '').trim();
+      if (isFieldRequired('aadhaarNumber', false) && !hasAadhaar) {
+        toast.error('Aadhaar Number is required');
+        return;
+      }
+      if (hasAadhaar && !/^\d{12}$/.test((personalFields.aadhaarNumber || '').trim())) {
+        toast.error('Aadhaar Number must be exactly 12 digits');
+        return;
+      }
+
+      if (isFieldRequired('occupationType', false) && !personalFields?.occupationType?.trim()) {
+        toast.error('Occupation Type is required');
+        setActiveLeadTab('Personal');
+        return;
+      }
+
+      if (isFieldRequired('state', false) && !personalFields?.state?.trim()) {
+        toast.error('State is required');
+        setActiveLeadTab('Personal');
+        return;
+      }
+      if (isFieldRequired('district', false) && !personalFields?.district?.trim()) {
+        toast.error('District is required');
+        setActiveLeadTab('Personal');
+        return;
+      }
+      if (isFieldRequired('city', false) && !personalFields?.city?.trim()) {
+        toast.error('City is required');
+        setActiveLeadTab('Personal');
+        return;
+      }
+
+      // Programmatic dynamic compulsory checks
+      const fieldsToCheck = [
+        { key: 'alternatePhone', label: 'Alternate Phone', value: personalFields.callingNumber, defaultRequired: false },
+        { key: 'email', label: 'Email Address', value: personalFields.email, defaultRequired: false },
+        { key: 'gender', label: 'Gender', value: personalFields.gender, defaultRequired: false },
+        { key: 'dateOfBirth', label: 'Date of Birth', value: personalFields.dateOfBirth, defaultRequired: false },
+        { key: 'panNumber', label: 'PAN Number', value: personalFields.panNumber || personalFields.pan, defaultRequired: false },
+        { key: 'annualIncome', label: 'Annual Income', value: personalFields.annualIncome, defaultRequired: false },
+        { key: 'city', label: 'City', value: personalFields.city, defaultRequired: false },
+        { key: 'source', label: 'Source', value: personalFields.source, defaultRequired: false },
+        { key: 'assignedEmployeeId', label: 'Assigned Employee', value: leadInfoFields.assignedEmployeeId, defaultRequired: false },
+        { key: 'leadStage', label: 'Lead Stage', value: leadInfoFields.leadStage, defaultRequired: false },
+        { key: 'leadStatus', label: 'Lead Status', value: leadInfoFields.leadStatus, defaultRequired: false },
+        { key: 'leadType', label: 'Lead Type', value: leadInfoFields.leadType, defaultRequired: false },
+        { key: 'followUpDate', label: 'Follow-up Date', value: leadInfoFields.followUpDate, defaultRequired: false }
+      ];
+
+      for (const f of fieldsToCheck) {
+        if (isFieldRequired(f.key, f.defaultRequired) && (!f.value || String(f.value).trim() === '')) {
+          toast.error(f.label + ' is required');
+          return;
+        }
+      }
+    }
+    // Validate renewal policy rule & required fields for new cards
+    for (let i = 0; i < productInterests.length; i++) {
+      const card = productInterests[i];
+      const isExisting = card.id.length === 24 || /^[0-9a-fA-F]{24}$/.test(card.id);
+
+      if (!isExisting) {
+        if (!card.interestedIn || card.interestedIn.length === 0) {
+          toast.error(`Product Interest #${i + 1}: Please select a Product Interest`);
+          setActiveLeadTab('Product Interest');
+          return;
+        }
+        if (card.interestedIn.includes('Other') && !card.otherProduct?.trim()) {
+          toast.error(`Product Interest #${i + 1}: Please specify the Other Product Name`);
+          setActiveLeadTab('Product Interest');
+          return;
+        }
+        if (card.dependencyType === 'DEPENDENT' && !card.dependentDetails?.trim()) {
+          toast.error(`Product Interest #${i + 1}: Please enter dependent details`);
+          setActiveLeadTab('Product Interest');
+          return;
+        }
+        if (!card.leadSource?.trim()) {
+          toast.error(`Product Interest #${i + 1}: Please select or enter a Lead Source`);
+          setActiveLeadTab('Product Interest');
+          return;
+        }
+        const rawFollowUp = card.followUpDate;
+        const followUpStr = typeof rawFollowUp === 'string'
+          ? rawFollowUp
+          : (typeof rawFollowUp === 'object' && rawFollowUp !== null ? ((rawFollowUp as any).target?.value || (rawFollowUp as any).value || '') : String(rawFollowUp ?? ''));
+
+        if (!followUpStr.trim() || followUpStr === '[object Object]') {
+          toast.error(`Product Interest #${i + 1}: Please select a Follow-up Date`);
+          setActiveLeadTab('Product Interest');
+          return;
+        }
+        if (!card.expectedPremium || Number(card.expectedPremium) <= 0) {
+          toast.error(`Product Interest #${i + 1}: Please enter a valid Expected Premium / Budget (> 0)`);
+          setActiveLeadTab('Product Interest');
+          return;
+        }
+
+        if (hasActiveRenewalLeadForCard(card) && card.leadType === 'RENEWAL') {
+          toast.error("An active Renewal lead already exists for this product.");
+          return;
+        }
+        if (hasActivePolicyForCard(card) && card.leadType === 'RENEWAL' && isPolicyOutsideRenewalWindowForCard(card)) {
+          toast.error("Renewal cannot be created yet. The policy is outside the renewal period.");
+          return;
+        }
+        if (hasActivePolicyForCard(card) && card.leadType !== 'RENEWAL') {
+          toast.error("An active policy already exists for this product. Only a Renewal lead can be created.");
+          return;
+        }
+      }
+    }
+
+    const resolvedContactId = editContactId || editTarget?.contactId || editTarget?.contact?.id;
+    const toastId = toast.loading(resolvedContactId ? 'Updating lead...' : 'Creating lead...');
+    try {
+      const firstName = (personalFields.firstName || loadedContact?.firstName || '').trim();
+      const lastName = (personalFields.lastName || loadedContact?.lastName || '').trim();
+
+      const mergedTags = [...selectedCampaigns];
+      if (!mergedTags.includes('contact')) {
+        mergedTags.push('contact');
+      }
+
+      let contactId = resolvedContactId;
+      if (contactId) {
+        if (allowEditPersonal) {
+          try {
+            await contactsService.update(contactId, {
+              firstName,
+              middleName: personalFields.middleName || undefined,
+              lastName,
+              role: personalFields.role || undefined,
+              isActive: personalFields.contactStatus ? personalFields.contactStatus === 'Active' : (personalFields.isActive !== false),
+              phone: (personalFields.whatsappNumber || '').trim().replace(/\D/g, '') || undefined,
+              height: personalFields.height ? Number(personalFields.height) : undefined,
+              weight: personalFields.weight ? Number(personalFields.weight) : undefined,
+              panNumber: personalFields.panNumber || personalFields.pan || undefined,
+              alternatePhone: personalFields.callingNumber || undefined,
+              email: personalFields.email || undefined,
+              gender: personalFields.gender || undefined,
+              maritalStatus: personalFields.maritalStatus || undefined,
+              dateOfBirth: personalFields.dateOfBirth?.trim() ? new Date(personalFields.dateOfBirth).toISOString() : undefined,
+              birthPlace: personalFields.birthPlace?.trim() || undefined,
+              aadhaarNumber: personalFields.aadhaarNumber || undefined,
+              education: personalFields.education || undefined,
+              annualIncome: personalFields.annualIncome ? Number(personalFields.annualIncome) : undefined,
+              notes: personalFields.streetAddress || undefined,
+            });
+          } catch (contactUpErr) {
+            console.error('Failed to update contact profile:', contactUpErr);
+          }
+        }
+      } else {
+        const contactRes = await contactsService.createFull({
+          contact: {
+            firstName,
+            middleName: personalFields.middleName || undefined,
+            lastName,
+            role: personalFields.role || 'Contact',
+            isActive: personalFields.contactStatus ? personalFields.contactStatus === 'Active' : (personalFields.isActive !== false),
+            phone: (personalFields.whatsappNumber || '').trim().replace(/\D/g, ''),
+            height: personalFields.height ? Number(personalFields.height) : undefined,
+            weight: personalFields.weight ? Number(personalFields.weight) : undefined,
+            panNumber: personalFields.panNumber || personalFields.pan || undefined,
+            alternatePhone: personalFields.callingNumber || undefined,
+            email: personalFields.email || undefined,
+            gender: personalFields.gender || undefined,
+            maritalStatus: personalFields.maritalStatus || undefined,
+            dateOfBirth: personalFields.dateOfBirth?.trim() ? new Date(personalFields.dateOfBirth).toISOString() : undefined,
+            birthPlace: personalFields.birthPlace?.trim() || undefined,
+            aadhaarNumber: personalFields.aadhaarNumber || undefined,
+            education: personalFields.education || undefined,
+            annualIncome: personalFields.annualIncome ? Number(personalFields.annualIncome) : undefined,
+            tags: mergedTags,
+            notes: personalFields.streetAddress || undefined,
+          },
+          address: (personalFields.state || personalFields.city || personalFields.pincode || personalFields.streetAddress) ? {
+            type: 'HOME',
+            line1: personalFields.streetAddress || 'N/A',
+            city: personalFields.city || 'N/A',
+            state: personalFields.state || 'N/A',
+            pincode: personalFields.pincode || 'N/A',
+            country: 'India',
+            isPrimary: true,
+          } : undefined,
+          occupation: (personalFields.occupationType || personalFields.companyName || personalFields.annualIncome) ? {
+            type: personalFields.occupationType || 'SALARIED',
+            companyName: personalFields.companyName || undefined,
+            isPrimary: true,
+          } : undefined,
+        });
+        const createdContactObj = contactRes?.data?.contact || contactRes?.data?.data || contactRes?.data || contactRes;
+        contactId = createdContactObj?.id || createdContactObj?._id || contactRes?.data?.contact?.id;
+        if (contactId) {
+          setEditContactId(contactId);
+        }
+      }
+
+      const subResourcePromises: Promise<any>[] = [];
+      let hasLeadSaveError = false;
+
+      // Save Family Members and Policies ONLY for newly created Contacts
+      if (!resolvedContactId) {
+        // Save Family Members if any
+        for (const fam of familyMembers) {
+          const famFirst = (fam.firstName || fam.name || '').trim();
+          if (!famFirst) continue;
+          const famLast = (fam.lastName || '').trim() || 'N/A';
+
+          const saveFamilyFlow = async () => {
+            try {
+              let targetFamContactId = fam.contactId;
+              if (targetFamContactId) {
+                await contactsService.addRelationship(contactId!, {
+                  relatedContactId: targetFamContactId,
+                  relationshipType: fam.relation || 'OTHER',
+                });
+              } else {
+                const fullFamName = `${famFirst} ${famLast === 'N/A' ? '' : famLast}`.trim();
+                const rawFamPhone = (fam.whatsapp || '').replace(/\D/g, '');
+                await contactsService.addRelationship(contactId!, {
+                  name: fullFamName,
+                  phone: rawFamPhone.length === 10 ? rawFamPhone : undefined,
+                  dateOfBirth: fam.dob?.trim() ? fam.dob : undefined,
+                  relationshipType: fam.relation || 'OTHER',
+                });
+              }
+            } catch (famErr) {
+              console.error('Failed to save family member:', famErr);
+            }
+          };
+          subResourcePromises.push(saveFamilyFlow());
+        }
+
+        // Save Policies if any
+        const dbPlans = useLookupStore.getState().plans || [];
+        for (const portfolio of policies) {
+          const isHealth = portfolio.policyType === 'Health';
+          const category = isHealth ? 'HEALTH' : 'LIFE';
+
+          for (const entry of portfolio.entries) {
+            if (!entry.policyNo.trim()) continue;
+
+            const matchedPlan = dbPlans.find((p: any) => {
+              const planCompany = p.company?.name || '';
+              const planCategory = p.category || '';
+              return planCategory === category &&
+                planCompany.toLowerCase() === entry.company.toLowerCase() &&
+                p.name.toLowerCase() === entry.planName.toLowerCase();
+            }) || dbPlans.find((p: any) => p.category === category) || dbPlans[0];
+
+            subResourcePromises.push(
+              policiesService.create({
+                policyNumber: entry.policyNo,
+                contactId: contactId!,
+                planId: matchedPlan?.id || '6a3d0584d431b55e6b6e74fe',
+                sumAssured: Number(entry.sumAssured || entry.sumInsured || 100000),
+                premiumAmount: Number(entry.premium || 1000),
+                paymentFrequency: 'YEARLY',
+                startDate: entry.startDate?.trim() ? new Date(entry.startDate).toISOString() : new Date().toISOString(),
+                endDate: entry.endDate?.trim() ? new Date(entry.endDate).toISOString() : new Date(Date.now() + 365 * 86400000).toISOString(),
+              }).catch(polErr => console.error('Failed to save policy:', polErr))
+            );
+          }
+        }
+      }
+
+      // Save Product Interests (Leads) — only if exclusively selected
+      for (const card of productInterests) {
+        const rawInterests = (card.interestedIn || [])
+          .map((p: string) => (p === 'Other' && card.otherProduct ? card.otherProduct.trim() : p.trim()))
+          .filter(Boolean);
+
+        // If product interest was not exclusively selected, do not reflect in Leads
+        if (rawInterests.length === 0) {
+          continue;
+        }
+
+        const interests = rawInterests;
+
+        const stage = card.leadStage && card.leadStage !== 'OPEN' ? card.leadStage : 'TO_CONTACT';
+
+        const serializedNotes = serializeLeadNotes(card);
+
+        const validEmpId = (id?: string) => (id && /^[0-9a-fA-F]{24}$/.test(id.trim())) ? id.trim() : undefined;
+        const rawFollowUp = card.followUpDate;
+        const followUpStr = typeof rawFollowUp === 'string'
+          ? rawFollowUp
+          : (typeof rawFollowUp === 'object' && rawFollowUp !== null ? ((rawFollowUp as any).target?.value || (rawFollowUp as any).value || '') : String(rawFollowUp ?? ''));
+
+        const body = {
+          contactId: contactId!,
+          interests,
+          stage,
+          source: card.leadSource,
+          assignedEmployeeId: validEmpId(card.assignedEmployeeId),
+          followUpDate: followUpStr.trim() ? new Date(followUpStr).toISOString() : undefined,
+          premiumBudget: Number(card.expectedPremium) || undefined,
+          notes: serializedNotes,
+        };
+
+        const isExisting = card.id.length === 24 || /^[0-9a-fA-F]{24}$/.test(card.id);
+        const saveLeadFlow = async () => {
+          try {
+            if (isExisting) {
+              if (editTarget) {
+                await leadsService.update(card.id, body);
+              }
+            } else {
+              const res = await leadsService.create(body);
+              const savedLead = res?.data?.data ?? res?.data ?? res;
+              const savedLeadId = savedLead?.id || savedLead?._id;
+              if (savedLeadId) {
+                setProductInterests(prev => prev.map(c => c.id === card.id ? { ...c, id: savedLeadId, collapsed: true, newComment: '' } : c));
+                for (const cmt of card.comments) {
+                  await leadsService.addConsultation(savedLeadId, { notes: cmt.text });
+                }
+                if (card.newComment?.trim()) {
+                  await leadsService.addConsultation(savedLeadId, { notes: card.newComment.trim() });
+                }
+              }
+            }
+          } catch (leadErr: any) {
+            hasLeadSaveError = true;
+            console.error('Failed to save product interest:', leadErr);
+            toast.error(`Failed to save Product Interest (${interests.join(', ')}): ${leadErr.response?.data?.message || 'Error occurred'}`);
+          }
+        };
+        subResourcePromises.push(saveLeadFlow());
+      }
+
+      await Promise.all(subResourcePromises);
+
+      if (hasLeadSaveError) {
+        toast.dismiss(toastId);
+        return;
+      }
+
+      toast.success(resolvedContactId ? 'Lead successfully updated!' : 'Lead successfully created!', { id: toastId });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['contacts'] }),
+        qc.invalidateQueries({ queryKey: ['leads'] }),
+      ]);
+
+      if (shouldClose) {
+        closeModal();
+      }
+    } catch (err: any) {
+      toast.error(err.response?.data?.message ?? 'Failed to save lead', { id: toastId });
+    }
+  };
+
+  const openCreate = (stage?: string, targetContactId?: string) => {
+    setEditTarget(null);
+    setEditContactId(null);
+    setLoadedContact(null);
+    setCardEditModes({});
+    setAllowEditPersonal(false);
+    setPersonalFields({
+      role: 'Contact',
+      contactStatus: 'Active',
+      isActive: true,
+      fullName: '',
+      firstName: '',
+      middleName: '',
+      lastName: '',
+      gender: '',
+      maritalStatus: '',
+      dateOfBirth: '',
+      birthPlace: '',
+      email: '',
+      aadhaarNumber: '',
+      whatsappNumber: '',
+      sameAsWhatsapp: false,
+      callingNumber: '',
+      education: '',
+      annualIncome: '',
+      occupationType: '',
+      companyName: '',
+      state: '',
+      district: '',
+      city: '',
+      pincode: '',
+      streetAddress: '',
+      declaredMedicalHistory: [],
+      notDeclaredMedicalHistory: [],
+      medicalHistoryDetails: ''
+    });
+
+    const currentUser = useAuthStore.getState().user;
+    const curEmp = employeesList.find((e: any) => e.userId === currentUser?.id || e.id === currentUser?.id);
+
+    setLeadInfoFields({
+      profileType: 'Lead Profile',
+      leadStatus: stage || 'TO_CONTACT',
+      leadStage: stage || 'TO_CONTACT',
+      leadType: 'FRESH',
+      interestedIn: [],
+      leadSource: 'Social Media',
+      assignedEmployeeId: curEmp?.userId || currentUser?.id || '',
+      followUpDate: '',
+    });
+    setLeadComments([]);
+    setNewComment('');
+
+    const defaultCard = {
+      id: `temp-${Date.now()}`,
+      interestedIn: [],
+      otherProduct: '',
+      descriptionDetails: '',
+      leadStage: stage || 'TO_CONTACT',
+      leadStatus: 'INTERESTED',
+      dependencyType: 'SELF',
+      dependentDetails: '',
+      membersIncluded: [],
+      leadType: 'FRESH',
+      leadSource: 'Social Media',
+      assignedEmployeeId: curEmp?.userId || currentUser?.id || '',
+      followUpDate: '',
+      expectedPremium: '',
+      sumInsuredRequired: '',
+      newComment: '',
+      comments: [],
+      collapsed: false,
+    };
+
+    setProductInterests([defaultCard]);
+    setFamilyMembers([]);
+    setPolicies([]);
+    setSelectedCampaigns([]);
+    setActiveLeadTab('Product Interest');
+    setModalOpen(true);
+
+    if (targetContactId) {
+      loadContactById(targetContactId);
+    }
+  };
+
+  const openEdit = async (card: any, preferredTab?: string) => {
+    setEditTarget(card);
+    const contactId = card?.contactId || card?.contact?.id || card?.contact?._id || card?.contact?.contactId;
+    if (!contactId) {
+      toast.error('Associated contact not found for this lead');
+      return;
+    }
+    const toastId = toast.loading('Loading contact details...');
+    try {
+      const res = await contactsService.get(contactId);
+      const contact = res?.data?.data ?? res?.data ?? res;
+      if (!contact || typeof contact !== 'object') {
+        throw new Error('Contact data is invalid');
+      }
+      setLoadedContact(contact);
+
+      const primaryAddr = Array.isArray(contact.addresses)
+        ? (contact.addresses.find((a: any) => a.isPrimary) || contact.addresses[0])
+        : null;
+      const primaryOcc = Array.isArray(contact.occupations)
+        ? (contact.occupations.find((o: any) => o.isPrimary) || contact.occupations[0])
+        : null;
+
+      const toDateOnly = (val: any) => {
+        if (!val) return '';
+        if (typeof val === 'string') return val.split('T')[0];
+        try {
+          return new Date(val).toISOString().split('T')[0];
+        } catch {
+          return '';
+        }
+      };
+
+      setPersonalFields({
+        role: contact.role || contact.user?.role || 'Contact',
+        contactStatus: contact.isActive !== false ? 'Active' : 'Inactive',
+        isActive: contact.isActive !== false,
+        fullName: `${contact.firstName || ''} ${contact.lastName || ''}`.trim(),
+        firstName: contact.firstName || '',
+        middleName: contact.middleName || '',
+        lastName: contact.lastName || '',
+        gender: contact.gender || '',
+        maritalStatus: contact.maritalStatus || '',
+        dateOfBirth: toDateOnly(contact.dateOfBirth),
+        birthPlace: contact.birthPlace || '',
+        email: contact.email || '',
+        aadhaarNumber: contact.aadhaarNumber || '',
+        whatsappNumber: contact.phone || '',
+        sameAsWhatsapp: contact.phone === contact.alternatePhone,
+        callingNumber: contact.alternatePhone || '',
+        education: contact.education || '',
+        annualIncome: contact.annualIncome != null ? String(contact.annualIncome) : '',
+        occupationType: primaryOcc?.type || '',
+        companyName: primaryOcc?.companyName || '',
+        state: primaryAddr?.state || '',
+        district: primaryAddr?.district || '',
+        city: primaryAddr?.city || '',
+        pincode: primaryAddr?.pincode || '',
+        streetAddress: primaryAddr?.line1 || contact.notes || '',
+        declaredMedicalHistory: Array.isArray(contact.declaredMedicalHistory) ? contact.declaredMedicalHistory : [],
+        notDeclaredMedicalHistory: Array.isArray(contact.notDeclaredMedicalHistory) ? contact.notDeclaredMedicalHistory : [],
+        medicalHistoryDetails: contact.medicalHistoryDetails || ''
+      });
+
+      setLeadInfoFields({
+        profileType: 'Lead Profile',
+        leadStatus: card.stage || 'TO_CONTACT',
+        leadStage: card.leadStage || card.stage || 'TO_CONTACT',
+        leadType: card.leadType || 'FRESH',
+        interestedIn: card.interests || ['Health'],
+        leadSource: card.source || 'Social Media',
+        assignedEmployeeId: card.assignedEmployeeId || '',
+        followUpDate: toDateOnly(card.followUpDate),
+      });
+
+      const campaignsList = [
+        'Health Awareness', 'New Year Offer', 'Pension Plan',
+        'Monsoon Safety', 'Term Insurance Promo', 'Family Health Package'
+      ];
+      const campaigns = Array.isArray(contact.tags) ? contact.tags.filter((t: string) => campaignsList.includes(t)) : [];
+      setSelectedCampaigns(campaigns);
+
+      const fams = (Array.isArray(contact.relationships) ? contact.relationships : []).map((r: any) => {
+        const c = r.relatedContact || r.contact || {};
+        const occ = Array.isArray(c?.occupations) ? (c.occupations.find((o: any) => o.isPrimary) || c.occupations[0]) : null;
+        const medTags = (Array.isArray(c?.tags) ? c.tags : [])
+          .filter((t: string) => t.startsWith('med:'))
+          .map((t: string) => t.replace('med:', ''));
+
+        const relRaw = r.relationshipType || '';
+        const relLower = relRaw.toLowerCase();
+        let formattedRel = relRaw ? relRaw.charAt(0).toUpperCase() + relRaw.slice(1).toLowerCase() : 'Other';
+        if (relLower === 'spouse') formattedRel = 'Spouse';
+        else if (relLower === 'son') formattedRel = 'Son';
+        else if (relLower === 'daughter') formattedRel = 'Daughter';
+        else if (relLower === 'father') formattedRel = 'Father';
+        else if (relLower === 'mother') formattedRel = 'Mother';
+        else if (relLower === 'brother') formattedRel = 'Brother';
+        else if (relLower === 'sister') formattedRel = 'Sister';
+        else if (relLower === 'child') formattedRel = 'Child';
+
+        return {
+          name: `${c?.firstName || ''} ${c?.lastName || ''}`.trim(),
+          dob: toDateOnly(c?.dateOfBirth),
+          relation: formattedRel,
+          whatsapp: c?.phone || '',
+          occupation: occ?.type || '',
+          education: c?.education || '',
+          medicalHistory: medTags
+        };
+      });
+      setFamilyMembers(fams);
+
+      const healthEntries: any[] = [];
+      const lifeEntries: any[] = [];
+      (Array.isArray(contact.policies) ? contact.policies : []).forEach((p: any) => {
+        const sDate = toDateOnly(p.startDate);
+        const eDate = toDateOnly(p.endDate);
+        const mDate = toDateOnly(p.maturityDate);
+        const entry = {
+          company: p.plan?.company?.name || 'Other',
+          planName: p.plan?.name || 'Other',
+          policyNo: p.policyNumber || '',
+          startDate: sDate,
+          duration: (sDate && eDate) ? (calculateTenureFromDates(sDate, eDate) || '1 Year') : '1 Year',
+          endDate: eDate,
+          premium: p.premiumAmount != null ? String(p.premiumAmount) : '',
+          sumInsured: p.sumAssured != null ? String(p.sumAssured) : '',
+          deductible: '',
+          sumAssured: p.sumAssured != null ? String(p.sumAssured) : '',
+          maturityDate: mDate,
+          paymentTerm: '',
+          entryType: p.status === 'ACTIVE' ? 'New' : 'Renewal'
+        };
+        if (p.plan?.category === 'HEALTH') {
+          healthEntries.push(entry);
+        } else {
+          lifeEntries.push(entry);
+        }
+      });
+      const parsedPolicies: any[] = [];
+      if (healthEntries.length > 0) parsedPolicies.push({ policyType: 'Health', entries: healthEntries });
+      if (lifeEntries.length > 0) parsedPolicies.push({ policyType: 'Life', entries: lifeEntries });
+      setPolicies(parsedPolicies);
+
+      // Load & map product interests/leads
+      const parseBackendInterests = (list: string[] = []): { interestedIn: string[]; otherProduct: string } => {
+        const STANDARD_PRODUCTS = ['Health', 'Life', 'Term', 'Accident Policy', 'Motor', 'Mutual Funds', 'Porting'];
+        const interestedIn: string[] = [];
+        const otherParts: string[] = [];
+        for (const raw of list) {
+          if (!raw || !raw.trim()) continue;
+          const trimmed = raw.trim();
+          const lower = trimmed.toLowerCase();
+          if (lower.includes('health')) {
+            if (!interestedIn.includes('Health')) interestedIn.push('Health');
+          } else if (lower.includes('life') && !lower.includes('term')) {
+            if (!interestedIn.includes('Life')) interestedIn.push('Life');
+          } else if (lower.includes('term')) {
+            if (!interestedIn.includes('Term')) interestedIn.push('Term');
+          } else if (lower.includes('accident')) {
+            if (!interestedIn.includes('Accident Policy')) interestedIn.push('Accident Policy');
+          } else if (lower.includes('motor') || lower.includes('car') || lower.includes('vehicle') || lower.includes('bike')) {
+            if (!interestedIn.includes('Motor')) interestedIn.push('Motor');
+          } else if (lower.includes('mutual') || lower.includes('fund')) {
+            if (!interestedIn.includes('Mutual Funds')) interestedIn.push('Mutual Funds');
+          } else if (lower.includes('port')) {
+            if (!interestedIn.includes('Porting')) interestedIn.push('Porting');
+          } else if (STANDARD_PRODUCTS.includes(trimmed)) {
+            if (!interestedIn.includes(trimmed)) interestedIn.push(trimmed);
+          } else {
+            otherParts.push(trimmed);
+          }
+        }
+        if (otherParts.length > 0 && !interestedIn.includes('Other')) {
+          interestedIn.push('Other');
+        }
+        if (interestedIn.length === 0) {
+          interestedIn.push('Health');
+        }
+        return { interestedIn, otherProduct: otherParts.join(', ') };
+      };
+
+      const backendInterests = Array.isArray(contact.productInterests) ? contact.productInterests : [];
+      let mappedInterests = backendInterests.map((lead: any) => {
+        const extra = parseLeadNotes(lead.notes);
+        const comments = (Array.isArray(lead.consultations) ? lead.consultations : []).map((c: any) => ({
+          text: c.notes || c.text || '',
+          author: c.author?.name || c.author || 'System',
+          datetime: c.createdAt ? new Date(c.createdAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '',
+        }));
+
+        const { interestedIn, otherProduct } = parseBackendInterests(lead.interests || []);
+        const expectedPremium = lead.premiumBudget != null ? String(lead.premiumBudget) : '';
+        const leadStage = lead.stage || 'TO_CONTACT';
+
+        return {
+          id: lead.id,
+          collapsed: lead.id !== card.id,
+          interestedIn,
+          otherProduct,
+          descriptionDetails: extra.descriptionDetails || '',
+          initialStage: leadStage,
+          leadStage,
+          leadStatus: extra.leadStatus || 'INTERESTED',
+          dependencyType: extra.dependencyType || 'SELF',
+          dependentDetails: extra.dependentDetails || '',
+          leadType: extra.leadType || 'FRESH',
+          leadSource: lead.source || 'Social Media',
+          assignedEmployeeId: lead.assignedEmployeeId || '',
+          followUpDate: toDateOnly(lead.followUpDate),
+          expectedPremium,
+          comments,
+          newComment: '',
+        };
+      });
+
+      // Ensure the card being edited is present in product interests
+      if (!mappedInterests.some((pi: any) => pi.id === card.id)) {
+        const extra = parseLeadNotes(card.notes);
+        const comments = (Array.isArray(card.consultations) ? card.consultations : []).map((c: any) => ({
+          text: c.notes || c.text || '',
+          author: c.author?.name || c.author || 'System',
+          datetime: c.createdAt ? new Date(c.createdAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '',
+        }));
+        const { interestedIn, otherProduct } = parseBackendInterests(card.interests || (card.plan ? [card.plan.name || card.plan.category] : ['Health']));
+        const expectedPremium = (card.premiumBudget != null || card.expectedPremium != null) ? String(card.premiumBudget ?? card.expectedPremium) : '';
+        const leadStage = card.stage || card.leadStage || 'TO_CONTACT';
+
+        mappedInterests.unshift({
+          id: card.id,
+          collapsed: false,
+          interestedIn,
+          otherProduct,
+          descriptionDetails: extra.descriptionDetails || '',
+          initialStage: leadStage,
+          leadStage,
+          leadStatus: extra.leadStatus || card.status || 'INTERESTED',
+          dependencyType: extra.dependencyType || 'SELF',
+          dependentDetails: extra.dependentDetails || '',
+          leadType: extra.leadType || card.type || 'FRESH',
+          leadSource: card.source || 'Social Media',
+          assignedEmployeeId: card.assignedEmployeeId || '',
+          followUpDate: toDateOnly(card.followUpDate),
+          expectedPremium,
+          comments,
+          newComment: '',
+        });
+      }
+
+      setProductInterests(mappedInterests);
+      setEditContactId(contact.id || contactId);
+      if (card?.id) {
+        setCardEditModes({ [card.id]: true });
+      } else {
+        setCardEditModes({});
+      }
+      setAllowEditPersonal(false);
+      setActiveLeadTab(preferredTab || 'Personal Information');
+      setModalOpen(true);
+      toast.dismiss(toastId);
+    } catch (err: any) {
+      console.error('Error in openEdit:', err);
+      toast.error('Failed to load contact details', { id: toastId });
+    }
+  };
+
+  const closeModal = () => {
+    if (docPreviewModal.open || leadDocUploadOpen) return;
+    setModalOpen(false);
+    setEditTarget(null);
+    setEditContactId(null);
+    setLoadedContact(null);
+    setDuplicateContactMatched(null);
+    setCardEditModes({});
+    setAllowEditPersonal(false);
+    setProductInterests([]);
+    setFamilyMembers([]);
+    setPolicies([]);
+    setSelectedCampaigns([]);
+  };
+
+  const checkForDuplicateContact = async (phone: string, aadhaar: string) => {
+    // Only search when BOTH fields are fully entered
+    if (!phone || !aadhaar) return;
+    try {
+      const searchPhone = phone.slice(-10);
+      const res = await contactsService.list({ search: searchPhone, limit: 100 });
+      const list = res.data || [];
+      // Require BOTH mobile/altMobile AND aadhaar to match the same contact record
+      const match = list.find((c: any) => {
+        const contactPhone = c.phone ? c.phone.replace(/\D/g, '') : '';
+        const cleanContactPhone = contactPhone.length > 10 ? contactPhone.slice(-10) : contactPhone;
+
+        const contactAltPhone = c.alternatePhone ? c.alternatePhone.replace(/\D/g, '') : '';
+        const cleanContactAltPhone = contactAltPhone.length > 10 ? contactAltPhone.slice(-10) : contactAltPhone;
+
+        const matchPhone = (cleanContactPhone && cleanContactPhone === searchPhone) ||
+          (cleanContactAltPhone && cleanContactAltPhone === searchPhone);
+
+        const contactAadhaar = c.aadhaarNumber ? c.aadhaarNumber.replace(/\D/g, '') : '';
+        const cleanContactAadhaar = contactAadhaar.length > 12 ? contactAadhaar.slice(-12) : contactAadhaar;
+        const searchAadhaar = aadhaar.slice(-12);
+        const matchAadhaar = cleanContactAadhaar && cleanContactAadhaar === searchAadhaar;
+
+        return matchPhone && matchAadhaar;
+      });
+
+      if (match) {
+        const fullRes = await contactsService.get(match.id);
+        const contact = fullRes.data;
+
+        // Load address & occupation for personal fields
+        const primaryAddr = contact.addresses?.find((a: any) => a.isPrimary) || contact.addresses?.[0];
+        const primaryOcc = contact.occupations?.find((o: any) => o.isPrimary) || contact.occupations?.[0];
+
+        setPersonalFields({
+          role: contact.role || contact.user?.role || 'Contact',
+          contactStatus: contact.isActive !== false ? 'Active' : 'Inactive',
+          isActive: contact.isActive !== false,
+          fullName: `${contact.firstName || ''} ${contact.lastName || ''}`.trim(),
+          firstName: contact.firstName || '',
+          middleName: contact.middleName || '',
+          lastName: contact.lastName || '',
+          gender: contact.gender || '',
+          maritalStatus: contact.maritalStatus || '',
+          dateOfBirth: contact.dateOfBirth ? contact.dateOfBirth.split('T')[0] : '',
+          birthPlace: contact.birthPlace || '',
+          email: contact.email || '',
+          height: "",
+          weight: "",
+          aadhaarNumber: contact.aadhaarNumber || '',
+          whatsappNumber: contact.phone || '',
+          sameAsWhatsapp: contact.phone === contact.alternatePhone,
+          callingNumber: contact.alternatePhone || '',
+          education: contact.education || '',
+          annualIncome: contact.annualIncome ? String(contact.annualIncome) : '',
+          occupationType: primaryOcc?.type || '',
+          companyName: primaryOcc?.companyName || '',
+          state: primaryAddr?.state || '',
+          district: primaryAddr?.district || '',
+          city: primaryAddr?.city || '',
+          pincode: primaryAddr?.pincode || '',
+          streetAddress: primaryAddr?.line1 || contact.notes || '',
+          declaredMedicalHistory: contact.declaredMedicalHistory || [],
+          notDeclaredMedicalHistory: contact.notDeclaredMedicalHistory || [],
+          medicalHistoryDetails: contact.medicalHistoryDetails || ''
+        });
+
+        const fams = (contact.relationships || []).map((r: any) => {
+          const c = r.relatedContact;
+          return {
+            name: `${c?.firstName || ''} ${c?.lastName || ''}`.trim(),
+            dob: c?.dateOfBirth ? c.dateOfBirth.split('T')[0] : '',
+            relation: r.relationshipType,
+            whatsapp: c?.phone || '',
+            occupation: '',
+            education: '',
+            medicalHistory: []
+          };
+        });
+        setFamilyMembers(fams);
+
+        const healthEntries: any[] = [];
+        const lifeEntries: any[] = [];
+        (contact.policies || []).forEach((p: any) => {
+          const entry = {
+            company: p.plan?.company?.name || 'Other',
+            planName: p.plan?.name || 'Other',
+            policyNo: p.policyNumber,
+            startDate: p.startDate ? p.startDate.split('T')[0] : '',
+            duration: (p.startDate && p.endDate) ? (calculateTenureFromDates(p.startDate.split('T')[0], p.endDate.split('T')[0]) || '1 Year') : '1 Year',
+            endDate: p.endDate ? p.endDate.split('T')[0] : '',
+            premium: String(p.premiumAmount),
+            sumInsured: String(p.sumAssured),
+            deductible: '',
+            sumAssured: String(p.sumAssured),
+            maturityDate: p.maturityDate ? p.maturityDate.split('T')[0] : '',
+            paymentTerm: '',
+            entryType: p.status === 'ACTIVE' ? 'New' : 'Renewal'
+          };
+          if (p.plan?.category === 'HEALTH') healthEntries.push(entry);
+          else lifeEntries.push(entry);
+        });
+
+        const parsedPolicies: any[] = [];
+        if (healthEntries.length > 0) parsedPolicies.push({ policyType: 'Health', entries: healthEntries });
+        if (lifeEntries.length > 0) parsedPolicies.push({ policyType: 'Life', entries: lifeEntries });
+        setPolicies(parsedPolicies);
+
+        // WhatsApp Campaigns — populate from contact tags
+        const campaignsList = [
+          'Health Awareness', 'New Year Offer', 'Pension Plan',
+          'Monsoon Safety', 'Term Insurance Promo', 'Family Health Package'
+        ];
+        const campaigns = contact.tags?.filter((t: string) => campaignsList.includes(t)) || [];
+        setSelectedCampaigns(campaigns);
+
+        // Product Interests — map existing leads for the Product Interest tab
+        const backendInterests = contact.productInterests || [];
+        const mappedInterests = backendInterests.map((lead: any) => {
+          const extra = parseLeadNotes(lead.notes);
+          const comments = (lead.consultations || []).map((c: any) => ({
+            text: c.notes || '',
+            author: c.author || 'System',
+            datetime: c.createdAt ? new Date(c.createdAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '',
+          }));
+
+          const interestsList = lead.interests || [];
+          const isStandard = (p: string) => ['Health', 'Life', 'Term', 'Accident Policy', 'Motor', 'Mutual Funds', 'Porting'].includes(p);
+          const standardInterests = interestsList.filter((p: string) => isStandard(p));
+          const otherInterests = interestsList.filter((p: string) => !isStandard(p));
+
+          const interestedIn = [...standardInterests];
+          let otherProduct = '';
+          if (otherInterests.length > 0) {
+            interestedIn.push('Other');
+            otherProduct = otherInterests.join(', ');
+          }
+
+          const expectedPremium = lead.premiumBudget ? String(lead.premiumBudget) : '';
+          const leadStage = lead.stage || 'TO_CONTACT';
+
+          return {
+            id: lead.id,
+            collapsed: true,
+            interestedIn,
+            otherProduct,
+            descriptionDetails: extra.descriptionDetails || '',
+            initialStage: leadStage,
+            leadStage,
+            leadStatus: extra.leadStatus,
+            dependencyType: extra.dependencyType || 'SELF',
+            dependentDetails: extra.dependentDetails || '',
+            leadType: extra.leadType,
+            leadSource: lead.source || 'Social Media',
+            assignedEmployeeId: lead.assignedEmployeeId || '',
+            followUpDate: lead.followUpDate ? lead.followUpDate.split('T')[0] : '',
+            expectedPremium,
+            comments,
+            newComment: '',
+          };
+        });
+        setProductInterests(mappedInterests);
+
+        // All data loaded — now mark contact as matched and show banner
+        setLoadedContact(contact);
+        setEditContactId(contact.id);
+        setDuplicateContactMatched(contact);
+        toast.success("Existing Contact Found – Details Loaded.");
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  useEffect(() => {
+    if (!editTarget && !duplicateContactMatched) {
+      const cleanPhone = (personalFields.whatsappNumber || '').replace(/\D/g, '');
+      const cleanAltPhone = (personalFields.callingNumber || '').replace(/\D/g, '');
+      const cleanAadhaar = (personalFields.aadhaarNumber || '').replace(/\D/g, '');
+
+      const phoneToSearch = cleanPhone.length === 10 ? cleanPhone : (cleanAltPhone.length === 10 ? cleanAltPhone : '');
+
+      if (phoneToSearch && cleanAadhaar.length === 12) {
+        checkForDuplicateContact(phoneToSearch, cleanAadhaar);
+      }
+    }
+  }, [personalFields.whatsappNumber, personalFields.callingNumber, personalFields.aadhaarNumber, editTarget, duplicateContactMatched]);
+
+  const hasActivePolicyForCard = (card: any): boolean => {
+    if (!loadedContact) return false;
+    const activePolicies = (loadedContact.policies || []).filter((p: any) => p.status === 'ACTIVE' || !p.status);
+    return card.interestedIn.some((prod: string) => {
+      return activePolicies.some((p: any) => {
+        const cat = (p.plan?.category || p.category || '').toUpperCase();
+        const prodUpper = prod.toUpperCase();
+        if (prodUpper === 'HEALTH' && cat === 'HEALTH') return true;
+        if (prodUpper === 'LIFE' && cat === 'LIFE') return true;
+        if (prodUpper === 'MOTOR' && cat === 'MOTOR') return true;
+        return false;
+      });
+    });
+  };
+
+  const isPolicyOutsideRenewalWindowForCard = (card: any): boolean => {
+    if (!loadedContact) return false;
+    const activePolicies = (loadedContact.policies || []).filter((p: any) => p.status === 'ACTIVE' || !p.status);
+    return card.interestedIn.some((prod: string) => {
+      return activePolicies.some((p: any) => {
+        const cat = (p.plan?.category || p.category || '').toUpperCase();
+        const prodUpper = prod.toUpperCase();
+
+        let match = false;
+        if (prodUpper === 'HEALTH' && cat === 'HEALTH') match = true;
+        if (prodUpper === 'LIFE' && cat === 'LIFE') match = true;
+        if (prodUpper === 'MOTOR' && cat === 'MOTOR') match = true;
+
+        if (match && p.endDate) {
+          const expiryDate = new Date(p.endDate);
+          const now = new Date();
+          expiryDate.setHours(0, 0, 0, 0);
+          now.setHours(0, 0, 0, 0);
+          const diffDays = Math.ceil((expiryDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+          if (diffDays > maxRenewalWindow) {
+            return true;
+          }
+        }
+        return false;
+      });
+    });
+  };
+
+  const hasActiveRenewalLeadForCard = (card: any): boolean => {
+    if (!loadedContact) return false;
+    const backendInterests = loadedContact.productInterests || [];
+    return card.interestedIn.some((prod: string) => {
+      return backendInterests.some((lead: any) => {
+        if (card.id && lead.id === card.id) return false;
+        const extra = parseLeadNotes(lead.notes);
+        const leadStatus = extra.leadStatus || '';
+        const stage = lead.stage || '';
+        const leadType = extra.leadType || 'FRESH';
+
+        if (leadStatus === 'LEAD_LOST' || leadStatus === 'NOT_INTERESTED' || stage === 'PROCESS_COMPLETED' || stage === 'PAYMENT_DONE') {
+          return false;
+        }
+        if (leadType !== 'RENEWAL') return false;
+        return (lead.interests || []).some((i: string) => i.toLowerCase() === prod.toLowerCase());
+      });
+    });
+  };
+
+  const isProductAlreadyExistsForContact = (prod: string, cardLeadType?: string): boolean => {
+    if (!loadedContact) return false;
+    const backendInterests = loadedContact.productInterests || [];
+
+    const activeLead = backendInterests.find((lead: any) => {
+      const extra = parseLeadNotes(lead.notes);
+      const leadStatus = extra.leadStatus || '';
+      const stage = lead.stage || '';
+
+      if (leadStatus === 'LEAD_LOST' || leadStatus === 'NOT_INTERESTED' || stage === 'PROCESS_COMPLETED' || stage === 'PAYMENT_DONE') {
+        return false;
+      }
+      return (lead.interests || []).some((i: string) => i.toLowerCase() === prod.toLowerCase());
+    });
+
+    if (activeLead) {
+      const activeLeadExtra = parseLeadNotes(activeLead.notes);
+      const activeLeadType = activeLeadExtra.leadType || 'FRESH';
+
+      if (cardLeadType === 'RENEWAL') {
+        if (activeLeadType === 'RENEWAL') return true;
+      } else {
+        return true;
+      }
+    }
+
+    const hasInPolicies = (loadedContact.policies || []).some((p: any) => {
+      if (p.status && p.status !== 'ACTIVE') return false;
+
+      const cat = (p.plan?.category || p.category || '').toUpperCase();
+      const prodUpper = prod.toUpperCase();
+
+      let match = false;
+      if (prodUpper === 'HEALTH' && cat === 'HEALTH') match = true;
+      if (prodUpper === 'LIFE' && cat === 'LIFE') match = true;
+      if (prodUpper === 'MOTOR' && cat === 'MOTOR') match = true;
+
+      if (match) {
+        if (cardLeadType !== 'RENEWAL') return true;
+        if (p.endDate) {
+          const expiryDate = new Date(p.endDate);
+          const now = new Date();
+          expiryDate.setHours(0, 0, 0, 0);
+          now.setHours(0, 0, 0, 0);
+          const diffDays = Math.ceil((expiryDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+          if (diffDays > maxRenewalWindow) return true;
+        }
+      }
+      return false;
+    });
+    if (hasInPolicies) return true;
+
+    return false;
+  };
+
+  const executeDelete = async () => {
+    if (!deleteTarget) return;
+    await deleteLead.mutateAsync(deleteTarget.id);
+    setDeleteTarget(null);
+    qc.invalidateQueries();
+  };
+
+  const openDetail = (card: any) => {
+    setDetailTarget(card);
+    setDetailTab('overview');
+    setIsDetailEditing(false);
+    setDetailOpen(true);
+  };
+
+  const handleSort = (key: string) => {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortKey(key); setSortDir('asc'); }
+  };
+
+  const activeFilterCount =
+    filterPlans.length + filterStatuses.length + filterStages.length + filterTypes.length +
+    (filterEmployee ? 1 : 0) + (filterDateFrom ? 1 : 0) + (filterDateTo ? 1 : 0) +
+    (filterEnquiryDateFrom ? 1 : 0) + (filterEnquiryDateTo ? 1 : 0) +
+    (filterFinalSellsFrom ? 1 : 0) + (filterFinalSellsTo ? 1 : 0) +
+    (filterExpectedPremiumMin ? 1 : 0) + (filterExpectedPremiumMax ? 1 : 0) +
+    (filterLeadSource ? 1 : 0);
+
+  if (isLoading) return <div className="flex h-48 items-center justify-center text-gray-400">Loading pipeline…</div>;
+
+  return (
+    <div className="h-full flex flex-col gap-4">
+
+      {/* Floating Right Action Panel */}
+      <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleImport} />
+      <div className="fixed right-5 top-1/2 -translate-y-1/2 z-40 flex flex-col gap-3 bg-white/90 backdrop-blur-xl p-2 rounded-2xl shadow-2xl border border-slate-200/80 animate-fadeIn">
+        {/* Import CSV */}
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 hover:from-emerald-700 hover:to-teal-600 text-white flex items-center justify-center transition-all hover:scale-105 shadow-md shadow-emerald-500/25 cursor-pointer group relative"
+        >
+          <Upload size={18} strokeWidth={2.2} />
+          <span className="absolute right-full mr-3 px-3 py-1.5 rounded-xl bg-slate-900/90 backdrop-blur-md text-white text-[11px] font-bold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-all pointer-events-none shadow-xl border border-slate-800">
+            Import Leads CSV
+          </span>
+        </button>
+
+        {/* New Lead */}
+        <button
+          type="button"
+          onClick={() => openCreate('TO_CONTACT')}
+          className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white flex items-center justify-center transition-all hover:scale-105 shadow-lg shadow-blue-500/30 cursor-pointer group relative"
+        >
+          <UserPlus size={18} strokeWidth={2.2} />
+          <span className="absolute right-full mr-3 px-3 py-1.5 rounded-xl bg-slate-900/90 backdrop-blur-md text-white text-[11px] font-bold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-all pointer-events-none shadow-xl border border-slate-800">
+            New Lead
+          </span>
+        </button>
+      </div>
+
+      {/* Unified Search & Actions Row */}
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-3 border border-slate-100 rounded-2xl shadow-sm">
+        {/* Left Side: Search Bar & Inline Quick Filters */}
+        <div className="flex flex-wrap items-center gap-2.5 flex-1 min-w-0">
+          <div className="page-search-wrapper">
+            <Search className="page-search-icon" />
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search leads..."
+              className="page-search-input"
+            />
+          </div>
+
+          <div className="h-6 w-px bg-slate-200 hidden md:block shrink-0" />
+
+          {/* Quick Filters Inline Pills */}
+          <div className="flex flex-wrap items-center gap-1.5 overflow-x-auto custom-scrollbar py-0.5 min-w-0">
+            <span className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wider mr-0.5 flex items-center gap-1 shrink-0">
+              <Flame size={13} className="text-amber-500" /> Quick:
+            </span>
+            {[
+              { key: 'ALL', label: 'All Leads' },
+              { key: 'HOT', label: 'Hot', icon: '🔥' },
+              { key: 'VERY_HOT', label: 'Very Hot', icon: '💥' },
+              { key: 'HEALTH', label: 'Health', icon: '🏥' },
+              { key: 'LIFE', label: 'Life', icon: '🛡️' },
+              { key: 'ACCIDENT', label: 'Accident', icon: '🚗' },
+              { key: 'MF', label: 'Mutual Funds', icon: '📈' },
+              { key: 'THIS_WEEK', label: 'This Week', icon: '📅' },
+            ].map(q => {
+              const isSelected = q.key === 'ALL'
+                ? selectedQuickFilters.length === 0
+                : selectedQuickFilters.includes(q.key);
+              return (
+                <button
+                  key={q.key}
+                  type="button"
+                  onClick={() => toggleQuickFilter(q.key)}
+                  className={clsx(
+                    'inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer border shadow-2xs whitespace-nowrap shrink-0',
+                    isSelected
+                      ? 'bg-blue-600 text-white border-blue-600 shadow-sm scale-105'
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900'
+                  )}
+                >
+                  {q.icon && <span>{q.icon}</span>}
+                  <span>{q.label}</span>
+                </button>
+              );
+            })}
+            {selectedQuickFilters.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setSelectedQuickFilters([])}
+                className="text-[11px] font-extrabold text-red-500 hover:text-red-700 cursor-pointer px-2 py-0.5 rounded-lg bg-red-50 hover:bg-red-100 transition-colors whitespace-nowrap shrink-0"
+              >
+                Reset
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Right: View toggle and controls */}
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {/* Kanban / Table Toggle */}
+          <div className="flex items-center bg-slate-100 rounded-lg p-0.5 border border-slate-200/50">
+            <button
+              onClick={() => setViewMode('board')}
+              className={clsx('flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-bold cursor-pointer transition-all select-none',
+                viewMode === 'board' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-900')}
+            >
+              <LayoutGrid size={13} /> <span className="hidden sm:inline">Kanban</span>
+            </button>
+            <button
+              onClick={() => setViewMode('table')}
+              className={clsx('flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-bold cursor-pointer transition-all select-none',
+                viewMode === 'table' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-900')}
+            >
+              <List size={13} /> <span className="hidden sm:inline">Table</span>
+            </button>
+          </div>
+
+          {/* Filters Button */}
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className={clsx('btn-secondary h-9 py-0 px-3 text-xs flex items-center gap-1.5 font-bold cursor-pointer rounded-lg',
+              showFilters && 'bg-blue-50 border-blue-200 text-blue-600')}
+          >
+            <Filter size={13} />
+            <span>Filters</span>
+            {activeFilterCount > 0 && (
+              <span className="bg-blue-600 text-white text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                {activeFilterCount}
+              </span>
+            )}
+          </button>
+
+          {/* Table Columns (only in Table view) */}
+          {viewMode === 'table' && (
+            <div className="relative" ref={colMenuRef}>
+              <button
+                onClick={() => setColMenuOpen(!colMenuOpen)}
+                className="btn-secondary h-9 py-0 px-3 text-xs flex flex-wrap items-center gap-1.5 font-bold cursor-pointer rounded-lg"
+              >
+                <Columns size={13} /> <span>Columns</span>
+              </button>
+              {colMenuOpen && (
+                <div className="absolute right-0 mt-1.5 z-50 bg-white border border-gray-200 rounded-xl shadow-lg p-3 min-w-[200px] space-y-1.5">
+                  <div className="flex items-center justify-between pb-1.5 border-b border-slate-100 mb-1">
+                    <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">Select Columns</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const allKeys: Record<string, boolean> = {};
+                        ALL_TABLE_COLUMNS.forEach(c => { allKeys[c.key] = true; });
+                        setVisibleColumns(allKeys);
+                      }}
+                      className="text-[10px] text-blue-600 font-bold hover:underline cursor-pointer"
+                    >
+                      Select All
+                    </button>
+                  </div>
+                  {ALL_TABLE_COLUMNS.filter(c => c.key !== 'actions').map(col => (
+                    <label key={col.key} className="flex flex-wrap items-center gap-2 text-xs text-gray-700 cursor-pointer hover:text-gray-900 py-0.5">
+                      <input
+                        type="checkbox"
+                        checked={visibleColumns[col.key] !== false}
+                        onChange={() => setVisibleColumns(prev => ({ ...prev, [col.key]: prev[col.key] === false ? true : false }))}
+                        className="rounded accent-blue-600 cursor-pointer"
+                      />
+                      <span className="font-medium">{col.label}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+
+
+      {/* Filter panel */}
+      {showFilters && (
+        <div className="card-panel grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 bg-gray-50/50 p-4 border rounded-xl animate-fadeIn text-xs">
+          {/* Lead Stage Filter */}
+          <div>
+            <label className="label text-[11px] font-bold text-gray-700">Lead Stage (Multi-Select)</label>
+            <div className="relative" ref={stageFilterRef}>
+              <button type="button" onClick={() => setStageFilterOpen(!stageFilterOpen)}
+                className="input text-xs flex items-center justify-between w-full text-left bg-white font-medium">
+                <span className="truncate">{filterStages.length === 0 ? 'All Stages' : `${filterStages.length} selected`}</span>
+                <ChevronDown size={12} className="text-gray-400 shrink-0" />
+              </button>
+              {stageFilterOpen && (
+                <div className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-xl shadow-lg p-2 space-y-1 max-h-48 overflow-y-auto">
+                  {[
+                    { value: 'TO_CONTACT', label: 'To Contact' },
+                    { value: 'CONTACTED', label: 'Contacted' },
+                    { value: 'PROPOSAL_SENT', label: 'Proposal Sent' },
+                    { value: 'LOGIN_PROGRESS', label: 'Login Progress' },
+                    { value: 'PAYMENT_DONE', label: 'Payment Done' },
+                    { value: 'PROCESS_COMPLETED', label: 'Process Completed' },
+                  ].map(opt => (
+                    <label key={opt.value} className="flex flex-wrap items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 text-xs text-gray-700 cursor-pointer">
+                      <input type="checkbox" checked={filterStages.includes(opt.value)}
+                        onChange={() => setFilterStages(prev => prev.includes(opt.value) ? prev.filter(v => v !== opt.value) : [...prev, opt.value])}
+                        className="rounded accent-blue-600" />
+                      {opt.label}
+                    </label>
+                  ))}
+                  {filterStages.length > 0 && (
+                    <button onClick={() => setFilterStages([])} className="w-full text-xs text-red-500 hover:text-red-700 py-1 text-center font-bold">Clear Selected</button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Lead Type Filter */}
+          <div>
+            <label className="label text-[11px] font-bold text-gray-700">Lead Type (Multi-Select)</label>
+            <div className="relative" ref={typeFilterRef}>
+              <button type="button" onClick={() => setTypeFilterOpen(!typeFilterOpen)}
+                className="input text-xs flex items-center justify-between w-full text-left bg-white font-medium">
+                <span className="truncate">{filterTypes.length === 0 ? 'All Lead Types' : `${filterTypes.length} selected`}</span>
+                <ChevronDown size={12} className="text-gray-400 shrink-0" />
+              </button>
+              {typeFilterOpen && (
+                <div className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-xl shadow-lg p-2 space-y-1 max-h-48 overflow-y-auto">
+                  {[
+                    { value: 'FRESH', label: 'Fresh' },
+                    { value: 'RENEWAL', label: 'Renewal' },
+                    { value: 'PORTING', label: 'Porting' },
+                    { value: 'RENEWAL_PORTING', label: 'Renewal / Porting' },
+                  ].map(opt => (
+                    <label key={opt.value} className="flex flex-wrap items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 text-xs text-gray-700 cursor-pointer">
+                      <input type="checkbox" checked={filterTypes.includes(opt.value)}
+                        onChange={() => setFilterTypes(prev => prev.includes(opt.value) ? prev.filter(v => v !== opt.value) : [...prev, opt.value])}
+                        className="rounded accent-blue-600" />
+                      {opt.label}
+                    </label>
+                  ))}
+                  {filterTypes.length > 0 && (
+                    <button onClick={() => setFilterTypes([])} className="w-full text-xs text-red-500 hover:text-red-700 py-1 text-center font-bold">Clear Selected</button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Product Category Filter */}
+          <div>
+            <label className="label text-[11px] font-bold text-gray-700">Product Category (Multi-Select)</label>
+            <div className="relative" ref={planFilterRef}>
+              <button type="button" onClick={() => setPlanFilterOpen(!planFilterOpen)}
+                className="input text-xs flex items-center justify-between w-full text-left bg-white font-medium">
+                <span className="truncate">{filterPlans.length === 0 ? 'All Products' : `${filterPlans.length} selected`}</span>
+                <ChevronDown size={12} className="text-gray-400 shrink-0" />
+              </button>
+              {planFilterOpen && (
+                <div className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-xl shadow-lg p-2 space-y-1 max-h-48 overflow-y-auto">
+                  {PLAN_CATEGORIES.map(opt => (
+                    <label key={opt.value} className="flex flex-wrap items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 text-xs text-gray-700 cursor-pointer">
+                      <input type="checkbox" checked={filterPlans.includes(opt.value)}
+                        onChange={() => setFilterPlans(prev => prev.includes(opt.value) ? prev.filter(v => v !== opt.value) : [...prev, opt.value])}
+                        className="rounded accent-blue-600" />
+                      {opt.label}
+                    </label>
+                  ))}
+                  {filterPlans.length > 0 && (
+                    <button onClick={() => setFilterPlans([])} className="w-full text-xs text-red-500 hover:text-red-700 py-1 text-center font-bold">Clear Selected</button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Lead Status Filter */}
+          <div>
+            <label className="label text-[11px] font-bold text-gray-700">
+              Lead Status (Multi-Select)
+            </label>
+            <div className="relative" ref={statusFilterRef}>
+              <button type="button" onClick={() => setStatusFilterOpen(!statusFilterOpen)}
+                className="input text-xs flex items-center justify-between w-full text-left bg-white font-medium">
+                <span className="truncate">{filterStatuses.length === 0 ? 'All Statuses' : `${filterStatuses.length} selected`}</span>
+                <ChevronDown size={12} className="text-gray-400 shrink-0" />
+              </button>
+              {statusFilterOpen && (
+                <div className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-xl shadow-lg p-2 space-y-1 max-h-48 overflow-y-auto">
+                  {LEAD_STATUS_OPTIONS.map(opt => (
+                    <label key={opt.value} className="flex flex-wrap items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 text-xs text-gray-700 cursor-pointer">
+                      <input type="checkbox" checked={filterStatuses.includes(opt.value)}
+                        onChange={() => setFilterStatuses(prev => prev.includes(opt.value) ? prev.filter(v => v !== opt.value) : [...prev, opt.value])}
+                        className="rounded accent-blue-600" />
+                      {opt.label}
+                    </label>
+                  ))}
+                  {filterStatuses.length > 0 && (
+                    <button onClick={() => setFilterStatuses([])} className="w-full text-xs text-red-500 hover:text-red-700 py-1 text-center font-bold">Clear Selected</button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Assigned Employee */}
+          <div>
+            <label className="label text-[11px] font-bold text-gray-700">Assigned Employee</label>
+            <select value={filterEmployee} onChange={e => setFilterEmployee(e.target.value)} className="input text-xs font-semibold w-full bg-white shadow-2xs">
+              <option value="">All Employees</option>
+              {employeesList.map((emp: any) => {
+                const empUserId = emp.userId || emp.user?.id || emp.id;
+                const empName = `${emp.firstName || emp.user?.firstName || ''} ${emp.lastName || emp.user?.lastName || ''}`.trim() || emp.email || 'Employee';
+                return (
+                  <option key={emp.id || empUserId} value={empUserId}>
+                    {empName}
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+
+          {/* Next Follow-up Date */}
+          <div className="space-y-1">
+            <label className="label text-[11px] font-bold text-gray-700">Next Follow-up Date</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <DatePicker value={filterDateFrom} onChange={setFilterDateFrom} className="input text-xs" title="From" />
+              <DatePicker value={filterDateTo} onChange={setFilterDateTo} className="input text-xs" title="To" />
+            </div>
+          </div>
+
+          {/* Date of 1st Enquiry (Lead Creation Date) */}
+          <div className="space-y-1">
+            <label className="label text-[11px] font-bold text-gray-700">Date of 1st Enquiry (Creation Date)</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <DatePicker value={filterEnquiryDateFrom} onChange={setFilterEnquiryDateFrom} className="input text-xs" title="From" />
+              <DatePicker value={filterEnquiryDateTo} onChange={setFilterEnquiryDateTo} className="input text-xs" title="To" />
+            </div>
+          </div>
+
+          {/* Date of Final Sells */}
+          <div className="space-y-1">
+            <label className="label text-[11px] font-bold text-gray-700">Date of Final Sells</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <DatePicker value={filterFinalSellsFrom} onChange={setFilterFinalSellsFrom} className="input text-xs" title="From" />
+              <DatePicker value={filterFinalSellsTo} onChange={setFilterFinalSellsTo} className="input text-xs" title="To" />
+            </div>
+          </div>
+
+          {/* Expected Premium Range */}
+          <div className="space-y-1">
+            <label className="label text-[11px] font-bold text-gray-700">Expected Premium Range</label>
+            <div className="flex gap-2 items-center">
+              <input
+                type="number"
+                placeholder="Min ₹"
+                className="input text-xs w-full bg-white shadow-2xs"
+                value={filterExpectedPremiumMin}
+                onChange={e => setFilterExpectedPremiumMin(e.target.value)}
+              />
+              <span className="text-gray-400 font-bold">-</span>
+              <input
+                type="number"
+                placeholder="Max ₹"
+                className="input text-xs w-full bg-white shadow-2xs"
+                value={filterExpectedPremiumMax}
+                onChange={e => setFilterExpectedPremiumMax(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* Lead Source */}
+          <div>
+            <label className="label text-[11px] font-bold text-gray-700">Lead Source</label>
+            <select
+              value={filterLeadSource}
+              onChange={e => setFilterLeadSource(e.target.value)}
+              className="input text-xs font-semibold w-full bg-white shadow-2xs"
+            >
+              <option value="">All Sources</option>
+              {LEAD_SOURCES.map(src => (
+                <option key={src} value={src}>{src}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Filter Panel Footer Action Bar */}
+          <div className="col-span-1 sm:col-span-2 lg:col-span-3 flex flex-wrap justify-between items-center gap-3 pt-3 border-t border-slate-200">
+            {/* Export Buttons */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-bold text-slate-500 mr-1">Export Leads Data:</span>
+              <button
+                type="button"
+                onClick={exportLeadsToExcel}
+                className="px-3.5 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 cursor-pointer shadow-2xs transition-all flex items-center gap-1.5 text-xs font-bold bg-white"
+                title="Export to Excel"
+              >
+                <Download size={14} className="text-emerald-600" />
+                <span>Export Excel</span>
+              </button>
+              <button
+                type="button"
+                onClick={exportLeadsToPdf}
+                className="px-3.5 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 cursor-pointer shadow-2xs transition-all flex items-center gap-1.5 text-xs font-bold bg-white"
+                title="Export to PDF"
+              >
+                <FileText size={14} className="text-red-500" />
+                <span>Export PDF</span>
+              </button>
+            </div>
+
+            {activeFilterCount > 0 && (
+              <button
+                onClick={() => {
+                  setFilterPlans([]); setFilterStatuses([]); setFilterStages([]); setFilterTypes([]);
+                  setFilterEmployee(''); setFilterDateFrom(''); setFilterDateTo('');
+                  setFilterEnquiryDateFrom(''); setFilterEnquiryDateTo('');
+                  setFilterFinalSellsFrom(''); setFilterFinalSellsTo('');
+                  setFilterExpectedPremiumMin(''); setFilterExpectedPremiumMax('');
+                  setFilterLeadSource('');
+                }}
+                className="text-xs text-red-600 hover:text-red-800 flex items-center gap-1 font-extrabold cursor-pointer px-3 py-1.5 bg-red-50 hover:bg-red-100 rounded-xl transition-colors shadow-2xs"
+              >
+                <X size={13} /> Clear all filters
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Main View */}
+      {viewMode === 'board' ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 pb-4 flex-1 overflow-y-auto custom-scrollbar" style={{ maxHeight: 'calc(100vh - 180px)' }}>
+          {UI_STAGES.map(stage => {
+            const cards = filteredBoard[stage] ?? [];
+            const totalBudget = expectedBusiness(stage);
+            const backendStage = STAGE_MAPPINGS[stage];
+            return (
+              <div
+                key={stage}
+                className="flex flex-col min-w-0"
+                onDragEnter={e => {
+                  e.preventDefault();
+                  if (draggedOverStage !== stage) setDraggedOverStage(stage);
+                }}
+                onDragOver={e => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
+                }}
+                onDragLeave={() => {
+                  if (draggedOverStage === stage) setDraggedOverStage(null);
+                }}
+                onDrop={e => {
+                  e.preventDefault();
+                  setDraggedOverStage(null);
+                  const cardId = e.dataTransfer.getData('cardId');
+                  if (cardId && backendStage) {
+                    const draggedLead = leadsFlat.find(l => l.id === cardId) || filteredLeads.find(l => l.id === cardId);
+                    if (!draggedLead) return;
+
+                    const currentStageIndex = STAGE_ORDER.indexOf(draggedLead.stage);
+                    const targetStageIndex = STAGE_ORDER.indexOf(backendStage);
+
+                    if (currentStageIndex !== -1 && targetStageIndex !== -1) {
+                      if (targetStageIndex < currentStageIndex) {
+                        toast.error('Moving lead to a previous stage is not allowed.');
+                        return;
+                      }
+                      if (targetStageIndex === currentStageIndex) {
+                        return;
+                      }
+                    }
+
+                    if (backendStage === 'PROCESS_COMPLETED') {
+                      handleProcessCompleted(draggedLead);
+                      return;
+                    }
+
+                    moveStage.mutate(
+                      { id: draggedLead.id, stage: backendStage },
+                      {
+                        onSuccess: () => {
+                          toast.success(`Lead moved to ${stage}`);
+                          qc.invalidateQueries({ queryKey: ['leads'] });
+                        },
+                        onError: (err: any) => {
+                          toast.error(err.response?.data?.message || 'Failed to move lead stage');
+                        }
+                      }
+                    );
+                  }
+                }}
+              >
+                <div className="flex items-center justify-between mb-2 px-1.5 py-1 select-none">
+                  <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                    <span className={clsx('h-2.5 w-2.5 rounded-full shrink-0',
+                      stage === 'New' && 'bg-blue-500',
+                      stage === 'Contacted' && 'bg-indigo-500',
+                      stage === 'Proposal Sent' && 'bg-purple-500',
+                      stage === 'In Discussion' && 'bg-amber-500',
+                      stage === 'Login Progress' && 'bg-orange-500',
+                      stage === 'Payment Done' && 'bg-emerald-500',
+                      stage === 'Lost' && 'bg-rose-500'
+                    )} />
+                    <span className="text-sm sm:text-base font-extrabold text-slate-800 truncate">{stage}</span>
+                    <span className="text-xs font-bold text-slate-500 bg-slate-100 border border-slate-200/50 px-1.5 py-0.5 rounded-md shrink-0">{cards.length}</span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1">
+                    <span className="text-xs text-slate-500 font-bold shrink-0">
+                      ₹{totalBudget >= 100000 ? `${(totalBudget / 100000).toFixed(1)}L` : `${(totalBudget / 1000).toFixed(1)}K`}
+                    </span>
+                    <button
+                      onClick={() => openCreate(backendStage)}
+                      className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                      title={`Add lead in ${stage}`}
+                    >
+                      <Plus size={13} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className={clsx(
+                  'flex-1 min-h-[350px] rounded-xl border p-1.5 space-y-1.5 transition-all duration-200',
+                  STAGE_COLORS[stage],
+                  draggedOverStage === stage ? 'ring-2 ring-blue-500 scale-[1.01] bg-slate-100' : 'bg-slate-50/50'
+                )}>
+                  {cards.map(card => (
+                    <KanbanCard
+                      key={card.id}
+                      card={card}
+                      onEdit={openEdit}
+                      onDelete={c => setDeleteTarget(c)}
+                      onOpen={openDetail}
+                      onCall={handleCall}
+                      onWhatsApp={handleWhatsApp}
+                      onViewConnectedPolicy={handleOpenConnectedPolicy}
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <LeadsTable
+          data={sortedLeads}
+          loading={isLoading}
+          sortKey={sortKey}
+          sortDir={sortDir}
+          onSort={handleSort}
+          visibleColumns={visibleColumns}
+          onToggleColumn={key => setVisibleColumns(prev => ({ ...prev, [key]: prev[key] === false ? true : false }))}
+          onRowClick={openDetail}
+          onEdit={openEdit}
+          onDelete={c => setDeleteTarget(c)}
+          onCall={handleCall}
+          onWhatsApp={handleWhatsApp}
+          onCreate={() => openCreate('TO_CONTACT')}
+          onViewConnectedPolicy={handleOpenConnectedPolicy}
+        />
+      )}
+
+      {/* Create / Edit Modal */}
+      <Modal
+        open={modalOpen}
+        onClose={closeModal}
+        title={
+          activeLeadTab === 'Policy'
+            ? (editTarget ? "Edit Policy" : "Add Policy")
+            : (editTarget ? "Edit Lead" : "Add New Lead")
+        }
+        subtitle={
+          activeLeadTab === 'Policy'
+            ? "Add or update policy details, company, plan name, and coverage."
+            : (editTarget ? "Update lead profile, family details, and policies." : "Select an existing Contact and add Product Interest details.")
+        }
+        size="2xl"
+        actions={
+          <div className="flex gap-2.5 mr-1">
+            <button
+              type="button"
+              className="px-3 sm:px-5 py-1.5 sm:py-2 text-[10px] sm:text-xs font-extrabold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl cursor-pointer shadow-md shadow-blue-500/20 transition-all hover:scale-105"
+              onClick={(e) => handleLeadSubmit(e, true)}
+            >
+              {activeLeadTab === 'Policy'
+                ? (editTarget || editContactId ? 'Update Policy' : 'Add Policy')
+                : (editTarget ? 'Update Profile' : 'Save Lead')}
+            </button>
+          </div>
+        }
+      >
+        <form className="space-y-3" onSubmit={handleLeadSubmit}>
+
+          {/* Searchable Contact Selection (Only for Add New Lead Flow) */}
+          {!editTarget && (
+            <div className="p-3.5 bg-gradient-to-r from-blue-50/90 via-indigo-50/50 to-slate-50 border border-blue-200/90 rounded-2xl mb-3 shadow-2xs">
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-[11px] font-black uppercase tracking-wider text-blue-900 flex items-center gap-1.5">
+                  <UserCircle2 size={16} className="text-blue-600" />
+                  <span>Select Existing Contact <span className="text-rose-500">*</span></span>
+                </label>
+                {editContactId && (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-extrabold border border-emerald-300">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    Contact Selected & Data Loaded
+                  </span>
+                )}
+              </div>
+
+              <ContactSearchSelect
+                contacts={contactsPickerList}
+                selectedContactId={editContactId}
+                onSelect={(cId) => {
+                  if (cId) {
+                    loadContactById(cId);
+                  } else {
+                    setEditContactId(null);
+                    setLoadedContact(null);
+                    setPersonalFields({
+                      fullName: '',
+                      firstName: '',
+                      middleName: '',
+                      lastName: '',
+                      gender: '',
+                      maritalStatus: '',
+                      dateOfBirth: '',
+                      birthPlace: '',
+                      email: '',
+                      aadhaarNumber: '',
+                      whatsappNumber: '',
+                      sameAsWhatsapp: false,
+                      callingNumber: '',
+                      education: '',
+                      annualIncome: '',
+                      occupationType: '',
+                      companyName: '',
+                      state: '',
+                      district: '',
+                      city: '',
+                      pincode: '',
+                      streetAddress: '',
+                      declaredMedicalHistory: [],
+                      notDeclaredMedicalHistory: [],
+                      medicalHistoryDetails: ''
+                    });
+                    setFamilyMembers([]);
+                    setPolicies([]);
+                  }
+                }}
+                loading={contactsLoading}
+              />
+
+              {loadedContact && (
+                <div className="mt-3 p-3 bg-white border border-blue-100 rounded-xl shadow-xs flex flex-wrap items-center justify-between gap-3 animate-fadeIn">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white font-black text-xs flex items-center justify-center shadow-md shrink-0">
+                      {loadedContact.firstName?.[0]?.toUpperCase() || 'C'}
+                    </div>
+                    <div className="min-w-0">
+                      <h4 className="text-xs font-black text-slate-900 truncate">
+                        {loadedContact.firstName} {loadedContact.lastName || ''}
+                      </h4>
+                      <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500 font-medium mt-0.5">
+                        {(() => {
+                          const p = (loadedContact.phone && !loadedContact.phone.startsWith('00') && loadedContact.phone !== '0000000000' && !loadedContact.phone.toLowerCase().includes('unknown'))
+                            ? loadedContact.phone
+                            : ((loadedContact.alternatePhone && !loadedContact.alternatePhone.startsWith('00') && loadedContact.alternatePhone !== '0000000000' && !loadedContact.alternatePhone.toLowerCase().includes('unknown')) ? loadedContact.alternatePhone : null);
+                          if (!p) return null;
+                          return (
+                            <span className="flex items-center gap-1">
+                              <Phone size={11} className="text-blue-500" /> {p}
+                            </span>
+                          );
+                        })()}
+                        {loadedContact.email && (
+                          <span className="flex items-center gap-1 truncate">
+                            <Mail size={11} className="text-indigo-500" /> {loadedContact.email}
+                          </span>
+                        )}
+                        {personalFields.city && (
+                          <span className="text-slate-400">📍 {personalFields.city}</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditContactId(null);
+                      setLoadedContact(null);
+                      setPersonalFields({
+                        fullName: '',
+                        firstName: '',
+                        middleName: '',
+                        lastName: '',
+                        gender: '',
+                        maritalStatus: '',
+                        dateOfBirth: '',
+                        birthPlace: '',
+                        email: '',
+                        aadhaarNumber: '',
+                        whatsappNumber: '',
+                        sameAsWhatsapp: false,
+                        callingNumber: '',
+                        education: '',
+                        annualIncome: '',
+                        occupationType: '',
+                        companyName: '',
+                        state: '',
+                        district: '',
+                        city: '',
+                        pincode: '',
+                        streetAddress: '',
+                        declaredMedicalHistory: [],
+                        notDeclaredMedicalHistory: [],
+                        medicalHistoryDetails: ''
+                      });
+                      setFamilyMembers([]);
+                      setPolicies([]);
+                    }}
+                    className="text-[10px] text-slate-500 hover:text-rose-600 font-bold uppercase tracking-wider underline cursor-pointer"
+                  >
+                    Change Contact
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Modal sub-navigation tabs */}
+          <div className="flex bg-slate-200/60 p-1.5 rounded-2xl mt-0 mb-3 gap-2 border border-slate-200/80 overflow-x-auto shadow-2xs">
+            {['Product Interest', 'Personal', 'Family', 'Policy', 'Documents', 'WA Campaign', 'History'].map(tab => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setActiveLeadTab(tab)}
+                className={clsx(
+                  'px-5 py-2.5 rounded-xl text-xs font-extrabold tracking-wide transition-all cursor-pointer whitespace-nowrap',
+                  activeLeadTab === tab
+                    ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md shadow-blue-500/25 scale-[1.02]'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/80'
+                )}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
+
+          {/* Tab contents */}
+          <div className="h-[430px] overflow-y-auto pr-2 custom-scrollbar">
+            {activeLeadTab === 'Product Interest' && (
+              <div className="space-y-3 animate-fadeIn pb-2">
+
+                {/* Cards List */}
+                {productInterests.length === 0 && (
+                  <div className="flex flex-col items-center justify-center py-10 text-slate-400 text-xs gap-2">
+                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-100 flex items-center justify-center mb-1">
+                      <Shield size={24} className="text-blue-300" />
+                    </div>
+                    <p className="font-semibold text-slate-500">No product interests added yet.</p>
+                    <p className="text-[11px] text-slate-400">Click "+ Add Product Interest" below to get started.</p>
+                  </div>
+                )}
+
+                {productInterests.map((card, idx) => {
+                  const displayName = card.interestedIn.length > 0
+                    ? card.interestedIn.map(p => p === 'Other' && card.otherProduct ? card.otherProduct : p).join(', ')
+                    : 'New Product Interest';
+
+                  const PRODUCT_COLORS: Record<string, string> = {
+                    Health: 'from-emerald-500 to-teal-600',
+                    Life: 'from-blue-500 to-indigo-600',
+                    Term: 'from-violet-500 to-purple-600',
+                    'Accident Policy': 'from-orange-500 to-amber-600',
+                    Motor: 'from-rose-500 to-pink-600',
+                    'Mutual Funds': 'from-cyan-500 to-sky-600',
+                    Porting: 'from-yellow-500 to-orange-500',
+                    Other: 'from-slate-500 to-gray-600',
+                  };
+                  const firstProduct = card.interestedIn[0] || 'Other';
+                  const headerGradient = PRODUCT_COLORS[firstProduct] || 'from-blue-500 to-indigo-600';
+
+                  const isExisting = Boolean(card.id && !card.id.startsWith('temp-'));
+
+                  return (
+                    <div
+                      key={card.id}
+                      className="rounded-2xl border border-slate-200/80 overflow-hidden shadow-sm hover:shadow-md transition-all"
+                    >
+                      {/* Card Header — always visible */}
+                      <div
+                        className={`bg-gradient-to-r ${headerGradient} px-4 py-3 flex items-center justify-between cursor-pointer select-none`}
+                        onClick={() => toggleProductCollapse(card.id)}
+                      >
+                        <div className="flex flex-wrap items-center gap-3 min-w-0">
+                          <div className="w-6 h-6 rounded-lg bg-white/20 backdrop-blur-sm flex items-center justify-center shrink-0">
+                            <span className="text-white font-black text-[11px]">{idx + 1}</span>
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-white font-extrabold text-xs truncate">
+                              {displayName}
+                              {isExisting && (
+                                <span className="ml-2 px-1.5 py-0.5 rounded bg-white/20 text-white font-bold text-[9px] uppercase tracking-wider">
+                                  Existing
+                                </span>
+                              )}
+                            </p>
+                            {card.collapsed && card.leadStage && (
+                              <p className="text-white/70 text-[10px] font-semibold truncate">
+                                {card.leadStage.replace(/_/g, ' ')} · {card.leadStatus.replace(/_/g, ' ')}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {isExisting && (
+                            <button
+                              type="button"
+                              onClick={e => {
+                                e.stopPropagation();
+                                toggleCardEditMode(card.id);
+                              }}
+                              className={`px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs ${
+                                cardEditModes[card.id]
+                                  ? 'bg-amber-400 hover:bg-amber-500 text-slate-900 ring-2 ring-white/50'
+                                  : 'bg-white/20 hover:bg-white/30 text-white'
+                              }`}
+                              title={cardEditModes[card.id] ? 'Editing enabled. Click to lock.' : 'Click to edit lead details'}
+                            >
+                              <Pencil size={12} />
+                              <span>{cardEditModes[card.id] ? 'Editing' : 'Edit Details'}</span>
+                            </button>
+                          )}
+                          {!isExisting && (
+                            <button
+                              type="button"
+                              onClick={e => { e.stopPropagation(); removeProductInterest(card.id); }}
+                              className="p-1 rounded-lg bg-white/10 hover:bg-red-500/80 text-white transition-all"
+                              title="Remove"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
+                          <ChevronDown
+                            size={16}
+                            className={`text-white transition-transform duration-200 ${card.collapsed ? 'rotate-180' : ''}`}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Card Body — collapse/expand */}
+                      {!card.collapsed && (
+                        <div className="p-4 space-y-4 bg-white">
+
+                          {/* Interested In — toggle buttons */}
+                          <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <label className="label text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Interested In</label>
+                              {isExisting && (
+                                <span className="text-[10px] text-slate-400 font-medium italic">
+                                  {cardEditModes[card.id]
+                                    ? 'Editing enabled: Modify product category or click "+ Add Product Interest" for a new product.'
+                                    : 'Category fixed for existing records. Click "Edit Details" above to modify, or click "+ Add Product Interest" for a new product.'}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {['Health', 'Life', 'Term', 'Accident Policy', 'Motor', 'Mutual Funds', 'Porting', 'Other'].map(prod => {
+                                const isSel = card.interestedIn.includes(prod);
+                                const isAlreadySelected = false;
+                                const PILL_COLORS: Record<string, string> = {
+                                  Health: isSel ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100',
+                                  Life: isSel ? 'bg-blue-600 border-blue-600 text-white' : 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100',
+                                  Term: isSel ? 'bg-violet-600 border-violet-600 text-white' : 'bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100',
+                                  'Accident Policy': isSel ? 'bg-orange-600 border-orange-600 text-white' : 'bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100',
+                                  Motor: isSel ? 'bg-rose-600 border-rose-600 text-white' : 'bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100',
+                                  'Mutual Funds': isSel ? 'bg-cyan-600 border-cyan-600 text-white' : 'bg-cyan-50 border-cyan-200 text-cyan-700 hover:bg-cyan-100',
+                                  Porting: isSel ? 'bg-yellow-500 border-yellow-500 text-white' : 'bg-yellow-50 border-yellow-200 text-yellow-700 hover:bg-yellow-100',
+                                  Other: isSel ? 'bg-slate-700 border-slate-700 text-white' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100',
+                                };
+                                let btnStyle = PILL_COLORS[prod] || (isSel ? 'bg-slate-700 text-white border-slate-700' : 'bg-white border-slate-200 text-slate-600');
+                                return (
+                                  <button
+                                    key={prod}
+                                    type="button"
+                                    disabled={isExisting && !cardEditModes[card.id]}
+                                    onClick={() => {
+                                      const next = isSel ? [] : [prod];
+                                      updateProductInterest(card.id, 'interestedIn', next);
+                                    }}
+                                    className={`px-3 py-1.5 rounded-xl text-[11px] font-bold border transition-all select-none ${btnStyle} ${isExisting && !cardEditModes[card.id] ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                  >
+                                    {isSel ? '✓ ' : '+ '}{prod}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            {hasActiveRenewalLeadForCard(card) && card.leadType === 'RENEWAL' && (
+                              <div className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded-xl text-[11px] font-bold mt-2 animate-fadeIn">
+                                An active Renewal lead already exists for this product.
+                              </div>
+                            )}
+                            {hasActivePolicyForCard(card) && card.leadType === 'RENEWAL' && isPolicyOutsideRenewalWindowForCard(card) && (
+                              <div className="bg-red-50 border border-red-200 text-red-800 px-3 py-2 rounded-xl text-[11px] font-bold mt-2 animate-fadeIn">
+                                Renewal cannot be created yet. The policy is outside the renewal period.
+                              </div>
+                            )}
+                            {hasActivePolicyForCard(card) && card.leadType !== 'RENEWAL' && (
+                              <div className="bg-amber-50 border border-amber-200 text-amber-800 px-3 py-2 rounded-xl text-[11px] font-bold mt-2 animate-fadeIn">
+                                An active policy already exists for this product. Only a Renewal lead can be created.
+                              </div>
+                            )}
+                            {card.interestedIn.includes('Other') && (
+                              <div className="bg-slate-100/90 border-2 border-slate-300 rounded-xl p-3 space-y-1.5 animate-fadeIn mt-2.5">
+                                <label className="label text-[10px] font-extrabold text-slate-700 uppercase tracking-wider block">
+                                  Specify Other Product Name *
+                                </label>
+                                <input
+                                  type="text"
+                                  disabled={isExisting && !cardEditModes[card.id]}
+                                  className={`w-full text-xs px-3.5 py-2.5 bg-white border border-slate-300 rounded-lg text-slate-800 placeholder-slate-400 font-medium focus:ring-2 focus:ring-slate-500 focus:border-slate-500 outline-none shadow-xs ${isExisting && !cardEditModes[card.id] ? 'opacity-75 bg-slate-100 cursor-not-allowed' : ''}`}
+                                  placeholder="Specify product name..."
+                                  value={card.otherProduct}
+                                  onChange={e => updateProductInterest(card.id, 'otherProduct', e.target.value)}
+                                />
+                              </div>
+                            )}
+                          </div>
+                          {/* Description Details Box */}
+                          <div className="bg-slate-50/90 rounded-2xl border border-slate-200/70 p-4 space-y-2 shadow-xs">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <div className="w-6 h-6 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center shrink-0">
+                                <FileText size={13} />
+                              </div>
+                              <h4 className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider">
+                                Description Details
+                              </h4>
+                            </div>
+                            <textarea
+                              rows={2}
+                              className="w-full text-xs p-3 bg-white border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 rounded-xl text-slate-800 placeholder-slate-400 font-medium outline-none resize-y transition-all shadow-2xs"
+                              placeholder="Enter details for whom they are interested, specific coverage requirements, family member preferences, or notes..."
+                              value={card.descriptionDetails || ''}
+                              onChange={e => updateProductInterest(card.id, 'descriptionDetails', e.target.value)}
+                            />
+                          </div>
+                          {/* Row 1: Stage, Status, Dependency, Type */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                            <div>
+                              <label className="label text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Lead Stage <span className="text-red-500">*</span></label>
+                              <select
+                                className="input w-full text-xs"
+                                value={card.leadStage}
+                                onChange={e => {
+                                  const target = e.target.value;
+                                  const baseline = card.initialStage || 'TO_CONTACT';
+                                  const curIdx = STAGE_ORDER.indexOf(baseline);
+                                  const tarIdx = STAGE_ORDER.indexOf(target);
+                                  if (curIdx !== -1 && tarIdx !== -1 && tarIdx < curIdx) {
+                                    toast.error('Moving lead to a previous stage is not allowed.');
+                                    return;
+                                  }
+                                  updateProductInterest(card.id, 'leadStage', target);
+                                }}
+                              >
+                                {STAGE_ORDER.map(s => {
+                                  const baseline = card.initialStage || 'TO_CONTACT';
+                                  const curIdx = STAGE_ORDER.indexOf(baseline);
+                                  const thisIdx = STAGE_ORDER.indexOf(s);
+                                  const isPast = Boolean(card.initialStage && curIdx !== -1 && thisIdx < curIdx);
+                                  return (
+                                    <option key={s} value={s} disabled={isPast}>
+                                      {BACKEND_TO_UI[s] || s} {isPast ? '(Previous Stage - Not Allowed)' : ''}
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="label text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                                Lead Status <span className="text-red-500">*</span>{isExisting ? ' (Editable)' : ''}
+                              </label>
+                              <select
+                                className="input w-full text-xs"
+                                value={card.leadStatus}
+                                onChange={e => updateProductInterest(card.id, 'leadStatus', e.target.value)}
+                              >
+                                {LEAD_STATUS_OPTIONS.map(option => (
+                                  <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
+                              </select>
+                            </div>
+                            {/* <div>
+                              <label className="label text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Dependency *</label>
+                              <select
+                                disabled={isExisting}
+                                className={`input w-full text-xs ${isExisting ? 'opacity-75 bg-slate-100 cursor-not-allowed' : ''}`}
+                                value={card.dependencyType || 'SELF'}
+                                onChange={e => updateProductInterest(card.id, 'dependencyType', e.target.value)}
+                              >
+                                <option value="SELF">Self</option>
+                                <option value="DEPENDENT">Depend</option>
+                              </select>
+                            </div> */}
+                            <div>
+                              <label className="label text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Lead Type <span className="text-red-500">*</span></label>
+                              <select
+                                disabled={isExisting && !cardEditModes[card.id]}
+                                className={`input w-full text-xs ${isExisting && !cardEditModes[card.id] ? 'opacity-75 bg-slate-100 cursor-not-allowed' : ''}`}
+                                value={card.leadType}
+                                onChange={e => updateProductInterest(card.id, 'leadType', e.target.value)}
+                              >
+                                <option value="FRESH">Fresh</option>
+                                <option value="RENEWAL">Renewal</option>
+                                <option value="PORTING">Porting</option>
+                              </select>
+                            </div>
+                          </div>
+
+                          {/* Members Included Multi-Select Box */}
+
+
+                          {/* Row 2: Source, Assigned Employee, Follow-up Date, Expected Premium */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <label className="label text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                                  Lead Source <span className="text-red-500">*</span>
+                                  {isExisting && !isAdminOrSuperadmin && !cardEditModes[card.id] ? (
+                                    <span className="ml-1 text-[8.5px] font-semibold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
+                                      Locked
+                                    </span>
+                                  ) : null}
+                                </label>
+                              </div>
+
+                              <select
+                                disabled={isExisting && !isAdminOrSuperadmin && !cardEditModes[card.id]}
+                                className={`input w-full text-xs bg-white font-medium ${isExisting && !isAdminOrSuperadmin && !cardEditModes[card.id] ? 'opacity-75 bg-slate-100 cursor-not-allowed' : ''}`}
+                                value={card.leadSource || 'Walkin'}
+                                onChange={e => updateProductInterest(card.id, 'leadSource', e.target.value)}
+                              >
+                                {LEAD_SOURCES.map(src => (
+                                  <option key={src} value={src}>{src}</option>
+                                ))}
+                                {card.leadSource && !LEAD_SOURCES.includes(card.leadSource) && (
+                                  <option value={card.leadSource}>{card.leadSource}</option>
+                                )}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="label text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Assigned Employee</label>
+                              <select
+                                className="input w-full text-xs bg-white"
+                                value={card.assignedEmployeeId}
+                                onChange={e => updateProductInterest(card.id, 'assignedEmployeeId', e.target.value)}
+                              >
+                                <option value="">Unassigned</option>
+                                {employeesList.map((emp: any) => {
+                                  const empUserId = emp.userId || emp.user?.id || emp.id;
+                                  const empName = `${emp.firstName || emp.user?.firstName || ''} ${emp.lastName || emp.user?.lastName || ''}`.trim() || emp.email || 'Employee';
+                                  return (
+                                    <option key={emp.id || empUserId} value={empUserId}>
+                                      {empName}
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="label text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Follow-up Date <span className="text-red-500">*</span></label>
+                              <DatePicker
+                                disabled={isExisting && !cardEditModes[card.id]}
+                                className={`input w-full text-xs ${isExisting && !cardEditModes[card.id] ? 'opacity-75 bg-slate-100 cursor-not-allowed' : ''}`}
+                                value={card.followUpDate}
+                                onChange={val => updateProductInterest(card.id, 'followUpDate', val)}
+                                onDateChange={val => updateProductInterest(card.id, 'followUpDate', val)}
+                              />
+                            </div>
+                            <div>
+                              <label className="label text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Expected Premium / Budget (₹) <span className="text-red-500">*</span></label>
+                              <input
+                                type="number"
+                                disabled={isExisting && !cardEditModes[card.id]}
+                                className={`input w-full text-xs ${isExisting && !cardEditModes[card.id] ? 'opacity-75 bg-slate-100 cursor-not-allowed' : ''}`}
+                                placeholder="e.g. 12000"
+                                min={0}
+                                value={card.expectedPremium}
+                                onChange={e => updateProductInterest(card.id, 'expectedPremium', e.target.value)}
+                              />
+                            </div>
+                          </div>
+
+                          {/* Consultation Comments Section */}
+                          <div className="bg-slate-50/90 rounded-2xl border border-slate-200/70 p-4 space-y-3 shadow-xs">
+                            {/* Header */}
+                            <div className="flex items-center justify-between">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <div className="w-6 h-6 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
+                                  <MessageCircle size={13} />
+                                </div>
+                                <h4 className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider">
+                                  Consultation Comments
+                                </h4>
+                              </div>
+                              {card.comments.length > 0 && (
+                                <span className="text-[10px] font-extrabold bg-slate-200/70 text-slate-600 px-2 py-0.5 rounded-full">
+                                  {card.comments.length} {card.comments.length === 1 ? 'Comment' : 'Comments'}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Timeline List */}
+                            <div className="max-h-56 overflow-y-auto space-y-2.5 custom-scrollbar pr-0.5">
+                              {card.comments.length === 0 ? (
+                                <div className="bg-white/60 rounded-xl border border-dashed border-slate-200 p-4 text-center">
+                                  <p className="text-xs text-slate-400 font-medium italic">No comments yet. Add the first summary below.</p>
+                                </div>
+                              ) : (
+                                (card.showAllComments ? card.comments : card.comments.slice(0, 2)).map((cmt, ci) => (
+                                  <div key={ci} className="bg-white rounded-xl border border-slate-200/80 p-3 shadow-2xs hover:shadow-xs hover:border-blue-200 transition-all space-y-1.5 relative overflow-hidden group">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="inline-flex flex-wrap items-center gap-1 text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-lg shadow-2xs">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+                                        {cmt.author}
+                                      </span>
+                                      <span className="text-[10px] text-slate-400 font-semibold flex flex-wrap items-center gap-1">
+                                        {cmt.datetime}
+                                      </span>
+                                    </div>
+                                    <p className="text-xs text-slate-700 font-medium leading-relaxed whitespace-pre-wrap pl-0.5">
+                                      {cmt.text}
+                                    </p>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+
+                            {/* Know More / Show Less Toggle Button */}
+                            {card.comments.length > 2 && (
+                              <div className="pt-0.5 flex justify-start">
+                                <button
+                                  type="button"
+                                  onClick={() => updateProductInterest(card.id, 'showAllComments', !card.showAllComments)}
+                                  className="inline-flex flex-wrap items-center gap-1 text-xs font-extrabold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer transition-all"
+                                >
+                                  {card.showAllComments ? (
+                                    <>
+                                      Show Less <ChevronUp size={13} />
+                                    </>
+                                  ) : (
+                                    <>
+                                      Know More ({card.comments.length - 2} more history) <ChevronDown size={13} />
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Add Call Summary & Consultation Comment Box */}
+                            <div className="bg-white rounded-xl border-2 border-blue-200/90 p-3 space-y-2 shadow-2xs focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 transition-all mt-1">
+                              <div className="flex items-center justify-between">
+                                <label className="text-[10px] font-extrabold text-blue-700 uppercase tracking-wider flex flex-wrap items-center gap-1.5">
+                                  <MessageCircle size={12} className="text-blue-600" />
+                                  Add Call Summary / Comment
+                                </label>
+                                <span className="text-[9px] text-slate-400 font-semibold italic">Press Ctrl+Enter to save</span>
+                              </div>
+                              <textarea
+                                rows={2}
+                                className="w-full text-xs p-2.5 bg-slate-50/70 border border-slate-200 rounded-lg text-slate-800 placeholder-slate-400 font-medium focus:bg-white focus:border-blue-400 outline-none resize-y transition-all"
+                                placeholder="Type call summary, client discussion details, or follow-up notes..."
+                                value={card.newComment}
+                                onChange={e => updateProductInterest(card.id, 'newComment', e.target.value)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                                    e.preventDefault();
+                                    addProductComment(card.id);
+                                  }
+                                }}
+                              />
+                              <div className="flex justify-end pt-0.5">
+                                <button
+                                  type="button"
+                                  onClick={() => addProductComment(card.id)}
+                                  disabled={!card.newComment.trim()}
+                                  className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl font-bold text-xs cursor-pointer transition-all shadow-xs flex flex-wrap items-center gap-1.5"
+                                >
+                                  <Send size={12} />
+                                  Save Call Summary
+                                </button>
+                              </div>
+                            </div>
+
+
+                          </div>
+
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Add Product Interest Button */}
+                {(() => {
+                  const standardProds = ['Health', 'Life', 'Term', 'Accident Policy', 'Motor', 'Mutual Funds', 'Porting'];
+                  const allProductsAdded = false;
+
+                  return (
+                    <>
+                      {allProductsAdded && (
+                        <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-2.5 rounded-xl text-xs font-bold mb-3 shadow-2xs animate-fadeIn">
+                          All available products have already been added for this contact.
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        disabled={allProductsAdded}
+                        onClick={addProductInterest}
+                        className={clsx(
+                          "w-full mt-1 py-3 rounded-2xl border-2 border-dashed text-xs font-extrabold flex items-center justify-center gap-2 transition-all cursor-pointer group",
+                          allProductsAdded
+                            ? "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed opacity-60"
+                            : "border-blue-300 hover:border-blue-500 bg-blue-50/40 hover:bg-blue-50 text-blue-600 hover:text-blue-700"
+                        )}
+                      >
+                        <Plus size={15} className="group-hover:scale-110 transition-transform" />
+                        + Add Product Interest
+                      </button>
+                    </>
+                  );
+                })()}
+
+              </div>
+            )}
+            {activeLeadTab === 'Personal' && (
+              <fieldset disabled={!!editContactId && !allowEditPersonal} className="w-full">
+                {editContactId && (
+                  <div className="bg-slate-50 border border-slate-200 text-slate-600 px-3.5 py-2.5 rounded-xl text-xs font-bold mb-4 flex items-center justify-between shadow-2xs">
+                    <div className="flex items-center gap-2">
+                      <span>Contact details are {allowEditPersonal ? 'editable' : 'read-only'}.</span>
+                      {allowEditPersonal && (
+                        <span className="text-emerald-700 font-bold bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-md text-[10px]">
+                          Editing Enabled
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setAllowEditPersonal(p => !p)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs ${
+                        allowEditPersonal
+                          ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                          : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Pencil size={12} />
+                      {allowEditPersonal ? 'Lock Details' : 'Edit Contact Details'}
+                    </button>
+                  </div>
+                )}
+                <div className="space-y-4 max-h-[62vh] overflow-y-auto pr-1">
+                  {/* 1. Personal Details */}
+                  <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden">
+                    <div className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between">
+                      <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex flex-wrap items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">1</span>
+                        Personal Details
+                      </h4>
+                      <span className="text-[10px] text-slate-400 font-semibold">Basic Demographics</span>
+                    </div>
+                    <div className="p-4 grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">First Name <span className="text-red-500">*</span></label>
+                        <input
+                          type="text"
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          placeholder="e.g. Rahul"
+                          value={personalFields.firstName}
+                          onChange={e => setPersonalFields(p => ({ ...p, firstName: e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Middle Name</label>
+                        <input
+                          type="text"
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          placeholder="e.g. Kumar"
+                          value={personalFields.middleName}
+                          onChange={e => setPersonalFields(p => ({ ...p, middleName: e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Last Name <span className="text-red-500">*</span></label>
+                        <input
+                          type="text"
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          placeholder="e.g. Sharma"
+                          value={personalFields.lastName}
+                          onChange={e => setPersonalFields(p => ({ ...p, lastName: e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Mother's Name</label>
+                        <input
+                          type="text"
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          placeholder="e.g. Sunita Sharma"
+                          value={personalFields.motherName || ''}
+                          onChange={e => setPersonalFields(p => ({ ...p, motherName: e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Gender</label>
+                        <select
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          value={['MALE', 'FEMALE', ''].includes(personalFields.gender) ? personalFields.gender : 'OTHER'}
+                          onChange={e => setPersonalFields(p => ({ ...p, gender: e.target.value }))}
+                        >
+                          <option value="">Select Gender</option>
+                          <option value="MALE">Male</option>
+                          <option value="FEMALE">Female</option>
+                          <option value="OTHER">Other</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Marital Status</label>
+                        <select
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          value={personalFields.maritalStatus}
+                          onChange={e => setPersonalFields(p => ({ ...p, maritalStatus: e.target.value }))}
+                        >
+                          <option value="">Select Status</option>
+                          <option value="SINGLE">Single</option>
+                          <option value="MARRIED">Married</option>
+                          <option value="DIVORCED">Divorced</option>
+                          <option value="WIDOWED">Widowed</option>
+                        </select>
+                      </div>
+                      {personalFields.maritalStatus === 'MARRIED' && (
+                        <div className="animate-fadeIn">
+                          <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Wedding Anniversary Date</label>
+                          <DatePicker
+                            className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                            value={personalFields.weddingAnniversaryDate || ''}
+                            onDateChange={(val) => setPersonalFields(p => ({ ...p, weddingAnniversaryDate: val }))}
+                          />
+                        </div>
+                      )}
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Date of Birth {isFieldRequired('dateOfBirth', false) && <span className="text-red-500">*</span>}</label>
+                        <DatePicker
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          value={personalFields.dateOfBirth}
+                          onDateChange={handleDOBChange}
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Age</label>
+                        <input
+                          type="text"
+                          className="input w-full bg-slate-50 font-semibold text-slate-600 cursor-not-allowed rounded-xl"
+                          value={personalFields.age}
+                          disabled
+                          placeholder="Auto-calculated"
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Height (cm)</label>
+                        <input
+                          type="number"
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          placeholder="e.g. 170"
+                          value={personalFields.height}
+                          onChange={(e) => setPersonalFields((p) => ({ ...p, height: e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Weight (kg)</label>
+                        <input
+                          type="number"
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          placeholder="e.g. 65"
+                          value={personalFields.weight}
+                          onChange={(e) => setPersonalFields((p) => ({ ...p, weight: e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">PAN Number {isFieldRequired('panNumber', false) && <span className="text-red-500">*</span>}</label>
+                        <input
+                          type="text"
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all uppercase"
+                          placeholder="ABCDE1234F"
+                          maxLength={10}
+                          value={personalFields.panNumber || personalFields.pan || ''}
+                          onChange={(e) =>
+                            setPersonalFields((p) => ({
+                              ...p,
+                              panNumber: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""),
+                              pan: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "")
+                            }))
+                          }
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Role</label>
+                        <select
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all font-semibold"
+                          value={personalFields.role || 'Contact'}
+                          onChange={e => setPersonalFields(p => ({ ...p, role: e.target.value }))}
+                        >
+                          <option value="Contact">Contact</option>
+                          <option value="Employee">Employee</option>
+                          <option value="ADMIN/OWNER">ADMIN/OWNER</option>
+                          <option value="Business Associate">Business Associate</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Birth Place</label>
+                        <input
+                          type="text"
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          placeholder="e.g. Pune, Maharashtra"
+                          value={personalFields.birthPlace || ''}
+                          onChange={e => setPersonalFields(p => ({ ...p, birthPlace: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 2. Contact Details */}
+                  <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden">
+                    <div className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between">
+                      <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex flex-wrap items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">2</span>
+                        Contact Details
+                      </h4>
+                      <span className="text-[10px] text-slate-400 font-semibold">Communication Info</span>
+                    </div>
+                    <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Email Address {isFieldRequired('email', false) && <span className="text-red-500">*</span>}</label>
+                        <input
+                          type="email"
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          placeholder="client@example.com"
+                          value={personalFields.email}
+                          onChange={e => setPersonalFields(p => ({ ...p, email: e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Aadhaar Number <span className="text-red-500">*</span></label>
+                        <input
+                          type="text"
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          placeholder="12-digit Aadhaar No"
+                          maxLength={12}
+                          value={personalFields.aadhaarNumber}
+                          onChange={e => setPersonalFields(p => ({ ...p, aadhaarNumber: e.target.value.replace(/\D/g, '') }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Whatsapp Number <span className="text-red-500">*</span></label>
+                        <CountryPhoneInput
+                          value={personalFields.whatsappNumber}
+                          onChange={(value: string) =>
+                            setPersonalFields((p) => ({
+                              ...p,
+                              whatsappNumber: value,
+                              callingNumber: p.sameAsWhatsapp ? value : p.callingNumber,
+                            }))
+                          }
+                        />
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block">Calling Number</label>
+                          <label className="flex flex-wrap items-center gap-1 text-[10px] text-blue-600 font-semibold cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              className="accent-blue-600 w-3 h-3 rounded"
+                              checked={personalFields.sameAsWhatsapp}
+                              onChange={e => {
+                                const checked = e.target.checked;
+                                setPersonalFields(p => ({
+                                  ...p,
+                                  sameAsWhatsapp: checked,
+                                  callingNumber: checked ? p.whatsappNumber : p.callingNumber
+                                }));
+                              }}
+                            />
+                            Same as Whatsapp
+                          </label>
+                        </div>
+                        <CountryPhoneInput
+                          disabled={personalFields.sameAsWhatsapp}
+                          value={personalFields.callingNumber}
+                          onChange={(value: string) =>
+                            setPersonalFields((p) => ({
+                              ...p,
+                              callingNumber: value,
+                            }))
+                          }
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Contact Status</label>
+                        <select
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all font-semibold"
+                          value={personalFields.contactStatus || (personalFields.isActive !== false ? 'Active' : 'Inactive')}
+                          onChange={e => {
+                            const val = e.target.value;
+                            setPersonalFields(p => ({
+                              ...p,
+                              contactStatus: val,
+                              isActive: val === 'Active'
+                            }));
+                          }}
+                        >
+                          <option value="Active">Active</option>
+                          <option value="Inactive">Inactive</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 3. Education & Occupation */}
+                  <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-visible">
+                    <div className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between">
+                      <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex flex-wrap items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">3</span>
+                        Education &amp; Occupation
+                      </h4>
+                      <span className="text-[10px] text-slate-400 font-semibold">Professional Profile</span>
+                    </div>
+                    <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Education</label>
+                        <DatalistInput
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          placeholder="Select or enter Education"
+                          value={personalFields.education || ''}
+                          options={EDUCATION_OPTIONS}
+                          onChange={val => setPersonalFields(p => ({ ...p, education: val }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Annual Income {isFieldRequired('annualIncome', false) && <span className="text-red-500">*</span>}</label>
+                        <select
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          value={personalFields.annualIncome}
+                          onChange={e => setPersonalFields(p => ({ ...p, annualIncome: e.target.value }))}
+                        >
+                          <option value="">Select Income Bracket</option>
+                          <option value="200000">Below 2 Lakhs</option>
+                          <option value="500000">2 - 5 Lakhs</option>
+                          <option value="1000000">5 - 10 Lakhs</option>
+                          <option value="2000000">10 - 20 Lakhs</option>
+                          <option value="5000000">20+ Lakhs</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Occupation Type <span className="text-red-500">*</span></label>
+                        <DatalistInput
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          placeholder="Select or enter Occupation Type"
+                          value={personalFields.occupationType || ''}
+                          options={OCCUPATION_TYPE_OPTIONS}
+                          onChange={val => setPersonalFields(p => ({ ...p, occupationType: val }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Company / Business Name</label>
+                        <input
+                          type="text"
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          placeholder="e.g. Infosys / Traders"
+                          value={personalFields.companyName}
+                          onChange={e => setPersonalFields(p => ({ ...p, companyName: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 4. Address Details */}
+                  <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden">
+                    <div className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between">
+                      <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex flex-wrap items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">4</span>
+                        Address Details
+                      </h4>
+                      <span className="text-[10px] text-slate-400 font-semibold">Location &amp; Residence</span>
+                    </div>
+                    <div className="p-4 grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">State <span className="text-red-500">*</span></label>
+                        <select
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          value={personalFields.state}
+                          onChange={e => setPersonalFields(p => ({ ...p, state: e.target.value }))}
+                        >
+                          <option value="">Select State</option>
+                          <option value="Maharashtra">Maharashtra</option>
+                          <option value="Delhi">Delhi</option>
+                          <option value="Karnataka">Karnataka</option>
+                          <option value="Gujarat">Gujarat</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">District <span className="text-red-500">*</span></label>
+                        <select
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          value={personalFields.district}
+                          onChange={e => setPersonalFields(p => ({ ...p, district: e.target.value }))}
+                        >
+                          <option value="">Select District</option>
+                          <option value="Pune">Pune</option>
+                          <option value="Mumbai">Mumbai</option>
+                          <option value="Bangalore">Bangalore</option>
+                          <option value="Ahmedabad">Ahmedabad</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">City / Town <span className="text-red-500">*</span></label>
+                        <input
+                          type="text"
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          placeholder="e.g. Pune"
+                          value={personalFields.city}
+                          onChange={e => setPersonalFields(p => ({ ...p, city: e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Pincode</label>
+                        <input
+                          type="text"
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          placeholder="000000"
+                          value={personalFields.pincode}
+                          onChange={e => setPersonalFields(p => ({ ...p, pincode: e.target.value }))}
+                        />
+                      </div>
+                      <div className="col-span-3">
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Street Address / House No</label>
+                        <textarea
+                          className="input w-full text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          rows={2}
+                          placeholder="Flat No, Street, Landmark..."
+                          value={personalFields.streetAddress}
+                          onChange={e => setPersonalFields(p => ({ ...p, streetAddress: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 5. Bank Details */}
+                  <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden">
+                    <div className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between">
+                      <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex flex-wrap items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">5</span>
+                        Bank Details
+                      </h4>
+                      <span className="text-[10px] text-slate-400 font-semibold">Banking Information</span>
+                    </div>
+                    <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Bank Name</label>
+                        <input
+                          type="text"
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          placeholder="e.g. HDFC Bank"
+                          value={personalFields.bankName || ''}
+                          onChange={e => setPersonalFields(p => ({ ...p, bankName: e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Account Number</label>
+                        <input
+                          type="text"
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          placeholder="e.g. 50100012345678"
+                          value={personalFields.bankAccountNumber || ''}
+                          onChange={e => setPersonalFields(p => ({ ...p, bankAccountNumber: e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">IFSC Code</label>
+                        <input
+                          type="text"
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all uppercase"
+                          placeholder="e.g. HDFC0001234"
+                          value={personalFields.bankIfsc || ''}
+                          onChange={e => setPersonalFields(p => ({ ...p, bankIfsc: e.target.value.toUpperCase() }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Branch Name</label>
+                        <input
+                          type="text"
+                          className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          placeholder="e.g. Shivajinagar Branch"
+                          value={personalFields.bankBranch || ''}
+                          onChange={e => setPersonalFields(p => ({ ...p, bankBranch: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 6. Lifestyle Habits */}
+                  <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden">
+                    <div className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between">
+                      <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex flex-wrap items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">6</span>
+                        Lifestyle Habits
+                      </h4>
+                      <span className="text-[10px] text-slate-400 font-semibold">Personal Habits</span>
+                    </div>
+                    <div className="p-4 flex flex-wrap gap-4">
+                      <label className={`flex items-center gap-2.5 px-4 py-2.5 rounded-xl border transition-all cursor-pointer select-none ${personalFields.chewTobacco ? 'bg-blue-50/80 border-blue-300 text-blue-800 font-bold shadow-2xs' : 'bg-slate-50/50 border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                        <input
+                          type="checkbox"
+                          className="accent-blue-600 w-4 h-4 rounded"
+                          checked={!!personalFields.chewTobacco}
+                          onChange={e => setPersonalFields(p => ({ ...p, chewTobacco: e.target.checked }))}
+                        />
+                        <span className="text-xs font-semibold">Chew Tobacco</span>
+                      </label>
+                      <label className={`flex items-center gap-2.5 px-4 py-2.5 rounded-xl border transition-all cursor-pointer select-none ${personalFields.smoke ? 'bg-blue-50/80 border-blue-300 text-blue-800 font-bold shadow-2xs' : 'bg-slate-50/50 border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                        <input
+                          type="checkbox"
+                          className="accent-blue-600 w-4 h-4 rounded"
+                          checked={!!personalFields.smoke}
+                          onChange={e => setPersonalFields(p => ({ ...p, smoke: e.target.checked }))}
+                        />
+                        <span className="text-xs font-semibold">Smoke</span>
+                      </label>
+                      <label className={`flex items-center gap-2.5 px-4 py-2.5 rounded-xl border transition-all cursor-pointer select-none ${personalFields.consumeAlcohol ? 'bg-blue-50/80 border-blue-300 text-blue-800 font-bold shadow-2xs' : 'bg-slate-50/50 border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                        <input
+                          type="checkbox"
+                          className="accent-blue-600 w-4 h-4 rounded"
+                          checked={!!personalFields.consumeAlcohol}
+                          onChange={e => setPersonalFields(p => ({ ...p, consumeAlcohol: e.target.checked }))}
+                        />
+                        <span className="text-xs font-semibold">Consume Alcohol</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* 7. Health History / Medical History */}
+                  <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden">
+                    <div className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between">
+                      <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex flex-wrap items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">7</span>
+                        Health History / Medical History
+                      </h4>
+                      <span className="text-[10px] text-slate-400 font-semibold">Medical Records</span>
+                    </div>
+                    <div className="p-4 space-y-4">
+                      {/* Declared Medical History Multi-Select */}
+                      <MultiSelectBox
+                        label="Declared Medical History (Multi-Select)"
+                        selectedValues={(personalFields.declaredMedicalHistory || []) as string[]}
+                        onChange={(vals) => setPersonalFields(p => ({ ...p, declaredMedicalHistory: vals }))}
+                        badgeColor="blue"
+                        placeholder="Click to select medical conditions..."
+                      />
+
+                      {/* NOT Declared Medical History Multi-Select */}
+                      <MultiSelectBox
+                        label="NOT Declared Medical History (Multi-Select)"
+                        selectedValues={(personalFields.notDeclaredMedicalHistory || []) as string[]}
+                        onChange={(vals) => setPersonalFields(p => ({ ...p, notDeclaredMedicalHistory: vals }))}
+                        badgeColor="orange"
+                        placeholder="Click to select NOT declared conditions..."
+                      />
+
+                      {/* Details of Medical History */}
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Details of Medical History</label>
+                        <textarea
+                          className="input w-full resize-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                          rows={2}
+                          placeholder="Add any additional medical history details..."
+                          value={personalFields.medicalHistoryDetails}
+                          onChange={e => setPersonalFields(p => ({ ...p, medicalHistoryDetails: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 8. Any Surgery Done / Advised */}
+                  <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden">
+                    <div className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between">
+                      <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex flex-wrap items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">8</span>
+                        Any Surgery Done / Advised
+                      </h4>
+                      <span className="text-[10px] text-slate-400 font-semibold">Surgical History</span>
+                    </div>
+                    <div className="p-4">
+                      <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Surgery Details / History</label>
+                      <textarea
+                        className="input w-full text-xs resize-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                        rows={2}
+                        placeholder="Specify any surgeries done or advised..."
+                        value={personalFields.surgeryDetails || ''}
+                        onChange={e => setPersonalFields(p => ({ ...p, surgeryDetails: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+
+                  {/* 9. Current Medicines / Prescription */}
+                  <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden">
+                    <div className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between">
+                      <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex flex-wrap items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">9</span>
+                        Current Medicines / Prescription
+                      </h4>
+                      <span className="text-[10px] text-slate-400 font-semibold">Ongoing Medications</span>
+                    </div>
+                    <div className="p-4">
+                      <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Prescription &amp; Medication Details</label>
+                      <textarea
+                        className="input w-full text-xs resize-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
+                        rows={2}
+                        placeholder="List current ongoing medicines or prescriptions..."
+                        value={personalFields.prescriptionDetails || ''}
+                        onChange={e => setPersonalFields(p => ({ ...p, prescriptionDetails: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </fieldset>
+            )}
+
+
+            {activeLeadTab === 'Family' && (
+              <div className="h-full flex flex-col gap-0">
+                {editContactId && (
+                  <div className="bg-slate-50 border border-slate-200 text-slate-500 px-3.5 py-2.5 rounded-xl text-xs font-bold mb-4 flex items-center justify-between shadow-2xs flex-shrink-0">
+                    <span>Contact details are read-only. Edit them in the Contacts module.</span>
+                  </div>
+                )}
+                {/* Header */}
+                <div className="flex items-center justify-between mb-3 flex-shrink-0">
+                  <h3 className="text-base font-bold text-gray-800">Dependents &amp; Beneficiaries</h3>
+                  {!editContactId && (
+                    <button
+                      type="button"
+                      onClick={() => setFamilyMembers(prev => [...prev, { firstName: '', middleName: '', lastName: '', dob: '', relation: '', whatsapp: '', occupation: '', education: '', medicalHistory: [], declaredMedicalHistory: [], notDeclaredMedicalHistory: [], medicalHistoryDetails: '' }])}
+                      className="flex flex-wrap items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg cursor-pointer transition-colors"
+                    >
+                      + Add Member
+                    </button>
+                  )}
+                </div>
+
+                {/* Members */}
+                <fieldset disabled={!!editContactId} className="flex-1 overflow-y-auto pr-0.5 min-h-0">
+                  <div className="space-y-3">
+                    {familyMembers.length === 0 ? (
+                      <div className="flex items-center justify-center border border-dashed border-gray-200 rounded-xl bg-gray-50/50" style={{ minHeight: '120px' }}>
+                        <p className="text-xs text-gray-400 font-medium">No family details added yet.</p>
+                      </div>
+                    ) : (
+                      familyMembers.map((member, idx) => (
+                        <div key={idx} className="border border-gray-200 rounded-xl bg-white shadow-sm">
+                          {/* Card header */}
+                          <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100">
+                            <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">Member #{idx + 1}</span>
+                            {!editContactId && (
+                              <button
+                                type="button"
+                                onClick={() => setFamilyMembers(prev => prev.filter((_, i) => i !== idx))}
+                                className="w-5 h-5 flex items-center justify-center rounded-full bg-red-50 hover:bg-red-100 text-red-400 hover:text-red-600 transition-colors cursor-pointer text-xs font-bold"
+                              >
+                                ✕
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Row 1: First Name | Middle Name | Last Name */}
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 px-4 pt-3">
+                            <div>
+                              <label className="label text-[10px] font-bold text-gray-500 uppercase tracking-wider">First Name {isFieldRequired('firstName', true) && <span className="text-red-500">*</span>}</label>
+                              <input
+                                type="text"
+                                className="input w-full mt-1"
+                                placeholder="First name"
+                                value={member.firstName || ''}
+                                onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, firstName: e.target.value } : m))}
+                              />
+                            </div>
+                            <div>
+                              <label className="label text-[10px] font-bold text-gray-500 uppercase tracking-wider">Middle Name</label>
+                              <input
+                                type="text"
+                                className="input w-full mt-1"
+                                placeholder="Middle name"
+                                value={member.middleName || ''}
+                                onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, middleName: e.target.value } : m))}
+                              />
+                            </div>
+                            <div>
+                              <label className="label text-[10px] font-bold text-gray-500 uppercase tracking-wider">Last Name {isFieldRequired('lastName', true) && <span className="text-red-500">*</span>}</label>
+                              <input
+                                type="text"
+                                className="input w-full mt-1"
+                                placeholder="Last name"
+                                value={member.lastName || ''}
+                                onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, lastName: e.target.value } : m))}
+                              />
+                            </div>
+                          </div>
+
+                          {/* Row 2: DOB | Relation */}
+                          {/* Row 2: DOB | Relation | Occupation */}
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 px-4 pt-3">
+                            <div>
+                              <label className="label text-[10px] font-bold text-gray-500 uppercase tracking-wider">DOB</label>
+                              <DatePicker
+                                className="input w-full mt-1"
+                                value={member.dob}
+                                onChange={val => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, dob: val } : m))}
+                              />
+                            </div>
+                            <div>
+                              <label className="label text-[10px] font-bold text-gray-500 uppercase tracking-wider">Relation</label>
+                              <select
+                                className="input w-full mt-1"
+                                value={['SPOUSE', 'SON', 'DAUGHTER', 'FATHER', 'MOTHER', 'Spouse', 'Son', 'Daughter', 'Father', 'Mother', 'Brother', 'Sister', 'Child', ''].includes(member.relation) ? member.relation : 'OTHER'}
+                                onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, relation: e.target.value } : m))}
+                              >
+                                <option value="">Select</option>
+                                <option value="SPOUSE">Spouse</option>
+                                <option value="SON">Son</option>
+                                <option value="DAUGHTER">Daughter</option>
+                                <option value="FATHER">Father</option>
+                                <option value="MOTHER">Mother</option>
+                                <option value="OTHER">Other</option>
+                              </select>
+                              {(member.relation === 'OTHER' || member.relation === 'Other' || (member.relation && !['SPOUSE', 'SON', 'DAUGHTER', 'FATHER', 'MOTHER', 'Spouse', 'Son', 'Daughter', 'Father', 'Mother', 'Brother', 'Sister', 'Child', ''].includes(member.relation))) && (
+                                <div className="mt-1.5 animate-fadeIn">
+                                  <input
+                                    type="text"
+                                    className="input w-full text-xs"
+                                    placeholder="Specify Relation..."
+                                    value={['OTHER', 'Other'].includes(member.relation) ? '' : member.relation}
+                                    onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, relation: e.target.value || 'OTHER' } : m))}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                            <div>
+                              <label className="label text-[10px] font-bold text-gray-500 uppercase tracking-wider">Occupation</label>
+                              <select
+                                className="input w-full mt-1"
+                                value={['SALARIED', 'SELF_EMPLOYED', 'BUSINESS', 'STUDENT', 'HOMEMAKER', 'RETIRED', 'Salaried', 'Self Employed', 'Business', 'Student', 'Homemaker', 'Retired', ''].includes(member.occupation) ? member.occupation : 'OTHER'}
+                                onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, occupation: e.target.value } : m))}
+                              >
+                                <option value="">Select Type</option>
+                                <option value="SALARIED">Salaried</option>
+                                <option value="SELF_EMPLOYED">Self Employed</option>
+                                <option value="BUSINESS">Business</option>
+                                <option value="STUDENT">Student</option>
+                                <option value="HOMEMAKER">Homemaker</option>
+                                <option value="RETIRED">Retired</option>
+                                <option value="OTHER">Other</option>
+                              </select>
+                              {(member.occupation === 'OTHER' || member.occupation === 'Other' || (member.occupation && !['SALARIED', 'SELF_EMPLOYED', 'BUSINESS', 'STUDENT', 'HOMEMAKER', 'RETIRED', 'Salaried', 'Self Employed', 'Business', 'Student', 'Homemaker', 'Retired', ''].includes(member.occupation))) && (
+                                <div className="mt-1.5 animate-fadeIn">
+                                  <input
+                                    type="text"
+                                    className="input w-full text-xs"
+                                    placeholder="Specify Occupation..."
+                                    value={['OTHER', 'Other'].includes(member.occupation) ? '' : member.occupation}
+                                    onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, occupation: e.target.value || 'OTHER' } : m))}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Row 3: Whatsapp | Calling Number | Education */}
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 px-4 pt-3">
+                            <div>
+                              <label className="label text-[10px] font-bold text-gray-500 uppercase tracking-wider">Whatsapp</label>
+                              <div className="flex border border-slate-200 rounded-xl overflow-hidden bg-white focus-within:ring-2 focus-within:ring-blue-500/10 focus-within:border-blue-500 transition-all mt-1">
+                                <span className="bg-slate-50 px-2.5 py-1.5 text-xs border-r border-slate-200 text-slate-500 font-bold">+91</span>
+                                <input
+                                  type="tel"
+                                  className="px-3 py-1.5 text-xs w-full outline-none bg-transparent"
+                                  placeholder="Number"
+                                  maxLength={10}
+                                  value={member.whatsapp}
+                                  onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, whatsapp: e.target.value.replace(/\D/g, '') } : m))}
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <label className="label text-[10px] font-bold text-gray-500 uppercase tracking-wider">Calling Number</label>
+                              <div className="mt-1">
+                                <CountryPhoneInput
+                                  value={member.callingNumber || ''}
+                                  onChange={(value: string) => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, callingNumber: value } : m))}
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <label className="label text-[10px] font-bold text-gray-500 uppercase tracking-wider">Education</label>
+                              <select
+                                className="input w-full mt-1"
+                                value={['HighSchool', 'Graduate', 'PostGraduate', 'Professional', 'Below 10th', '10th Pass', '12th Pass', ''].includes(member.education) ? member.education : 'OTHER'}
+                                onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, education: e.target.value } : m))}
+                              >
+                                <option value="">Select Type</option>
+                                <option value="HighSchool">High School</option>
+                                <option value="Graduate">Graduate</option>
+                                <option value="PostGraduate">Post Graduate</option>
+                                <option value="Professional">Professional</option>
+                                <option value="OTHER">Other</option>
+                              </select>
+                              {(member.education === 'OTHER' || member.education === 'Other' || (member.education && !['HighSchool', 'Graduate', 'PostGraduate', 'Professional', 'Below 10th', '10th Pass', '12th Pass', ''].includes(member.education))) && (
+                                <div className="mt-1.5 animate-fadeIn">
+                                  <input
+                                    type="text"
+                                    className="input w-full text-xs"
+                                    placeholder="Specify Education..."
+                                    value={['OTHER', 'Other'].includes(member.education) ? '' : member.education}
+                                    onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, education: e.target.value || 'OTHER' } : m))}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Row 4: Medical History */}
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 px-4 pt-3 pb-3">
+                            {/* Generic Medical History */}
+                            <div className="col-span-3">
+                              <label className="label text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-2">Medical History (Select if applicable)</label>
+                              <div className="flex flex-wrap gap-x-6 gap-y-2">
+                                {['BP', 'Sugar', 'Heart', 'Thyroid', 'Others'].map((condition) => {
+                                  const isOthers = condition === 'Others';
+                                  const current = member.medicalHistory || [];
+                                  const isSelected = isOthers
+                                    ? current.some((c: string) => !['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c))
+                                    : current.includes(condition);
+                                  return (
+                                    <label key={condition} className="flex flex-wrap items-center gap-1.5 cursor-pointer select-none">
+                                      <input
+                                        type="checkbox"
+                                        className="accent-blue-600 w-3.5 h-3.5"
+                                        checked={isSelected}
+                                        onChange={() => {
+                                          setFamilyMembers(prev => prev.map((m, i) => {
+                                            if (i !== idx) return m;
+                                            const list: string[] = m.medicalHistory || [];
+                                            if (isOthers) {
+                                              if (isSelected) {
+                                                return {
+                                                  ...m,
+                                                  medicalHistory: list.filter((c: string) => ['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c))
+                                                };
+                                              } else {
+                                                return {
+                                                  ...m,
+                                                  medicalHistory: [...list, '']
+                                                };
+                                              }
+                                            } else {
+                                              return {
+                                                ...m,
+                                                medicalHistory: isSelected
+                                                  ? list.filter((c: string) => c !== condition)
+                                                  : [...list, condition]
+                                              };
+                                            }
+                                          }));
+                                        }}
+                                      />
+                                      <span className="text-xs text-slate-600 font-medium">{condition}</span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                              {(member.medicalHistory || []).some((c: string) => !['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c)) && (
+                                <div className="mt-2 animate-fadeIn">
+                                  <input
+                                    type="text"
+                                    className="input w-full text-xs py-1 px-2.5"
+                                    placeholder="Type medical conditions..."
+                                    value={(member.medicalHistory || []).find((c: string) => !['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c)) || ''}
+                                    onChange={e => {
+                                      const val = e.target.value;
+                                      setFamilyMembers(prev => prev.map((m, i) => {
+                                        if (i !== idx) return m;
+                                        const current: string[] = m.medicalHistory || [];
+                                        const baseVal = current.filter((c: string) => ['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c));
+                                        return {
+                                          ...m,
+                                          medicalHistory: [...baseVal, val]
+                                        };
+                                      }));
+                                    }}
+                                  />
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Declared Medical History */}
+                            <div className="col-span-3">
+                              <label className="label text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-2">Declared Medical History</label>
+                              <div className="flex flex-wrap gap-x-6 gap-y-2">
+                                {['BP', 'Sugar', 'Heart', 'Thyroid', 'Others'].map((condition) => {
+                                  const isOthers = condition === 'Others';
+                                  const current = member.declaredMedicalHistory || [];
+                                  const isSelected = isOthers
+                                    ? current.some((c: string) => !['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c))
+                                    : current.includes(condition);
+                                  return (
+                                    <label key={condition} className="flex flex-wrap items-center gap-1.5 cursor-pointer select-none">
+                                      <input
+                                        type="checkbox"
+                                        className="accent-blue-600 w-3.5 h-3.5"
+                                        checked={isSelected}
+                                        onChange={() => {
+                                          setFamilyMembers(prev => prev.map((m, i) => {
+                                            if (i !== idx) return m;
+                                            const list: string[] = m.declaredMedicalHistory || [];
+                                            if (isOthers) {
+                                              if (isSelected) {
+                                                return {
+                                                  ...m,
+                                                  declaredMedicalHistory: list.filter((c: string) => ['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c))
+                                                };
+                                              } else {
+                                                return {
+                                                  ...m,
+                                                  declaredMedicalHistory: [...list, '']
+                                                };
+                                              }
+                                            } else {
+                                              return {
+                                                ...m,
+                                                declaredMedicalHistory: isSelected
+                                                  ? list.filter((c: string) => c !== condition)
+                                                  : [...list, condition]
+                                              };
+                                            }
+                                          }));
+                                        }}
+                                      />
+                                      <span className="text-xs text-slate-600 font-medium">{condition}</span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                              {(member.declaredMedicalHistory || []).some((c: string) => !['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c)) && (
+                                <div className="mt-2 animate-fadeIn">
+                                  <input
+                                    type="text"
+                                    className="input w-full text-xs py-1 px-2.5"
+                                    placeholder="Type medical conditions..."
+                                    value={(member.declaredMedicalHistory || []).find((c: string) => !['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c)) || ''}
+                                    onChange={e => {
+                                      const val = e.target.value;
+                                      setFamilyMembers(prev => prev.map((m, i) => {
+                                        if (i !== idx) return m;
+                                        const current: string[] = m.declaredMedicalHistory || [];
+                                        const baseVal = current.filter((c: string) => ['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c));
+                                        return {
+                                          ...m,
+                                          declaredMedicalHistory: [...baseVal, val]
+                                        };
+                                      }));
+                                    }}
+                                  />
+                                </div>
+                              )}
+                            </div>
+
+                            {/* NOT Declared Medical History */}
+                            <div className="col-span-3">
+                              <label className="label text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-2">NOT Declared Medical History</label>
+                              <div className="flex flex-wrap gap-x-6 gap-y-2">
+                                {['BP', 'Sugar', 'Heart', 'Thyroid', 'Others'].map((condition) => {
+                                  const isOthers = condition === 'Others';
+                                  const current = member.notDeclaredMedicalHistory || [];
+                                  const isSelected = isOthers
+                                    ? current.some((c: string) => !['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c))
+                                    : current.includes(condition);
+                                  return (
+                                    <label key={condition} className="flex flex-wrap items-center gap-1.5 cursor-pointer select-none">
+                                      <input
+                                        type="checkbox"
+                                        className="accent-orange-500 w-3.5 h-3.5"
+                                        checked={isSelected}
+                                        onChange={() => {
+                                          setFamilyMembers(prev => prev.map((m, i) => {
+                                            if (i !== idx) return m;
+                                            const list: string[] = m.notDeclaredMedicalHistory || [];
+                                            if (isOthers) {
+                                              if (isSelected) {
+                                                return {
+                                                  ...m,
+                                                  notDeclaredMedicalHistory: list.filter((c: string) => ['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c))
+                                                };
+                                              } else {
+                                                return {
+                                                  ...m,
+                                                  notDeclaredMedicalHistory: [...list, '']
+                                                };
+                                              }
+                                            } else {
+                                              return {
+                                                ...m,
+                                                notDeclaredMedicalHistory: isSelected
+                                                  ? list.filter((c: string) => c !== condition)
+                                                  : [...list, condition]
+                                              };
+                                            }
+                                          }));
+                                        }}
+                                      />
+                                      <span className="text-xs text-slate-600 font-medium">{condition}</span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                              {(member.notDeclaredMedicalHistory || []).some((c: string) => !['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c)) && (
+                                <div className="mt-2 animate-fadeIn">
+                                  <input
+                                    type="text"
+                                    className="input w-full text-xs py-1 px-2.5"
+                                    placeholder="Type medical conditions..."
+                                    value={(member.notDeclaredMedicalHistory || []).find((c: string) => !['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c)) || ''}
+                                    onChange={e => {
+                                      const val = e.target.value;
+                                      setFamilyMembers(prev => prev.map((m, i) => {
+                                        if (i !== idx) return m;
+                                        const current: string[] = m.notDeclaredMedicalHistory || [];
+                                        const baseVal = current.filter((c: string) => ['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c));
+                                        return {
+                                          ...m,
+                                          notDeclaredMedicalHistory: [...baseVal, val]
+                                        };
+                                      }));
+                                    }}
+                                  />
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Details of Medical History */}
+                            <div className="col-span-3">
+                              <label className="label text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Details of Medical History</label>
+                              <textarea
+                                className="input w-full resize-none"
+                                rows={2}
+                                placeholder="Add any additional medical history details..."
+                                value={member.medicalHistoryDetails || ''}
+                                onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, medicalHistoryDetails: e.target.value } : m))}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </fieldset>
+              </div>
+            )}
+
+            {activeLeadTab === 'Policy' && (
+              <div className="h-full flex flex-col gap-3">
+                {editContactId && (
+                  <div className="bg-slate-50 border border-slate-200 text-slate-500 px-3.5 py-2.5 rounded-xl text-xs font-bold flex-shrink-0 shadow-2xs">
+                    <span>Contact details are read-only. Edit them in the Contacts module.</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between flex-shrink-0">
+                  <h3 className="text-base font-bold text-gray-800 text-sm">Policy Details</h3>
+                  {!editContactId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveLeadTab('Policy');
+                        setPolicies(prev => [...prev, { policyType: 'Health', entries: [{ company: '', planName: '', policyNo: '', startDate: '', duration: '1 Year', endDate: '', premium: '', sumInsured: '', deductible: '', sumAssured: '', maturityDate: '', paymentTerm: '', entryType: 'New' }] }]);
+                      }}
+                      className="flex flex-wrap items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg cursor-pointer transition-colors"
+                    >
+                      + Add Policy
+                    </button>
+                  )}
+                </div>
+
+                <fieldset disabled={!!editContactId} className="flex-1 overflow-y-auto pr-0.5 min-h-0">
+                  <div className="space-y-4">
+                    {policies.length === 0 ? (
+                      <div className="flex items-center justify-center border border-dashed border-gray-200 rounded-xl bg-gray-50/50" style={{ minHeight: '120px' }}>
+                        <p className="text-xs text-gray-400 font-medium">No policies found for this contact.</p>
+                      </div>
+                    ) : (
+                      policies.map((pGroup, gIdx) => (
+                        <div key={gIdx} className="border border-gray-200 rounded-xl bg-white shadow-sm overflow-hidden">
+                          <div className="flex items-center justify-between px-4 py-2 bg-slate-50 border-b border-gray-100">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-xs font-extrabold text-slate-600">Type:</span>
+                              <select
+                                value={pGroup.policyType}
+                                onChange={e => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, policyType: e.target.value } : pg))}
+                                className="bg-transparent border-none text-xs font-extrabold text-blue-600 focus:ring-0 cursor-pointer p-0"
+                              >
+                                <option value="Health">Health</option>
+                                <option value="Life">Life</option>
+                              </select>
+                            </div>
+                            {!editContactId && (
+                              <button
+                                type="button"
+                                onClick={() => setPolicies(prev => prev.filter((_, gi) => gi !== gIdx))}
+                                className="text-xs text-red-500 hover:text-red-700 font-bold"
+                              >
+                                Remove Card
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="p-3 space-y-3">
+                            {pGroup.entries.map((entry: any, eIdx: number) => (
+                              <div key={eIdx} className="p-3 bg-slate-50/50 border border-slate-100 rounded-xl space-y-3">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] font-bold text-slate-400">Entry #{eIdx + 1}</span>
+                                  {pGroup.entries.length > 1 && !editContactId && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, entries: pg.entries.filter((_: any, ei: number) => ei !== eIdx) } : pg))}
+                                      className="text-[10px] text-red-500 hover:underline"
+                                    >
+                                      Remove Entry
+                                    </button>
+                                  )}
+                                </div>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                  <div>
+                                    <label className="label text-[10px]">Company</label>
+                                    <input
+                                      type="text"
+                                      className="input w-full mt-1 text-xs"
+                                      placeholder="Company name"
+                                      value={entry.company}
+                                      onChange={e => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, entries: pg.entries.map((en: any, ei: number) => ei === eIdx ? { ...en, company: e.target.value } : en) } : pg))}
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="label text-[10px]">Plan Name</label>
+                                    <input
+                                      type="text"
+                                      className="input w-full mt-1 text-xs"
+                                      placeholder="Plan name"
+                                      value={entry.planName}
+                                      onChange={e => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, entries: pg.entries.map((en: any, ei: number) => ei === eIdx ? { ...en, planName: e.target.value } : en) } : pg))}
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="label text-[10px]">Policy Number</label>
+                                    <input
+                                      type="text"
+                                      className="input w-full mt-1 text-xs"
+                                      placeholder="Policy No"
+                                      value={entry.policyNo}
+                                      onChange={e => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, entries: pg.entries.map((en: any, ei: number) => ei === eIdx ? { ...en, policyNo: e.target.value } : en) } : pg))}
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="label text-[10px]">Start Date</label>
+                                    <DatePicker
+                                      className="input w-full mt-1 text-xs"
+                                      value={entry.startDate}
+                                      onChange={val => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? {
+                                        ...pg,
+                                        entries: pg.entries.map((en: any, ei: number) => {
+                                          if (ei !== eIdx) return en;
+                                          const updatedTenure = calculateTenureFromDates(val, en.endDate) || en.duration;
+                                          return { ...en, startDate: val, duration: updatedTenure };
+                                        })
+                                      } : pg))}
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="label text-[10px]">End Date</label>
+                                    <DatePicker
+                                      className="input w-full mt-1 text-xs"
+                                      value={entry.endDate}
+                                      onChange={val => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? {
+                                        ...pg,
+                                        entries: pg.entries.map((en: any, ei: number) => {
+                                          if (ei !== eIdx) return en;
+                                          const updatedTenure = calculateTenureFromDates(en.startDate, val) || en.duration;
+                                          return { ...en, endDate: val, duration: updatedTenure };
+                                        })
+                                      } : pg))}
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="label text-[10px]">{pGroup.policyType === 'Health' ? 'Premium (₹)' : 'Premium (₹)'}</label>
+                                    <input
+                                      type="number"
+                                      className="input w-full mt-1 text-xs"
+                                      placeholder="Premium"
+                                      value={entry.premium}
+                                      onChange={e => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, entries: pg.entries.map((en: any, ei: number) => ei === eIdx ? { ...en, premium: e.target.value } : en) } : pg))}
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="label text-[10px]">{pGroup.policyType === 'Health' ? 'Sum Insured (₹)' : 'Sum Assured (₹)'}</label>
+                                    <select
+                                      className="input w-full mt-1 text-xs bg-white"
+                                      value={pGroup.policyType === 'Health' ? entry.sumInsured : entry.sumAssured}
+                                      onChange={e => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, entries: pg.entries.map((en: any, ei: number) => ei === eIdx ? { ...en, [pGroup.policyType === 'Health' ? 'sumInsured' : 'sumAssured']: e.target.value } : en) } : pg))}
+                                    >
+                                      <option value="">Select Sum Insured</option>
+                                      {SUM_INSURED_OPTIONS.map(opt => (
+                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <label className="label text-[10px]">Deductible (₹) <span className="text-red-500">*</span></label>
+                                    <input
+                                      type="number"
+                                      step="any"
+                                      required
+                                      className="input w-full mt-1 text-xs"
+                                      placeholder="Enter deductible"
+                                      value={entry.deductible || ''}
+                                      onChange={e => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, entries: pg.entries.map((en: any, ei: number) => ei === eIdx ? { ...en, deductible: e.target.value } : en) } : pg))}
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="label text-[10px]">Riders / Add-ons</label>
+                                    <select
+                                      className="input w-full mt-1 text-xs bg-white"
+                                      value={entry.riders || ''}
+                                      onChange={e => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, entries: pg.entries.map((en: any, ei: number) => ei === eIdx ? { ...en, riders: e.target.value } : en) } : pg))}
+                                    >
+                                      <option value="">Select Rider / Add-on</option>
+                                      {RIDER_OPTIONS.map(r => (
+                                        <option key={r} value={r}>{r}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <label className="label text-[10px]">Policy Tenure</label>
+                                    <input
+                                      type="text"
+                                      className="input w-full mt-1 text-xs"
+                                      placeholder="e.g. 1 Year"
+                                      value={entry.duration || ''}
+                                      onChange={e => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, entries: pg.entries.map((en: any, ei: number) => ei === eIdx ? { ...en, duration: e.target.value } : en) } : pg))}
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                            {!editContactId && (
+                              <button
+                                type="button"
+                                onClick={() => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, entries: [...pg.entries, { company: '', planName: '', policyNo: '', startDate: '', duration: '1 Year', endDate: '', premium: '', sumInsured: '', deductible: '', sumAssured: '', maturityDate: '', paymentTerm: '', entryType: 'New' }] } : pg))}
+                                className="w-full py-2 border border-dashed border-slate-300 hover:border-slate-400 rounded-xl text-xs font-semibold text-slate-600 hover:text-slate-700 bg-white"
+                              >
+                                + Add Entry
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </fieldset>
+              </div>
+            )}
+
+            {activeLeadTab === 'Documents' && (
+              <div className="space-y-4 animate-fadeIn">
+                <div className="flex items-center justify-between bg-gradient-to-r from-slate-100/80 via-slate-50 to-slate-100/50 p-4 border border-slate-200/90 rounded-2xl shadow-2xs">
+                  <div>
+                    <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                      <FileText size={16} className="text-blue-600" />
+                      Lead Documents Upload
+                    </h4>
+                    <p className="text-[10px] text-slate-700 font-bold mt-1">Upload and view documents for this contact / lead</p>
+                  </div>
+                  {currentContactDocId && (
+                    <button
+                      type="button"
+                      onClick={() => setLeadDocUploadOpen(true)}
+                      className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-extrabold text-xs rounded-xl flex items-center gap-2 shadow-md shadow-blue-500/20 transition-all hover:scale-105 cursor-pointer"
+                    >
+                      <Upload size={14} /> Upload Document
+                    </button>
+                  )}
+                </div>
+
+                <DocumentUploadModal
+                  open={leadDocUploadOpen}
+                  onClose={() => setLeadDocUploadOpen(false)}
+                  onUpload={async (file: File, meta: DocumentUploadMeta) => {
+                    if (!currentContactDocId) {
+                      toast.error('Please select or save a contact first.');
+                      return false;
+                    }
+                    try {
+                      await documentsService.upload(file, { contactId: String(currentContactDocId), ...meta });
+                      await qc.invalidateQueries({ queryKey: ['contact-documents-list', currentContactDocId] });
+                      setLeadDocUploadOpen(false);
+                      toast.success('Document uploaded successfully!');
+                      return true;
+                    } catch (err: any) {
+                      const message = err?.response?.data?.message;
+                      toast.error(Array.isArray(message) ? message.join(', ') : message || 'Failed to upload document.');
+                      return false;
+                    }
+                  }}
+                  title="Upload Lead Document"
+                  subtitle="Attach identity proof, policy bonds, or records for this lead."
+                  defaultType="IDENTITY_PROOF"
+                  types={LEAD_DOC_TYPES}
+                  zIndexClass="z-[70]"
+                />
+
+                {!currentContactDocId ? (
+                  <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-6 py-10 text-center">
+                    <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mb-3">
+                      <FileText size={18} />
+                    </div>
+                    <p className="text-sm font-bold text-slate-700">Save / Select Contact First</p>
+                    <p className="text-[11px] text-slate-500 mt-1 max-w-[280px]">
+                      Please select or save the contact details first before uploading and managing documents.
+                    </p>
+                  </div>
+                ) : (
+                  <DocumentsTable
+                    documents={leadDocsList}
+                    onView={async doc => {
+                      try {
+                        const response = await documentsService.url(doc.id);
+                        const url = response?.url || response?.data?.url || doc.url || doc.fileUrl;
+                        if (!url) throw new Error('Unable to fetch preview link.');
+                        setDocPreviewModal({ open: true, title: doc.name || doc.title || doc.originalName || 'Document', url });
+                      } catch {
+                        toast.error('Failed to preview document.');
+                      }
+                    }}
+                    onDelete={async doc => {
+                      if (!confirm('Are you sure you want to delete this document?')) return;
+                      try {
+                        await documentsService.remove(doc.id);
+                        await qc.invalidateQueries({ queryKey: ['contact-documents-list', currentContactDocId] });
+                        toast.success('Document deleted');
+                      } catch {
+                        toast.error('Failed to delete document');
+                      }
+                    }}
+                    onShare={async doc => {
+                      try {
+                        const response = await documentsService.url(doc.id);
+                        const url = response?.url || response?.data?.url || doc.url || doc.fileUrl || '';
+                        if (!url) throw new Error('Unable to fetch document link.');
+                        const title = doc.name || doc.title || doc.originalName || 'Document';
+                        const message = `Hi, here is the document: *${title}*\n${url}`;
+                        const contactPhone = loadedContact?.phone || personalFields?.phone || (editTarget as any)?.contact?.phone || '';
+                        const shareUrl = contactPhone
+                          ? `https://api.whatsapp.com/send?phone=91${contactPhone.slice(-10)}&text=${encodeURIComponent(message)}`
+                          : `https://api.whatsapp.com/send?text=${encodeURIComponent(message)}`;
+                        window.open(shareUrl, '_blank', 'noopener,noreferrer');
+                      } catch {
+                        toast.error('Failed to generate share link.');
+                      }
+                    }}
+                  />
+                )}
+              </div>
+            )}
+
+            {activeLeadTab === 'WA Campaign' && (
+              <div className="space-y-4">
+                {editContactId && (
+                  <div className="bg-slate-50 border border-slate-200 text-slate-500 px-3.5 py-2.5 rounded-xl text-xs font-bold mb-4 shadow-2xs">
+                    <span>Contact campaigns are read-only. Edit them in the Contacts module.</span>
+                  </div>
+                )}
+                <div>
+                  <h3 className="text-xs font-semibold text-gray-800">Select Campaigns</h3>
+                  <p className="text-[11px] text-gray-500 mt-1">Choose which WhatsApp campaigns this lead should be part of:</p>
+                </div>
+                <fieldset disabled={!!editContactId} className="space-y-2 mt-3">
+                  {[
+                    'Health Awareness',
+                    'New Year Offer',
+                    'Pension Plan',
+                    'Monsoon Safety',
+                    'Term Insurance Promo',
+                    'Family Health Package'
+                  ].map((campaign) => (
+                    <label
+                      key={campaign}
+                      className="flex flex-wrap items-center gap-3 p-3 bg-gray-50/50 border border-gray-150 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors"
+                    >
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        checked={selectedCampaigns.includes(campaign)}
+                        onChange={() => {
+                          setSelectedCampaigns(prev =>
+                            prev.includes(campaign) ? prev.filter(c => c !== campaign) : [...prev, campaign]
+                          );
+                        }}
+                      />
+                      <span className="text-xs font-semibold text-gray-700">{campaign}</span>
+                    </label>
+                  ))}
+                </fieldset>
+              </div>
+            )}
+
+            {activeLeadTab === 'History' && (
+              <div className="space-y-4">
+                {/* Tab Header */}
+                <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="w-6 h-6 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
+                      <History size={13} />
+                    </div>
+                    <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider">
+                      Contact & Family History Log
+                    </h3>
+                  </div>
+                  <span className="text-[10px] font-extrabold bg-blue-50 text-blue-700 border border-blue-100 px-2.5 py-0.5 rounded-full">
+                    {familyMembers.length} Family {familyMembers.length === 1 ? 'Member' : 'Members'}
+                  </span>
+                </div>
+
+                <div className="max-h-[420px] overflow-y-auto pr-1 custom-scrollbar space-y-4">
+                  {/* 1. Personal Details Log Card */}
+                  <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-2xs space-y-3">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="w-6 h-6 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                          <UserCircle2 size={13} />
+                        </div>
+                        <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
+                          Personal Information Log
+                        </h4>
+                      </div>
+                      <span className="text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-100 px-2 py-0.5 rounded-md">
+                        Active Contact
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                      <div className="bg-slate-50/80 rounded-xl p-2.5 border border-slate-100/80 space-y-0.5">
+                        <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider block">Name</span>
+                        <p className="font-bold text-slate-800">
+                          {(personalFields.firstName || personalFields.middleName || personalFields.lastName) ? `${personalFields.firstName} ${personalFields.middleName} ${personalFields.lastName}`.trim() : (loadedContact ? `${loadedContact.firstName || ''} ${loadedContact.middleName || ''} ${loadedContact.lastName || ''}`.trim() : 'Not provided')}
+                        </p>
+                      </div>
+
+                      <div className="bg-slate-50/80 rounded-xl p-2.5 border border-slate-100/80 space-y-0.5">
+                        <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider block">Mobile & Email</span>
+                        <p className="font-semibold text-slate-700">
+                          {(() => {
+                            const p = watch('phone') || loadedContact?.phone;
+                            return (p && !p.startsWith('00') && p !== '0000000000' && !p.toLowerCase().includes('unknown')) ? p : 'No phone';
+                          })()}
+                          {(watch('email') || loadedContact?.email) ? ` · ${watch('email') || loadedContact?.email}` : ''}
+                        </p>
+                      </div>
+
+                      <div className="bg-slate-50/80 rounded-xl p-2.5 border border-slate-100/80 space-y-0.5">
+                        <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider block">Date of Birth & Gender</span>
+                        <p className="font-semibold text-slate-700">
+                          {(watch as any)('dob') || loadedContact?.dob || 'DOB not set'}
+                          {(watch('gender') || loadedContact?.gender) ? ` · ${watch('gender') || loadedContact?.gender}` : ''}
+                        </p>
+                      </div>
+
+                      <div className="bg-slate-50/80 rounded-xl p-2.5 border border-slate-100/80 space-y-0.5">
+                        <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider block">Occupation & Marital Status</span>
+                        <p className="font-semibold text-slate-700">
+                          {(watch as any)('occupation') || loadedContact?.occupation || 'Not specified'}
+                          {((watch as any)('maritalStatus') || loadedContact?.maritalStatus) ? ` · ${watch('maritalStatus' as any) || loadedContact?.maritalStatus}` : ''}
+                        </p>
+                      </div>
+                    </div>
+
+                    {((watch as any)('address') || loadedContact?.address) && (
+                      <div className="bg-slate-50/80 rounded-xl p-2.5 border border-slate-100/80 text-xs space-y-0.5">
+                        <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider block">Address Details</span>
+                        <p className="text-slate-700 font-medium">{(watch as any)('address') || loadedContact?.address}</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 2. Family Members Created & Linked Log Card */}
+                  <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-2xs space-y-3">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="w-6 h-6 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
+                          <Users size={13} />
+                        </div>
+                        <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
+                          Family Members Created ({familyMembers.length})
+                        </h4>
+                      </div>
+                      {familyMembers.length > 0 && (
+                        <span className="text-[10px] font-extrabold bg-blue-50 text-blue-700 border border-blue-100 px-2 py-0.5 rounded-md">
+                          {familyMembers.length} {familyMembers.length === 1 ? 'Member Created' : 'Members Created'}
+                        </span>
+                      )}
+                    </div>
+
+                    {familyMembers.length === 0 ? (
+                      <div className="py-8 text-center border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                        <p className="text-xs text-slate-400 font-medium italic">No family members created for this contact yet.</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {familyMembers.map((member, idx) => (
+                          <div key={idx} className="bg-slate-50/80 rounded-xl border border-slate-200/70 p-3 space-y-2 text-xs hover:border-blue-200 transition-all">
+                            <div className="flex items-center justify-between gap-2 border-b border-slate-200/60 pb-1.5">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="w-5 h-5 rounded-full bg-blue-600 text-white text-[10px] font-extrabold flex items-center justify-center">
+                                  {idx + 1}
+                                </span>
+                                <span className="font-extrabold text-slate-800 text-xs">
+                                  {member.name || `Family Member #${idx + 1}`}
+                                </span>
+                              </div>
+                              {member.relation && (
+                                <span className="text-[10px] font-extrabold bg-blue-100 text-blue-700 px-2 py-0.5 rounded-md">
+                                  {member.relation}
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                              <div>
+                                <span className="text-[9px] font-extrabold text-slate-400 uppercase block">Date of Birth / Phone</span>
+                                <p className="font-semibold text-slate-700">
+                                  {member.dob || 'DOB not set'} {member.whatsapp ? ` · ${member.whatsapp}` : ''}
+                                </p>
+                              </div>
+                              <div>
+                                <span className="text-[9px] font-extrabold text-slate-400 uppercase block">Occupation & Education</span>
+                                <p className="font-semibold text-slate-700">
+                                  {member.occupation || 'Not set'} {member.education ? ` · ${member.education}` : ''}
+                                </p>
+                              </div>
+                            </div>
+
+                            {member.medicalHistory && member.medicalHistory.length > 0 && (
+                              <div className="pt-1">
+                                <span className="text-[9px] font-extrabold text-slate-400 uppercase block mb-1">Medical History Tags</span>
+                                <div className="flex flex-wrap gap-1">
+                                  {member.medicalHistory.map((tag: any, ti: number) => (
+                                    <span key={ti} className="text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-md">
+                                      {tag}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 3. Particular Contact Audit Log Card */}
+                  {loadedContact && (
+                    <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-2xs space-y-2 text-xs">
+                      <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 pb-2">
+                        <div className="w-6 h-6 rounded-lg bg-slate-100 text-slate-600 flex items-center justify-center shrink-0">
+                          <Calendar size={13} />
+                        </div>
+                        <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
+                          Contact Record Audit Log
+                        </h4>
+                      </div>
+                      <div className="space-y-1.5 pt-1 text-[11px]">
+                        {loadedContact.createdAt && (
+                          <div className="flex items-center justify-between bg-slate-50 p-2 rounded-lg border border-slate-100">
+                            <span className="text-slate-500 font-medium">Record Created Date</span>
+                            <span className="font-bold text-slate-700">
+                              {new Date(loadedContact.createdAt).toLocaleString()}
+                            </span>
+                          </div>
+                        )}
+                        {loadedContact.updatedAt && (
+                          <div className="flex items-center justify-between bg-slate-50 p-2 rounded-lg border border-slate-100">
+                            <span className="text-slate-500 font-medium">Last Modified Date</span>
+                            <span className="font-bold text-slate-700">
+                              {new Date(loadedContact.updatedAt).toLocaleString()}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </form>
+      </Modal>
+
+      {/* Document Preview Modal */}
+      <Modal
+        open={docPreviewModal.open}
+        onClose={() => setDocPreviewModal({ open: false, title: '', url: '' })}
+        title={docPreviewModal.title || 'Document Preview'}
+        size="2xl"
+        zIndexClass="z-[70]"
+        icon={<Eye className="text-blue-600" size={20} />}
+      >
+        <div className="space-y-3 py-1">
+          <div className="w-full h-[65vh] rounded-xl border border-slate-200 bg-slate-50 overflow-hidden flex items-center justify-center">
+            {docPreviewModal.url.match(/\.(jpg|jpeg|png|webp|gif)/i) ? (
+              <img src={docPreviewModal.url} alt={docPreviewModal.title} className="max-h-full max-w-full object-contain" />
+            ) : (
+              <iframe src={docPreviewModal.url} className="w-full h-full border-0" title={docPreviewModal.title} />
+            )}
+          </div>
+          <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => window.open(docPreviewModal.url, '_blank')}
+              className="px-4 py-2 text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white rounded-xl cursor-pointer shadow-md shadow-blue-500/20"
+            >
+              Open Original File
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Delete Modal */}
+      <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)} title="Delete Lead" size="sm">
+        <p className="text-sm text-gray-600 mb-4">
+          Delete Lead for <strong>{deleteTarget?.contact?.firstName} {deleteTarget?.contact?.lastName}</strong>?
+        </p>
+        <div className="flex flex-wrap justify-end gap-2">
+          <button className="btn-secondary" onClick={() => setDeleteTarget(null)}>Cancel</button>
+          <button className="btn-danger" onClick={executeDelete} disabled={deleteLead.isPending}>Delete</button>
+        </div>
+      </Modal>
+
+      {/* Detail Popup */}
+      <Modal
+        open={detailOpen}
+        onClose={() => { setDetailOpen(false); setDetailTarget(null); setIsDetailEditing(false); }}
+        title={detailTarget ? `${detailTarget.contact?.firstName ?? ''} ${detailTarget.contact?.lastName ?? ''}` : 'Lead Details'}
+        size="2xl"
+        actions={
+          detailOpen && detailTarget ? (
+            isDetailEditing ? (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsDetailEditing(false)}
+                  className="btn-secondary text-xs px-3 py-1.5 h-auto font-bold shrink-0"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => detailSaveHandlerRef.current?.()}
+                  disabled={detailIsSavingRef.current}
+                  className="btn-primary text-xs px-3 py-1.5 h-auto flex flex-nowrap items-center gap-1.5 font-bold shadow-2xs shrink-0"
+                >
+                  {detailIsSavingRef.current ? <RefreshCw size={12} className="animate-spin shrink-0" /> : <Save size={12} className="shrink-0" />}
+                  Save Lead Details
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setIsDetailEditing(true)}
+                className="btn-primary text-xs px-3 py-1.5 h-auto flex flex-nowrap items-center gap-1.5 font-bold shadow-2xs shrink-0"
+              >
+                <Pencil size={12} className="shrink-0" />
+                Edit Lead Details
+              </button>
+            )
+          ) : undefined
+        }
+      >
+        {detailTarget && (
+          <LeadDetailPopup
+            lead={detailTarget}
+            tab={detailTab}
+            onTabChange={setDetailTab}
+            employees={employeesList}
+            isOwner={isOwner}
+            onEdit={(targetLead) => {
+              setDetailOpen(false);
+              openEdit(targetLead || detailTarget, 'Personal Information');
+            }}
+            onTriggerPolicyCreation={handleProcessCompleted}
+            saveHandlerRef={detailSaveHandlerRef}
+            isSavingRef={detailIsSavingRef}
+            isEditing={isDetailEditing}
+            onEditingChange={setIsDetailEditing}
+            onViewConnectedPolicy={handleOpenConnectedPolicy}
+          />
+        )}
+      </Modal>
+
+      {/* Mutual Fund Process Completed Modal */}
+      <Modal
+        open={mfModalOpen}
+        onClose={() => setMfModalOpen(false)}
+        title="Mutual Fund Investment Details"
+        subtitle="Fill mutual fund investment details to mark process completed."
+        size="md"
+      >
+        <form onSubmit={handleMutualFundFormSubmit} className="space-y-4 mt-2 text-xs">
+          <div className="bg-cyan-50/60 border border-cyan-100 p-3 rounded-xl flex items-center gap-3 text-cyan-800">
+            <span className="text-xl">📈</span>
+            <div>
+              <h5 className="font-bold">Process Completed - Mutual Fund</h5>
+              <p className="text-[11px] text-cyan-600 font-medium">Customer: {mfLead?.contact?.firstName} {mfLead?.contact?.lastName}</p>
+            </div>
+          </div>
+
+          <div>
+            <label className="label text-[11px] font-bold text-slate-700 block mb-1">
+              Number of SIP’s
+            </label>
+            <input
+              type="number"
+              min="0"
+              value={mfNumberOfSips}
+              onChange={e => setMfNumberOfSips(e.target.value)}
+              placeholder="e.g. 2"
+              className="input w-full py-2 px-3 text-xs border border-slate-200 rounded-xl"
+            />
+          </div>
+
+          <div>
+            <label className="label text-[11px] font-bold text-slate-700 block mb-1">
+              SIP Amount (₹)
+            </label>
+            <input
+              type="number"
+              min="0"
+              value={mfSipAmount}
+              onChange={e => setMfSipAmount(e.target.value)}
+              placeholder="e.g. 5000"
+              className="input w-full py-2 px-3 text-xs border border-slate-200 rounded-xl"
+            />
+          </div>
+
+          <div>
+            <label className="label text-[11px] font-bold text-slate-700 block mb-1">
+              Onboarding Done
+            </label>
+            <div className="flex items-center gap-6 mt-1.5 bg-slate-50 p-2.5 rounded-xl border border-slate-200/80">
+              <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-700 select-none">
+                <input
+                  type="radio"
+                  name="onboardingDone"
+                  value="YES"
+                  checked={mfOnboardingDone === 'YES'}
+                  onChange={() => setMfOnboardingDone('YES')}
+                  className="w-4 h-4 accent-blue-600 cursor-pointer"
+                />
+                Yes
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-700 select-none">
+                <input
+                  type="radio"
+                  name="onboardingDone"
+                  value="NO"
+                  checked={mfOnboardingDone === 'NO'}
+                  onChange={() => setMfOnboardingDone('NO')}
+                  className="w-4 h-4 accent-blue-600 cursor-pointer"
+                />
+                No
+              </label>
+            </div>
+          </div>
+
+          <div>
+            <label className="label text-[11px] font-bold text-slate-700 block mb-1">
+              Lumpsum Invested Amount (₹)
+            </label>
+            <input
+              type="number"
+              min="0"
+              value={mfLumpsumAmount}
+              onChange={e => setMfLumpsumAmount(e.target.value)}
+              placeholder="e.g. 50000"
+              className="input w-full py-2 px-3 text-xs border border-slate-200 rounded-xl"
+            />
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setMfModalOpen(false)}
+              className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition-colors cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={mfSubmitting}
+              className="px-4 py-2 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 transition-colors disabled:opacity-50 cursor-pointer"
+            >
+              {mfSubmitting ? 'Saving...' : 'Complete Process'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Issue Policy on Move to Process Completed Modal (matches Policies page UI) */}
+      <CreatePolicyModal
+        open={policyModalOpen}
+        onClose={() => {
+          setPolicyModalOpen(false);
+          setPolicyLead(null);
+        }}
+        contactId={policyLead?.contactId || policyLead?.contact?.id}
+        contactName={policyLead?.contact ? `${policyLead.contact.firstName || ''} ${policyLead.contact.lastName || ''}`.trim() : undefined}
+        initialData={policyLead}
+        onSuccess={handlePolicyCreateSuccess}
+      />
+
+      {/* Connected Policy Detail Modal */}
+      <PolicyDetailModal
+        open={!!viewConnectedPolicyId}
+        policyId={viewConnectedPolicyId}
+        onClose={() => setViewConnectedPolicyId(null)}
+      />
+
+    </div>
+  );
+}
+
+// ── Kanban Card ───────────────────────────────────────────────────────────────
+function KanbanCard({ card, onEdit, onDelete, onOpen, onCall, onWhatsApp, onViewConnectedPolicy }: {
+  card: any;
+  onEdit: (c: any) => void;
+  onDelete: (c: any) => void;
+  onOpen: (c: any) => void;
+  onCall: (phone?: string) => void;
+  onWhatsApp: (phone?: string) => void;
+  onViewConnectedPolicy?: (card: any) => void;
+}) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  const formattedDate = card.createdAt ? format(new Date(card.createdAt), 'dd/MMM/yyyy') : '';
+  const followUp = card.followUpDate ? format(new Date(card.followUpDate), 'dd/MMM/yyyy') : null;
+  const assigneeName = card.assignedEmployee?.employeeProfile
+    ? `${card.assignedEmployee.employeeProfile.firstName} ${card.assignedEmployee.employeeProfile.lastName}`
+    : card.assignedEmployee?.name || 'Unassigned';
+  const initials = `${card.contact?.firstName?.[0] ?? ''}${card.contact?.lastName?.[0] ?? ''}`.toUpperCase() || 'LD';
+  const hotness = deriveHotness(card);
+  const hotnessConf = HOTNESS_CONFIG[hotness];
+  const productName = card.displayProducts?.join(', ') || card.plan?.name || (card.interests && card.interests.length > 0 ? card.interests.join(', ') : 'No Product');
+
+  const AVATAR_BG: Record<string, string> = {
+    TO_CONTACT: 'bg-blue-500', CONTACTED: 'bg-indigo-500', PROPOSAL_SENT: 'bg-purple-500',
+    LOGIN_PROGRESS: 'bg-orange-500', PAYMENT_DONE: 'bg-green-500', PROCESS_COMPLETED: 'bg-emerald-500',
+  };
+  const BORDER_TOP: Record<string, string> = {
+    TO_CONTACT: 'border-t-4 border-t-blue-500', CONTACTED: 'border-t-4 border-t-indigo-500',
+    PROPOSAL_SENT: 'border-t-4 border-t-purple-500', LOGIN_PROGRESS: 'border-t-4 border-t-orange-500',
+    PAYMENT_DONE: 'border-t-4 border-t-green-500', PROCESS_COMPLETED: 'border-t-4 border-t-emerald-500',
+  };
+  const SHADOW_HOVER: Record<string, string> = {
+    TO_CONTACT: 'hover:shadow-md hover:shadow-blue-500/10 hover:border-blue-400',
+    CONTACTED: 'hover:shadow-md hover:shadow-indigo-500/10 hover:border-indigo-400',
+    PROPOSAL_SENT: 'hover:shadow-md hover:shadow-purple-500/10 hover:border-purple-400',
+    LOGIN_PROGRESS: 'hover:shadow-md hover:shadow-orange-500/10 hover:border-orange-400',
+    PAYMENT_DONE: 'hover:shadow-md hover:shadow-green-500/10 hover:border-green-400',
+    PROCESS_COMPLETED: 'hover:shadow-md hover:shadow-emerald-500/10 hover:border-emerald-400',
+  };
+  const RING_COLOR: Record<string, string> = {
+    TO_CONTACT: 'ring-blue-500/20', CONTACTED: 'ring-indigo-500/20', PROPOSAL_SENT: 'ring-purple-500/20',
+    LOGIN_PROGRESS: 'ring-orange-500/20', PAYMENT_DONE: 'ring-green-500/20', PROCESS_COMPLETED: 'ring-emerald-500/20',
+  };
+
+  return (
+    <div
+      draggable
+      onDragStart={e => e.dataTransfer.setData('cardId', card.id)}
+      onClick={() => onOpen(card)}
+      className={clsx(
+        'bg-white rounded-2xl p-3.5 shadow-sm border border-slate-100 cursor-grab active:cursor-grabbing hover:-translate-y-0.5 transition-[transform,box-shadow,border-color] duration-150 flex flex-col gap-2 group relative overflow-hidden',
+        BORDER_TOP[card.stage] ?? 'border-t-4 border-t-slate-300',
+        SHADOW_HOVER[card.stage] ?? 'hover:shadow-slate-500/10'
+      )}
+    >
+      {/* Line 1: Lead ID and Name */}
+      <div className="flex items-center justify-between min-w-0 gap-1.5">
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+          {card.leadId && (
+            <span className="font-mono text-[10px] font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200/70 shrink-0">
+              {card.leadId}
+            </span>
+          )}
+          <h4 className="text-[13px] font-bold text-slate-900 leading-snug hover:text-blue-600 transition-colors truncate">
+            {card.contact?.firstName} {card.contact?.lastName}
+          </h4>
+          {card.relatedLeadCount > 1 && (
+            <span
+              className="text-[9px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded shrink-0"
+              title={`Showing ${card.relatedLeadCount} lead records for this contact as one entry`}
+            >
+              {card.relatedLeadCount} records
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1 bg-white pl-1 shrink-0" onClick={e => e.stopPropagation()}>
+          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button onClick={() => onEdit(card)} className="p-1 rounded text-gray-400 hover:text-blue-600 hover:bg-slate-50 transition-colors" title="Edit Lead">
+              <Pencil size={11} />
+            </button>
+            <button onClick={() => onDelete(card)} className="p-1 rounded text-gray-400 hover:text-red-500 hover:bg-slate-50 transition-colors" title="Delete Lead">
+              <Trash2 size={11} />
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsExpanded(prev => !prev)}
+            className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
+            title={isExpanded ? 'Collapse card' : 'Expand card'}
+          >
+            <ChevronDown size={14} className={clsx('transition-transform duration-200 text-slate-500', isExpanded && 'rotate-180')} />
+          </button>
+        </div>
+      </div>
+
+      {/* Line 2: Creation date and Hotness level */}
+      <div className="flex items-center justify-between gap-1.5 text-[10px]">
+        <span className="text-slate-500 font-medium">
+          Created {formattedDate || '—'}
+        </span>
+        <span className={clsx('flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-[9px] font-bold shrink-0', hotnessConf.cls)}>
+          <HotnessIcon level={hotness} /> {hotnessConf.label}
+        </span>
+      </div>
+
+      {/* Line 3: Product and Expected premium */}
+      <div className="flex items-center justify-between gap-1.5 text-xs">
+        <div className="flex items-center gap-1.5 min-w-0 flex-1 text-slate-700 font-semibold truncate">
+          <Shield size={12} className="text-slate-500 shrink-0" />
+          <span className="truncate font-semibold text-slate-800">{productName}</span>
+        </div>
+        {(card.premiumBudget || card.expectedPremium) ? (
+          <span className="font-bold text-emerald-700 text-[11px] bg-emerald-50 border border-emerald-200/80 px-1.5 py-0.5 rounded shrink-0">
+            ₹{Number(card.premiumBudget || card.expectedPremium).toLocaleString('en-IN')}
+          </span>
+        ) : null}
+      </div>
+
+      {card.relatedStages?.length > 1 && (
+        <div
+          className="text-[9px] text-slate-500 truncate"
+          title={`Related lead stages: ${card.relatedStages.join(', ')}`}
+        >
+          Related stages: {card.relatedStages.join(', ')}
+        </div>
+      )}
+
+      {(() => {
+        const pNotes = parseLeadNotes(card.notes);
+        const pNum = pNotes.policyNumber || card.connectedPolicy?.policyNumber;
+        if (!pNum) return null;
+        return (
+          <div className="flex items-center justify-between gap-1 text-[10px] font-bold text-amber-800 bg-amber-50/90 border border-amber-200/80 rounded-lg px-2 py-1 shadow-2xs">
+            <span className="flex items-center gap-1 truncate">
+              <Shield size={11} className="text-amber-600 shrink-0" />
+              Policy #{pNum}
+            </span>
+            <div className="flex items-center gap-1 shrink-0">
+              <span className="text-[9px] font-extrabold uppercase bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">
+                {pNotes.leadType || 'Renewal/Porting'}
+              </span>
+              {onViewConnectedPolicy && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onViewConnectedPolicy(card);
+                  }}
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-600 hover:bg-blue-700 text-white text-[9px] font-extrabold shadow-2xs transition-all cursor-pointer"
+                  title="See Connected Old Policy Details"
+                >
+                  <Eye size={10} />
+                  <span>Old Policy</span>
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Line 4: Assignee and Followup date */}
+      <div className="flex items-center justify-between gap-1.5 text-[10px] pt-0.5">
+        <div className="flex items-center gap-1 text-slate-500 font-semibold truncate max-w-[130px]" title={assigneeName}>
+          <UserCircle2 size={11} className="text-slate-400 shrink-0" />
+          <span className="truncate">{assigneeName}</span>
+        </div>
+
+        {followUp ? (
+          <div className="flex items-center gap-1 text-amber-700 bg-amber-50 border border-amber-200/60 rounded px-1.5 py-0.5 font-bold truncate max-w-[140px]">
+            <Calendar size={10} className="shrink-0 text-amber-600" />
+            <span className="truncate">{followUp}</span>
+          </div>
+        ) : (
+          <span className="text-[10px] text-slate-400 italic">No follow-up</span>
+        )}
+      </div>
+
+      {/* Expanded Details Section */}
+      {isExpanded && (
+        <div className="space-y-2 pt-2 border-t border-slate-100/80 animate-fadeIn" onClick={e => e.stopPropagation()}>
+          {card.contact?.phone && !card.contact.phone.startsWith('00') && card.contact.phone !== '0000000000' && !card.contact.phone.toLowerCase().includes('unknown') && (
+            <div className="flex items-center justify-between gap-2 text-xs text-slate-700 font-medium">
+              <div className="flex items-center gap-2 min-w-0 truncate">
+                <Phone size={12} className="text-slate-500 shrink-0" />
+                <span className="truncate">{card.contact.phone}</span>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => onCall(card.contact?.phone)}
+                  className="p-1.5 rounded-lg bg-blue-50 border border-blue-200 hover:bg-blue-100 text-blue-600 cursor-pointer transition-colors"
+                  title="Call"
+                >
+                  <Phone size={13} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onWhatsApp(card.contact?.phone)}
+                  className="p-1.5 rounded-lg bg-green-50 border border-green-200 hover:bg-green-100 text-green-600 cursor-pointer transition-colors"
+                  title="WhatsApp"
+                >
+                  <MessageCircle size={13} />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {card.contact?.email && (
+            <div className="flex items-center gap-2 text-xs text-slate-700 font-medium">
+              <Mail size={12} className="text-slate-500 shrink-0" />
+              <span className="truncate">{card.contact.email}</span>
+            </div>
+          )}
+
+          {(() => {
+            const pNotes = parseLeadNotes(card.notes);
+            const pNum = pNotes.policyNumber || card.connectedPolicy?.policyNumber;
+            if (!pNum) return null;
+            return (
+              <div className="bg-amber-50/80 border border-amber-200/80 rounded-xl p-2 text-[11px] text-amber-900 space-y-1">
+                <div className="font-extrabold flex items-center justify-between gap-1 text-amber-800">
+                  <span className="flex items-center gap-1">
+                    <Shield size={12} className="text-amber-600" />
+                    Connected Policy #{pNum}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (onViewConnectedPolicy) onViewConnectedPolicy(card);
+                      else window.open(`/policies?search=${encodeURIComponent(pNum)}`, '_blank');
+                    }}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-extrabold shadow-2xs cursor-pointer transition-all"
+                    title="See Connected Old Policy Details"
+                  >
+                    <Eye size={11} />
+                    <span>See Old Policy Details</span>
+                  </button>
+                </div>
+                {pNotes.endDate && (
+                  <div className="text-[10px] text-rose-700 font-semibold">
+                    Expiry: {new Date(pNotes.endDate).toLocaleDateString('en-IN')}
+                  </div>
+                )}
+                {(pNotes.companyName || pNotes.planName) && (
+                  <div className="text-[10px] text-slate-600 truncate">
+                    {[pNotes.companyName, pNotes.planName].filter(Boolean).join(' · ')}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Table Component ───────────────────────────────────────────────────────────
+function LeadsTable({
+  data,
+  loading,
+  sortKey,
+  sortDir,
+  onSort,
+  visibleColumns,
+  onToggleColumn,
+  onRowClick,
+  onEdit,
+  onDelete,
+  onCall,
+  onWhatsApp,
+  onCreate,
+  onViewConnectedPolicy,
+}: {
+  data: any[];
+  loading: boolean;
+  sortKey: string;
+  sortDir: 'asc' | 'desc';
+  onSort: (key: string) => void;
+  visibleColumns: Record<string, boolean>;
+  onToggleColumn?: (key: string) => void;
+  onRowClick: (r: any) => void;
+  onEdit: (r: any) => void;
+  onDelete: (r: any) => void;
+  onCall: (phone?: string) => void;
+  onWhatsApp: (phone?: string) => void;
+  onCreate?: () => void;
+  onViewConnectedPolicy?: (r: any) => void;
+}) {
+  const [tableColMenuOpen, setTableColMenuOpen] = useState(false);
+  const sortableKeys = ['leadId', 'name', 'phone', 'email', 'plan', 'premiumBudget', 'followUpDate', 'source', 'createdAt', 'stage'];
+
+  const colDefs = [
+    {
+      key: 'leadId', label: 'Lead ID',
+      render: (r: any) => r.leadId ? (
+        <span className="font-mono text-xs font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-100/80">
+          {r.leadId}
+        </span>
+      ) : <span className="text-gray-400">—</span>,
+    },
+    {
+      key: 'name', label: 'Client Name',
+      render: (r: any) => (
+        <div>
+          <p className="font-semibold text-gray-900 text-[13px]">
+            {r.contact?.firstName} {r.contact?.lastName}
+            {r.relatedLeadCount > 1 && (
+              <span className="ml-1.5 text-[9px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded">
+                {r.relatedLeadCount} records
+              </span>
+            )}
+          </p>
+          {r.contact?.phone && !r.contact.phone.startsWith('00') && r.contact.phone !== '0000000000' && !r.contact.phone.toLowerCase().includes('unknown') ? (
+            <p className="text-[11px] text-gray-400">{r.contact.phone}</p>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      key: 'phone', label: 'Phone',
+      render: (r: any) => (r.contact?.phone && !r.contact.phone.startsWith('00') && r.contact.phone !== '0000000000' && !r.contact.phone.toLowerCase().includes('unknown')) ? <span className="font-mono text-xs text-slate-700 font-medium">{r.contact.phone}</span> : <span className="text-gray-400">—</span>,
+    },
+    {
+      key: 'email', label: 'Email',
+      render: (r: any) => r.contact?.email ? <span className="text-xs text-slate-700 font-medium">{r.contact.email}</span> : <span className="text-gray-400">—</span>,
+    },
+    {
+      key: 'plan', label: 'Product',
+      render: (r: any) => {
+        const prodName = r.displayProducts?.join(', ') || r.plan?.name || (r.interests && r.interests.length > 0 ? r.interests.join(', ') : '—');
+        const prodCat = r.plan?.category || '';
+        const notesObj = parseLeadNotes(r.notes);
+        const policyNo = notesObj.policyNumber || r.connectedPolicy?.policyNumber;
+        const isRenewal = Boolean(
+          policyNo ||
+          ['RENEWAL', 'PORTING', 'RENEWAL/PORTING', 'RENEWAL / PORTING', 'RENEWAL_PORTING'].includes((notesObj.leadType || '').toUpperCase()) ||
+          r.source === 'Renewal'
+        );
+        return (
+          <div>
+            <p className="text-[13px] font-medium text-gray-800">{prodName}</p>
+            {prodCat && <p className="text-[11px] text-gray-400">{prodCat}</p>}
+            {isRenewal && policyNo && (
+              <div className="flex flex-wrap items-center gap-1 mt-1">
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-800 bg-amber-50 border border-amber-200/80 px-1.5 py-0.5 rounded" title="Connected Old Policy">
+                  <Shield size={10} className="text-amber-600 shrink-0" />
+                  Policy #{policyNo}
+                </span>
+                {onViewConnectedPolicy && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onViewConnectedPolicy(r);
+                    }}
+                    className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-1.5 py-0.5 rounded transition cursor-pointer"
+                    title="View connected old policy details"
+                  >
+                    <Eye size={10} />
+                    Old Policy
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      },
+    },
+    {
+      key: 'hotness', label: 'Hotness',
+      render: (r: any) => {
+        const h = deriveHotness(r);
+        const conf = HOTNESS_CONFIG[h];
+        return (
+          <span className={clsx('flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-bold w-fit', conf.cls)}>
+            <HotnessIcon level={h} /> {conf.label}
+          </span>
+        );
+      },
+    },
+    {
+      key: 'employee', label: 'Assigned To',
+      render: (r: any) => {
+        const name = r.assignedEmployee?.employeeProfile
+          ? `${r.assignedEmployee.employeeProfile.firstName} ${r.assignedEmployee.employeeProfile.lastName}`
+          : r.assignedEmployee?.name || '—';
+        return (
+          <div className="flex items-center gap-1.5">
+            <div className="w-6 h-6 rounded-full bg-slate-200 flex items-center justify-center text-[10px] font-bold text-slate-600 shrink-0">
+              {name !== '—' ? name.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2) : '—'}
+            </div>
+            <span className="text-[12px] text-gray-700">{name}</span>
+          </div>
+        );
+      },
+    },
+    {
+      key: 'premiumBudget', label: 'Exp. Premium',
+      render: (r: any) => r.premiumBudget
+        ? <span className="font-semibold text-slate-800">₹{Number(r.premiumBudget).toLocaleString('en-IN')}</span>
+        : <span className="text-gray-400">—</span>,
+    },
+    {
+      key: 'followUpDate', label: 'Next Follow-up',
+      render: (r: any) => r.followUpDate ? (
+        <div className={clsx('flex items-center gap-1 text-[11px] font-semibold',
+          new Date(r.followUpDate) < new Date() ? 'text-red-600' : 'text-amber-700')}>
+          <Calendar size={11} />
+          {format(new Date(r.followUpDate), 'dd/MMM/yyyy')}
+        </div>
+      ) : <span className="text-gray-400">—</span>,
+    },
+    {
+      key: 'source', label: 'Source',
+      render: (r: any) => r.source ? <span className="text-xs font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">{r.source}</span> : <span className="text-gray-400">—</span>,
+    },
+    {
+      key: 'createdAt', label: 'Created Date',
+      render: (r: any) => r.createdAt ? (
+        <span className="text-xs text-slate-600 font-medium">
+          {format(new Date(r.createdAt), 'dd/MMM/yyyy')}
+        </span>
+      ) : <span className="text-gray-400">—</span>,
+    },
+    {
+      key: 'stage', label: 'Stage',
+      render: (r: any) => {
+        const stKey = r.stage || 'TO_CONTACT';
+        const label = STAGE_LABELS[stKey] || r.uiStage || stKey;
+        const badgeStyle = BADGE_STYLES[stKey] || BADGE_STYLES['TO_CONTACT'];
+        return (
+          <span className={clsx('inline-flex items-center gap-1 text-xs px-2.5 py-0.5 rounded-full font-bold border uppercase tracking-wider', badgeStyle)}>
+            {label}
+          </span>
+        );
+      },
+    },
+    {
+      key: 'actions', label: '',
+      render: (r: any) => (
+        <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
+          <button
+            onClick={() => onWhatsApp(r.contact?.phone)}
+            className="p-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold flex items-center justify-center cursor-pointer shadow-md shadow-emerald-500/20 hover:shadow-lg hover:scale-105 transition-all"
+            title="WhatsApp"
+          >
+            <MessageCircle size={14} />
+          </button>
+          <button
+            onClick={() => onCall(r.contact?.phone)}
+            className="p-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold flex items-center justify-center cursor-pointer shadow-md shadow-blue-500/20 hover:shadow-lg hover:scale-105 transition-all"
+            title="Call"
+          >
+            <Phone size={14} />
+          </button>
+          <button
+            onClick={() => onEdit(r)}
+            className="p-2 rounded-xl bg-gradient-to-r from-purple-600 to-violet-600 hover:from-purple-700 hover:to-violet-700 text-white font-bold flex items-center justify-center cursor-pointer shadow-md shadow-purple-500/20 hover:shadow-lg hover:scale-105 transition-all"
+            title="Edit Lead"
+          >
+            <Pencil size={14} />
+          </button>
+          <button
+            onClick={() => onDelete(r)}
+            className="p-2 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-700 hover:to-red-700 text-white font-bold flex items-center justify-center cursor-pointer shadow-md shadow-rose-500/20 hover:shadow-lg hover:scale-105 transition-all"
+            title="Delete Lead"
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
+      ),
+    },
+  ];
+
+  const activeCols = colDefs.filter(c => visibleColumns[c.key] !== false);
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm flex-1 flex flex-col overflow-hidden min-h-[400px]">
+      <div className="overflow-x-auto overflow-y-auto custom-scrollbar flex-1 max-h-[calc(100vh-220px)]">
+        <table className="min-w-full text-sm">
+          <thead className="sticky top-0 z-10 shadow-2xs">
+            <tr className="bg-slate-100 border-b border-slate-200/80">
+              {activeCols.map(col => (
+                <th key={col.key}
+                  onClick={() => sortableKeys.includes(col.key) && onSort(col.key)}
+                  className={clsx('px-5 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-slate-700 whitespace-nowrap select-none border border-slate-200',
+                    sortableKeys.includes(col.key) && 'cursor-pointer hover:text-slate-900')}>
+                  <span className="inline-flex flex-wrap items-center gap-1">
+                    {col.label}
+                    {sortableKeys.includes(col.key) && (
+                      <span className="text-slate-400">
+                        {sortKey === col.key
+                          ? sortDir === 'asc' ? <ChevronUp size={13} className="text-slate-900 stroke-[3]" /> : <ChevronDown size={13} className="text-slate-900 stroke-[3]" />
+                          : <ChevronUp size={13} className="text-slate-500 stroke-[2.5]" />}
+                      </span>
+                    )}
+                  </span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100/60">
+            {loading
+              ? Array.from({ length: 5 }).map((_, i) => (
+                <tr key={i}>
+                  {activeCols.map(col => (
+                    <td key={col.key} className="px-5 py-4 border border-slate-200">
+                      <div className="h-3.5 rounded-full animate-pulse bg-gray-100" style={{ width: `${55 + (i * 13 + col.label.length * 7) % 35}%` }} />
+                    </td>
+                  ))}
+                </tr>
+              ))
+              : data.length === 0
+                ? (
+                  <tr>
+                    <td colSpan={activeCols.length} className="px-5 py-16 text-center">
+                      <div className="flex flex-col items-center gap-3 text-gray-400">
+                        <div className="h-12 w-12 rounded-xl bg-gray-50 flex items-center justify-center border border-slate-100">
+                          <Shield size={20} className="text-gray-300" />
+                        </div>
+                        <p className="text-sm font-medium">No leads found</p>
+                        <button onClick={() => onCreate?.()} className="btn-primary py-1 px-3 text-xs mt-1">
+                          Create Lead
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+                : data.map((row, idx) => (
+                  <tr key={row.id} onClick={() => onRowClick(row)}
+                    className={clsx("cursor-pointer transition-colors duration-150", idx % 2 === 1 ? 'bg-slate-50/80' : 'bg-white')}>
+                    {activeCols.map(col => (
+                      <td key={col.key} className="px-5 py-3.5 text-gray-700 align-middle text-[13px] font-medium border border-slate-200">
+                        {col.render(row)}
+                      </td>
+                    ))}
+                  </tr>
+                ))
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── Lead Detail Popup ─────────────────────────────────────────────────────────
+function LeadDetailPopup({
+  lead,
+  tab,
+  onTabChange,
+  employees = [],
+  isOwner = false,
+  onEdit,
+  onTriggerPolicyCreation,
+  saveHandlerRef,
+  isSavingRef,
+  isEditing,
+  onEditingChange,
+  onViewConnectedPolicy,
+}: {
+  lead: any;
+  tab: 'overview' | 'comments' | 'history';
+  onTabChange: (t: 'overview' | 'comments' | 'history') => void;
+  employees?: any[];
+  isOwner?: boolean;
+  onEdit?: (targetLead?: any) => void;
+  onTriggerPolicyCreation?: (lead: any) => void;
+  saveHandlerRef?: React.MutableRefObject<(() => void) | null>;
+  isSavingRef?: React.MutableRefObject<boolean>;
+  isEditing: boolean;
+  onEditingChange: (editing: boolean) => void;
+  onViewConnectedPolicy?: (lead: any) => void;
+}) {
+  const qc = useQueryClient();
+  const [commentText, setCommentText] = useState('');
+
+  const { data: fullLeadData, refetch } = useQuery({
+    queryKey: ['lead-detail-popup', lead.id],
+    queryFn: () => leadsService.get(lead.id),
+    staleTime: 0,
+  });
+  const fullLead = fullLeadData?.data ?? lead;
+  const contactId = fullLead?.contact?.id || lead?.contact?.id || lead?.contactId;
+  const { data: contactData } = useQuery({
+    queryKey: ['contact-lead-popup', contactId],
+    queryFn: () => contactsService.get(contactId!),
+    enabled: !!contactId,
+  });
+  const consultations: any[] = fullLead.consultations ?? [];
+
+  const initialNotes = parseLeadNotes(fullLead.notes);
+  const authUser = useAuthStore(s => s.user);
+  const isAdminOrSuperadmin = authUser?.role === 'OWNER' || authUser?.role === 'SUPERADMIN' || authUser?.role === 'ADMIN';
+
+  const normalizeLeadType = (val?: string) => {
+    if (!val) return 'Fresh';
+    const u = val.toUpperCase().trim();
+    if (u === 'RENEWAL') return 'Renewal';
+    if (u === 'PORTING') return 'Porting';
+    if (u.includes('RENEWAL') && u.includes('PORT')) return 'Renewal/Porting';
+    if (u === 'FRESH') return 'Fresh';
+    return val;
+  };
+
+  const [editStage, setEditStage] = useState(fullLead.stage || 'TO_CONTACT');
+  const [editStatus, setEditStatus] = useState(normalizeLeadStatus(initialNotes.leadStatus || fullLead.status));
+  const [editType, setEditType] = useState(normalizeLeadType(initialNotes.leadType || fullLead.type));
+  const [editSource, setEditSource] = useState(fullLead.source || 'Social Media');
+  const leadSourcesList = ['Social Media', 'Our Customer Self', 'Refered by our customer', 'Walkin', 'BNI'];
+  const [editAssignee, setEditAssignee] = useState(fullLead.assignedEmployeeId ?? '');
+  const [editFollowUp, setEditFollowUp] = useState(fullLead.followUpDate ? (typeof fullLead.followUpDate === 'string' ? fullLead.followUpDate.slice(0, 10) : new Date(fullLead.followUpDate).toISOString().slice(0, 10)) : '');
+  const [editPremium, setEditPremium] = useState<string | number>(fullLead.premiumBudget || fullLead.expectedPremium || '');
+  const [savingLeadDetails, setSavingLeadDetails] = useState(false);
+
+  useEffect(() => {
+    if (fullLead && !isEditing) {
+      const parsed = parseLeadNotes(fullLead.notes);
+      setEditStage(fullLead.stage || 'TO_CONTACT');
+      setEditStatus(normalizeLeadStatus(parsed.leadStatus || fullLead.status));
+      setEditType(normalizeLeadType(parsed.leadType || fullLead.type));
+      setEditSource(fullLead.source || 'Social Media');
+      setEditAssignee(fullLead.assignedEmployeeId ?? '');
+      setEditFollowUp(fullLead.followUpDate ? (typeof fullLead.followUpDate === 'string' ? fullLead.followUpDate.slice(0, 10) : new Date(fullLead.followUpDate).toISOString().slice(0, 10)) : '');
+      setEditPremium(fullLead.premiumBudget || fullLead.expectedPremium || '');
+    }
+  }, [fullLead, isEditing]);
+
+  // Expose save handler to parent so it can render the button in the modal header
+  useEffect(() => {
+    if (saveHandlerRef) saveHandlerRef.current = () => handleUpdateLeadDetails();
+    if (isSavingRef) isSavingRef.current = savingLeadDetails;
+  });
+
+  const parseSafeFollowUpDate = (val: any): string | undefined => {
+    if (!val) return undefined;
+    const str = typeof val === 'string'
+      ? val.trim()
+      : (typeof val === 'object' && val !== null ? ((val.target?.value || val.value || '').trim()) : String(val).trim());
+    if (!str || str === 'null' || str === 'undefined') return undefined;
+
+    // Already full ISO string: 2026-03-12T00:00:00.000Z
+    if (/^\d{4}-\d{2}-\d{2}T/.test(str)) {
+      const d = new Date(str);
+      return isNaN(d.getTime()) ? undefined : d.toISOString();
+    }
+
+    // YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+      const [y, m, d] = str.split('-').map(Number);
+      const dateObj = new Date(Date.UTC(y, m - 1, d));
+      return isNaN(dateObj.getTime()) ? undefined : dateObj.toISOString();
+    }
+
+    // DD/MM/YYYY or DD-MM-YYYY
+    const parts = str.split(/[\/\-\.]/);
+    if (parts.length === 3) {
+      if (parts[0].length === 4) {
+        const dateObj = new Date(Date.UTC(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])));
+        return isNaN(dateObj.getTime()) ? undefined : dateObj.toISOString();
+      } else {
+        const dateObj = new Date(Date.UTC(Number(parts[2]), Number(parts[1]) - 1, Number(parts[0])));
+        return isNaN(dateObj.getTime()) ? undefined : dateObj.toISOString();
+      }
+    }
+
+    const fallback = new Date(str);
+    return isNaN(fallback.getTime()) ? undefined : fallback.toISOString();
+  };
+
+  const handleUpdateLeadDetails = async (overrides?: Record<string, any>) => {
+    if (!isEditing) return;
+    const targetStage = overrides?.stage ?? editStage;
+    const baseline = fullLead.stage || 'TO_CONTACT';
+    const curIdx = STAGE_ORDER.indexOf(baseline);
+    const tarIdx = STAGE_ORDER.indexOf(targetStage);
+    if (curIdx !== -1 && tarIdx !== -1 && tarIdx < curIdx) {
+      toast.error('Moving lead to a previous stage is not allowed.');
+      return;
+    }
+
+    setSavingLeadDetails(true);
+    try {
+      const currentParsed = parseLeadNotes(fullLead.notes);
+      const newParsedNotes = {
+        ...currentParsed,
+        leadStatus: overrides?.status ?? editStatus,
+        leadType: overrides?.type ?? editType,
+      };
+
+      const validEmpId = (id?: any) => (id && typeof id === 'string' && /^[0-9a-fA-F]{24}$/.test(id.trim())) ? id.trim() : undefined;
+      const rawFollowUp = overrides?.followUp !== undefined ? overrides.followUp : editFollowUp;
+      const safeFollowUp = parseSafeFollowUpDate(rawFollowUp);
+
+      const payload: any = {
+        stage: targetStage,
+        source: overrides?.source ?? editSource,
+        assignedEmployeeId: validEmpId(overrides?.assignee !== undefined ? overrides.assignee : editAssignee),
+        followUpDate: safeFollowUp,
+        premiumBudget: Number(overrides?.premium ?? editPremium) || 0,
+        notes: JSON.stringify(newParsedNotes),
+      };
+
+      await leadsService.update(lead.id, payload);
+      onEditingChange(false);
+      qc.invalidateQueries({ queryKey: ['leads'] });
+      qc.invalidateQueries({ queryKey: ['lead-detail-popup', lead.id] });
+      toast.success('Lead details updated');
+      if (payload.stage === 'PROCESS_COMPLETED' && onTriggerPolicyCreation) {
+        onTriggerPolicyCreation(fullLead || lead);
+      }
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || 'Failed to update lead details');
+    } finally {
+      setSavingLeadDetails(false);
+    }
+  };
+
+  const addConsultationMutation = useMutation({
+    mutationFn: (notes: string) => leadsService.addConsultation(lead.id, { notes }),
+    onSuccess: () => {
+      setCommentText('');
+      refetch();
+      qc.invalidateQueries({ queryKey: ['leads'] });
+      toast.success('Comment added');
+    },
+    onError: () => toast.error('Failed to add comment'),
+  });
+
+  const c = fullLead.contact;
+  const hotness = deriveHotness(fullLead);
+  const hotnessConf = HOTNESS_CONFIG[hotness];
+  const leadNotes = parseLeadNotes(fullLead.notes);
+  const assigneeName = fullLead.assignedEmployee?.employeeProfile
+    ? `${fullLead.assignedEmployee.employeeProfile.firstName} ${fullLead.assignedEmployee.employeeProfile.lastName}`
+    : fullLead.assignedEmployee?.name || 'Unassigned';
+
+  const tabs: { id: 'overview' | 'comments' | 'history'; label: string }[] = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'comments', label: `Consultation Comments (${consultations.length})` },
+    { id: 'history', label: 'History' },
+  ];
+
+  return (
+    <div className="space-y-4 text-sm sm:text-base">
+      {/* Header */}
+      <div className="flex items-start justify-between bg-gradient-to-r from-slate-50 to-blue-50/30 rounded-xl p-4 border border-slate-100">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="w-12 h-12 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-lg font-bold">
+            {c?.firstName?.[0]?.toUpperCase() ?? '?'}
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-gray-900">{c?.firstName} {c?.lastName}</h3>
+            <div className="flex flex-wrap items-center gap-2 mt-1 flex-wrap">
+              {fullLead.leadId && (
+                <span className="font-mono text-[11px] font-extrabold bg-blue-100 text-blue-800 px-2 py-0.5 rounded border border-blue-200">
+                  {fullLead.leadId}
+                </span>
+              )}
+              <span className={clsx('text-[9px] px-2 py-0.5 rounded-full font-bold border uppercase tracking-wider', BADGE_STYLES[fullLead.stage] ?? 'bg-gray-100 text-gray-700 border-gray-200')}>
+                {STAGE_LABELS[fullLead.stage] ?? fullLead.stage}
+              </span>
+              <span className={clsx('flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded border font-bold', hotnessConf.cls)}>
+                <HotnessIcon level={hotness} /> {hotnessConf.label}
+              </span>
+              {fullLead.plan && <span className="text-[10px] text-slate-500">• {fullLead.plan.name}</span>}
+            </div>
+          </div>
+        </div>
+        {onEdit && (
+          <button
+            type="button"
+            onClick={() => onEdit(fullLead || lead)}
+            className="btn-secondary text-[10px] sm:text-xs flex flex-wrap items-center gap-1"
+          >
+            <Pencil size={12} /> Contact
+          </button>
+        )}
+      </div>
+
+      {/* Tab nav */}
+      <div className="flex border-b border-gray-200">
+        {tabs.map(t => (
+          <button key={t.id} onClick={() => onTabChange(t.id)}
+            className={clsx('px-4 py-2 text-xs font-semibold border-b-2 transition-colors',
+              tab === t.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-800')}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Fixed height tab content container so popup size remains constant when switching tabs */}
+      <div className="h-[400px] min-h-[400px] max-h-[400px] overflow-y-auto custom-scrollbar pr-1">
+        {/* Overview */}
+        {tab === 'overview' && (
+          <div className="space-y-4">
+            {/* Non-Editable Product Interest Data Cards */}
+            {(() => {
+              const backendInterests: any[] = contactData?.data?.productInterests || [];
+
+              // Find specific matching backend product interest for this lead (by ID or plan category/interest match), fallback to fullLead
+              const leadInterests = fullLead.interests && fullLead.interests.length > 0
+                ? fullLead.interests
+                : [fullLead.plan?.name || fullLead.plan?.category].filter(Boolean);
+
+              const matchedBackendInterest = backendInterests.find((pi: any) => {
+                if (pi.id && fullLead.id && pi.id === fullLead.id) return true;
+                if (pi.productInterestId && fullLead.id && pi.productInterestId === fullLead.id) return true;
+                if (pi.planId && fullLead.planId && pi.planId === fullLead.planId) return true;
+                const piInterests: string[] = pi.interests && pi.interests.length > 0
+                  ? pi.interests
+                  : [pi.plan?.name || pi.plan?.category].filter(Boolean);
+                return piInterests.some(i => leadInterests.includes(i));
+              });
+
+              const allProductInterestsList = matchedBackendInterest ? [matchedBackendInterest] : [fullLead];
+
+              return (
+                <div className="space-y-3">
+                  {allProductInterestsList.map((pi: any, idx: number) => {
+                    const parsedNotes = parseLeadNotes(pi.notes);
+                    const interestsList: string[] = pi.interests && pi.interests.length > 0
+                      ? pi.interests
+                      : [pi.plan?.name || pi.plan?.category || 'Health'];
+                    const premium = pi.premiumBudget || pi.expectedPremium || 0;
+                    const sumAssured = pi.sumAssuredRequired || pi.sumAssured || 0;
+                    const planName = pi.plan?.name;
+                    const companyName = pi.plan?.company?.name;
+
+                    return (
+                      <div key={pi.id || idx} className="bg-gradient-to-br from-blue-50/90 via-slate-50 to-indigo-50/50 border border-blue-200/80 rounded-2xl p-4 space-y-3 shadow-2xs">
+                        <div className="flex items-center justify-between border-b border-blue-100/80 pb-2.5">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="w-7 h-7 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold shadow-2xs text-xs">
+                              <Shield size={15} />
+                            </div>
+                            <div>
+                              <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 block">Product Interest {allProductInterestsList.length > 1 ? `#${idx + 1}` : ''}</span>
+                              <h4 className="text-xs font-extrabold text-slate-800">Selected Product Interest Details</h4>
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {pi.stage && (
+                              <span className={clsx('text-[9px] px-2 py-0.5 rounded-full font-bold border uppercase tracking-wider', BADGE_STYLES[pi.stage] ?? 'bg-gray-100 text-gray-700 border-gray-200')}>
+                                {STAGE_LABELS[pi.stage] ?? pi.stage}
+                              </span>
+                            )}
+                            <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase bg-slate-200/80 text-slate-600 border border-slate-300/60 flex flex-wrap items-center gap-1">
+                              <Lock size={9} className="text-slate-500" /> Non-Editable
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+                          <div className="bg-white/90 rounded-xl p-3 border border-slate-200/80 shadow-2xs">
+                            <span className="text-[9.5px] font-extrabold text-slate-400 uppercase tracking-wider block mb-1">Selected Product(s)</span>
+                            <div className="flex flex-wrap gap-1.5 mt-0.5">
+                              {interestsList.map((prod: string, i: number) => (
+                                <span key={i} className="px-2.5 py-1 rounded-lg text-[11px] font-extrabold bg-blue-600 text-white shadow-2xs">
+                                  ✓ {prod}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+
+
+                          <div className="bg-white/90 rounded-xl p-3 border border-slate-200/80 shadow-2xs">
+                            <span className="text-[9.5px] font-extrabold text-slate-400 uppercase tracking-wider block mb-1">Lead Source</span>
+                            <p className="font-bold text-slate-700 mt-0.5">
+                              {pi.source || fullLead.source || 'Walk-in'}
+                            </p>
+                          </div>
+                        </div>
+
+                        {parsedNotes.descriptionDetails && (
+                          <div className="bg-white/90 rounded-xl p-3 border border-slate-200/80 shadow-2xs text-xs space-y-1">
+                            <span className="text-[9.5px] font-extrabold text-slate-400 uppercase tracking-wider block">Requirements / Description Notes</span>
+                            <p className="text-slate-700 font-medium text-[11px] leading-relaxed whitespace-pre-wrap">
+                              {parsedNotes.descriptionDetails}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+            {(() => {
+              const parsedLeadNotes = parseLeadNotes(fullLead.notes);
+              const connectedPolicyData = fullLead.connectedPolicy;
+              const hasConnectedPolicy = Boolean(
+                connectedPolicyData ||
+                parsedLeadNotes.policyId ||
+                parsedLeadNotes.policyNumber ||
+                ['RENEWAL', 'PORTING', 'RENEWAL/PORTING', 'RENEWAL / PORTING', 'RENEWAL_PORTING'].includes(
+                  (parsedLeadNotes.leadType || editType || '').toUpperCase().trim()
+                ) ||
+                ['RENEWAL', 'PORTING'].includes((fullLead.source || '').toUpperCase().trim())
+              );
+              if (!hasConnectedPolicy && !parsedLeadNotes.policyNumber) return null;
+
+              const policyNumber = connectedPolicyData?.policyNumber || parsedLeadNotes.policyNumber || 'N/A';
+              const policyType = connectedPolicyData?.plan?.category || fullLead.plan?.category || (fullLead.interests && fullLead.interests.length > 0 ? fullLead.interests.join(', ') : '—');
+              const companyName = connectedPolicyData?.plan?.company?.name || parsedLeadNotes.companyName || '—';
+              const planName = connectedPolicyData?.plan?.name || parsedLeadNotes.planName || '—';
+              const premium = Number(connectedPolicyData?.premiumAmount || parsedLeadNotes.premiumAmount || fullLead.premiumBudget || 0);
+              const sumAssured = Number(connectedPolicyData?.sumAssured || parsedLeadNotes.sumAssured || fullLead.sumAssuredRequired || 0);
+              const startDate = connectedPolicyData?.startDate || parsedLeadNotes.startDate;
+              const endDate = connectedPolicyData?.endDate || parsedLeadNotes.endDate;
+              const statusDisplay = connectedPolicyData?.status || 'ACTIVE';
+              const leadTypeLabel = parsedLeadNotes.leadType || editType || 'Renewal/Porting';
+
+              return (
+                <div className="bg-gradient-to-br from-amber-50/90 via-orange-50/60 to-amber-50/80 border border-amber-200/90 rounded-2xl p-4 space-y-3 shadow-2xs">
+                  <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center font-bold text-xs shadow-2xs">
+                        <Shield size={16} />
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-black uppercase tracking-wider text-amber-700 block">Connected Old Policy Details</span>
+                        <h4 className="text-sm font-extrabold text-slate-800">
+                          Policy #{policyNumber}
+                        </h4>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase bg-purple-100 text-purple-700 border border-purple-200">
+                        {leadTypeLabel}
+                      </span>
+                      {policyNumber !== 'N/A' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (onViewConnectedPolicy) {
+                              onViewConnectedPolicy(fullLead);
+                            } else {
+                              window.open(`/policies?search=${encodeURIComponent(policyNumber)}`, '_blank');
+                            }
+                          }}
+                          className="px-2.5 py-1 rounded-xl text-[10px] font-extrabold uppercase bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-all flex items-center gap-1 cursor-pointer"
+                          title="Open connected policy details"
+                        >
+                          <Eye size={12} />
+                          Old Policy Details
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 text-xs">
+                    <div className="bg-white/80 rounded-xl p-2.5 border border-amber-100">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Policy Number & Status</span>
+                      <p className="font-extrabold text-blue-700 mt-0.5">
+                        #{policyNumber}
+                      </p>
+                      <span className="inline-block mt-0.5 px-1.5 py-0.2 rounded text-[9px] font-bold uppercase bg-emerald-50 text-emerald-700 border border-emerald-100">
+                        {statusDisplay}
+                      </span>
+                    </div>
+
+                    <div className="bg-white/80 rounded-xl p-2.5 border border-amber-100">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Policy Type</span>
+                      <p className="font-bold text-slate-700 mt-0.5 uppercase tracking-wide">
+                        {policyType}
+                      </p>
+                    </div>
+
+                    <div className="bg-white/80 rounded-xl p-2.5 border border-amber-100">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Expiry / End Date</span>
+                      <p className="font-bold text-rose-600 mt-0.5 flex flex-wrap items-center gap-1">
+                        <Calendar size={12} />
+                        {endDate ? new Date(endDate).toLocaleDateString('en-IN') : '—'}
+                      </p>
+                      {startDate && (
+                        <p className="text-[10px] text-slate-500 font-medium mt-0.5">
+                          Started: {new Date(startDate).toLocaleDateString('en-IN')}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="bg-white/80 rounded-xl p-2.5 border border-amber-100 sm:col-span-2">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Company & Plan Name</span>
+                      <p className="font-bold text-slate-700 mt-0.5 truncate">
+                        {companyName}
+                      </p>
+                      <p className="text-[11px] font-semibold text-slate-500 truncate">
+                        {planName}
+                      </p>
+                    </div>
+
+                    <div className="bg-white/80 rounded-xl p-2.5 border border-amber-100">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Premium & Sum Insured</span>
+                      <p className="font-bold text-emerald-700 mt-0.5">
+                        Premium: ₹{premium.toLocaleString('en-IN')}
+                      </p>
+                      <p className="text-[11px] font-semibold text-slate-600">
+                        Sum Insured: ₹{sumAssured.toLocaleString('en-IN')}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+            {/* Directly editable Lead Information & Status */}
+            <div className="bg-white border border-slate-200/90 rounded-2xl p-4 space-y-3.5 shadow-2xs">
+              <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 pb-2">
+                <div className="w-7 h-7 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-xs shadow-2xs shrink-0">
+                  <Pencil size={14} />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">Lead Information & Status</h4>
+                  <p className="text-[10px] text-slate-400">
+                    {isEditing ? 'Update editable fields for this lead' : 'View lead information and status'}
+                  </p>
+                </div>
+              </div>
+
+              <fieldset disabled={!isEditing} className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                {/* Lead Stage */}
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block mb-1">Lead Stage <span className="text-red-500">*</span></label>
+                  <select
+                    value={editStage}
+                    onChange={e => {
+                      const target = e.target.value;
+                      const baseline = fullLead.stage || 'TO_CONTACT';
+                      const curIdx = STAGE_ORDER.indexOf(baseline);
+                      const tarIdx = STAGE_ORDER.indexOf(target);
+                      if (curIdx !== -1 && tarIdx !== -1 && tarIdx < curIdx) {
+                        toast.error('Moving lead to a previous stage is not allowed.');
+                        return;
+                      }
+                      setEditStage(target);
+                    }}
+                    className="input text-xs font-semibold bg-slate-50/50 border-slate-200 focus:bg-white"
+                  >
+                    {UI_STAGES.map(s => {
+                      const key = STAGE_MAPPINGS[s];
+                      const baseline = fullLead.stage || 'TO_CONTACT';
+                      const curIdx = STAGE_ORDER.indexOf(baseline);
+                      const thisIdx = STAGE_ORDER.indexOf(key);
+                      const isPast = curIdx !== -1 && thisIdx !== -1 && thisIdx < curIdx;
+                      return (
+                        <option key={key} value={key} disabled={isPast}>
+                          {s} {isPast ? '(Previous Stage - Not Allowed)' : ''}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                {/* Lead Status */}
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block mb-1">Lead Status <span className="text-red-500">*</span></label>
+                  <select
+                    value={editStatus}
+                    onChange={e => setEditStatus(e.target.value)}
+                    className="input text-xs font-semibold bg-slate-50/50 border-slate-200 focus:bg-white"
+                  >
+                    {!LEAD_STATUS_OPTIONS.some(option => option.value === editStatus) && (
+                      <option value={editStatus} hidden>{editStatus}</option>
+                    )}
+                    {LEAD_STATUS_OPTIONS.map(option => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Lead Type */}
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block mb-1">Lead Type <span className="text-red-500">*</span></label>
+                  <select
+                    value={editType}
+                    onChange={e => setEditType(e.target.value)}
+                    className="input text-xs font-semibold bg-slate-50/50 border-slate-200 focus:bg-white"
+                  >
+                    <option value="Fresh">Fresh</option>
+                    <option value="Renewal">Renewal</option>
+                    <option value="Porting">Porting</option>
+                    <option value="Renewal/Porting">Renewal/Porting</option>
+                  </select>
+                </div>
+
+                {/* Lead Source */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">
+                      Lead Source <span className="text-red-500">*</span>
+                    </label>
+                    {!isAdminOrSuperadmin && (
+                      <span className="text-[8.5px] font-semibold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
+                        Locked
+                      </span>
+                    )}
+                  </div>
+                  <select
+                    disabled={!isEditing || !isAdminOrSuperadmin}
+                    value={editSource}
+                    onChange={e => setEditSource(e.target.value)}
+                    className={`input text-xs font-semibold bg-slate-50/50 border-slate-200 focus:bg-white ${!isAdminOrSuperadmin ? 'opacity-75 bg-slate-100 cursor-not-allowed' : ''}`}
+                  >
+                    {leadSourcesList.map((src: string) => (
+                      <option key={src} value={src}>{src}</option>
+                    ))}
+                    {editSource && !leadSourcesList.includes(editSource) && (
+                      <option value={editSource}>{editSource}</option>
+                    )}
+                  </select>
+                </div>
+
+                {/* Assigned Employee */}
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block mb-1">Assigned Employee</label>
+                  <select
+                    value={editAssignee}
+                    onChange={e => setEditAssignee(e.target.value)}
+                    className="input text-xs font-semibold bg-slate-50/50 border-slate-200 focus:bg-white"
+                  >
+                    <option value="">Unassigned</option>
+                    {employees.map((emp: any) => (
+                      <option key={emp.id} value={emp.userId || emp.id}>
+                        {emp.firstName || emp.employeeProfile?.firstName} {emp.lastName || emp.employeeProfile?.lastName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Follow-up Date */}
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block mb-1">Follow-up Date</label>
+                  <DatePicker
+                    value={editFollowUp}
+                    onDateChange={val => setEditFollowUp(val)}
+                    onChange={val => {
+                      const v = typeof val === 'string' ? val : (val?.target?.value ?? '');
+                      setEditFollowUp(v);
+                    }}
+                    className="input text-xs bg-slate-50/50 border-slate-200 focus:bg-white"
+                  />
+                </div>
+
+                {/* Expected Premium / Budget */}
+                <div className="sm:col-span-2">
+                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block mb-1">Expected Premium / Budget (₹)</label>
+                  <input
+                    type="number"
+                    value={editPremium}
+                    onChange={e => setEditPremium(e.target.value)}
+                    placeholder="e.g. 12000"
+                    className="input text-xs font-bold text-emerald-700 bg-slate-50/50 border-slate-200 focus:bg-white"
+                  />
+                </div>
+              </fieldset>
+            </div>
+
+          </div>
+        )}
+
+        {/* Consultation Comments */}
+        {tab === 'comments' && (
+          <div className="space-y-3">
+            <div className="bg-white border border-slate-200/80 rounded-xl p-3 space-y-2 shadow-2xs">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-bold text-slate-700 block">Add Call Summary / Comment</label>
+                <span className="text-[10px] text-slate-400 font-medium">Press Ctrl+Enter to save</span>
+              </div>
+              <div className="flex gap-2">
+                <textarea
+                  value={commentText}
+                  onChange={e => setCommentText(e.target.value)}
+                  placeholder="Add Call Summary / Comment..."
+                  className="input text-xs flex-1 resize-none bg-slate-50/50 border-slate-200 focus:bg-white"
+                  rows={2}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && commentText.trim()) {
+                      addConsultationMutation.mutate(commentText.trim());
+                    }
+                  }}
+                />
+                <button
+                  onClick={() => commentText.trim() && addConsultationMutation.mutate(commentText.trim())}
+                  disabled={!commentText.trim() || addConsultationMutation.isPending}
+                  className="btn-primary px-3.5 self-end h-8 text-xs flex flex-wrap items-center gap-1 font-bold shadow-2xs"
+                >
+                  {addConsultationMutation.isPending ? <RefreshCw size={12} className="animate-spin" /> : <Send size={12} />} Save
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-2 max-h-[280px] overflow-y-auto custom-scrollbar pr-1">
+              {consultations.length === 0 ? (
+                <div className="text-center py-8 text-slate-400 bg-slate-50/60 border border-slate-200/60 rounded-xl p-4">
+                  <MessageCircle size={24} className="mx-auto mb-2 opacity-40 text-slate-400" />
+                  <p className="text-xs font-medium text-slate-500">No comments yet. Add the first summary below.</p>
+                </div>
+              ) : (
+                [...consultations].reverse().map((c: any) => {
+                  const authorName = c.authorName || (c.author?.employeeProfile ? `${c.author.employeeProfile.firstName || ''} ${c.author.employeeProfile.lastName || ''}`.trim() : (c.author?.email || 'System'));
+                  return (
+                    <div key={c.id} className="bg-white border border-slate-200/80 rounded-xl p-3 shadow-2xs space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-flex flex-wrap items-center gap-1 text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-lg shadow-2xs">
+                          <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+                          {authorName}
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-semibold">
+                          {c.createdAt ? format(new Date(c.createdAt), 'dd/MMM/yyyy, hh:mm a') : ''}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-800 leading-relaxed font-medium">{c.notes}</p>
+                      {c.scheduledAt && (
+                        <p className="text-[10px] text-amber-600 mt-1 flex flex-wrap items-center gap-1">
+                          <Calendar size={10} /> Scheduled: {format(new Date(c.scheduledAt), 'dd/MMM/yyyy')}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Stage */}
+        {/* History Tab - Audit Trail & Activity History */}
+        {tab === 'history' && (() => {
+          const historyEvents: { title: string; description: string; author: string; date: Date; formattedDate: string }[] = [];
+
+          // 1. Lead Created & Initialized
+          if (fullLead.createdAt) {
+            const d = new Date(fullLead.createdAt);
+            const clientName = `${fullLead.contact?.firstName || ''} ${fullLead.contact?.lastName || ''}`.trim();
+            historyEvents.push({
+              title: 'Lead Created & Scheduled',
+              description: clientName ? `Lead record initialized for ${clientName}${fullLead.source ? ` via ${fullLead.source}` : ''}` : 'Lead record initialized in system.',
+              author: assigneeName && assigneeName !== 'Unassigned' ? assigneeName : 'CRM Automated Workflow',
+              date: d,
+              formattedDate: format(d, 'dd MMM yyyy, hh:mm a'),
+            });
+          }
+
+          // 2. Follow-up Scheduled
+          if (fullLead.followUpDate) {
+            const d = new Date(fullLead.followUpDate);
+            const dateStr = format(d, 'yyyy-MM-dd');
+            historyEvents.push({
+              title: 'Task Created & Scheduled',
+              description: `Follow-up scheduled for ${dateStr} with priority MEDIUM`,
+              author: assigneeName && assigneeName !== 'Unassigned' ? assigneeName : 'System',
+              date: d,
+              formattedDate: format(d, 'dd MMM yyyy, hh:mm a'),
+            });
+          }
+
+          // 3. Workflow Status Updated
+          if (fullLead.stage) {
+            const stageName = STAGE_LABELS[fullLead.stage] || fullLead.stage;
+            const d = fullLead.updatedAt ? new Date(fullLead.updatedAt) : (fullLead.createdAt ? new Date(fullLead.createdAt) : new Date());
+            historyEvents.push({
+              title: `Workflow Status Updated to ${stageName}`,
+              description: `Execution updated stage to ${stageName}.${assigneeName && assigneeName !== 'Unassigned' ? ` Assigned to ${assigneeName}.` : ''}`,
+              author: assigneeName && assigneeName !== 'Unassigned' ? assigneeName : 'CRM Automated Workflow',
+              date: d,
+              formattedDate: format(d, 'dd MMM yyyy, hh:mm a'),
+            });
+          }
+
+          // 4. Consultation Notes / Activity Entries
+          if (consultations && Array.isArray(consultations)) {
+            consultations.forEach((c: any) => {
+              const d = c.createdAt ? new Date(c.createdAt) : new Date();
+              historyEvents.push({
+                title: 'Activity Log Note Added',
+                description: c.text || 'Activity record updated for lead.',
+                author: c.author || c.createdBy || assigneeName || 'CRM Automated Workflow',
+                date: d,
+                formattedDate: format(d, 'dd MMM yyyy, hh:mm a'),
+              });
+            });
+          }
+
+          // Sort chronologically (oldest to newest)
+          historyEvents.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+          return (
+            <div className="space-y-4 py-2">
+              <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs space-y-5">
+                {/* Header */}
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <History className="text-blue-600 shrink-0" size={18} />
+                    <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                      AUDIT TRAIL & ACTIVITY HISTORY
+                    </h4>
+                  </div>
+                  <span className="text-[11px] font-extrabold text-slate-500">
+                    {historyEvents.length} {historyEvents.length === 1 ? 'Event Recorded' : 'Events Recorded'}
+                  </span>
+                </div>
+
+                {/* Timeline Container */}
+                {historyEvents.length === 0 ? (
+                  <div className="py-8 text-center border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                    <History size={24} className="mx-auto mb-2 text-slate-300" />
+                    <p className="text-xs text-slate-400 font-medium italic">No audit trail logs recorded yet.</p>
+                  </div>
+                ) : (
+                  <div className="relative border-l-2 border-slate-200 ml-4 pl-6 space-y-5 py-1">
+                    {historyEvents.map((evt, idx) => (
+                      <div key={idx} className="relative group">
+                        {/* Timeline Pulse Icon */}
+                        <div className="absolute -left-[41px] top-3.5 w-8 h-8 rounded-full bg-white border-2 border-blue-500 text-blue-600 flex items-center justify-center shadow-2xs z-10">
+                          <Activity size={14} className="text-blue-600 stroke-[2.5]" />
+                        </div>
+
+                        {/* Event Card */}
+                        <div className="bg-slate-50/70 hover:bg-slate-50 transition-colors border border-slate-200/80 rounded-2xl p-4 space-y-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <h5 className="text-xs font-bold text-slate-900 leading-snug">
+                              {evt.title}
+                            </h5>
+                            <span className="text-[11px] font-semibold text-slate-400 whitespace-nowrap">
+                              {evt.formattedDate}
+                            </span>
+                          </div>
+                          {evt.description && (
+                            <p className="text-[11px] font-medium text-slate-600 leading-relaxed">
+                              {evt.description}
+                            </p>
+                          )}
+                          <div className="pt-0.5">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-[10px] font-bold bg-blue-50/80 text-blue-700 border border-blue-100/80">
+                              <UserCircle2 size={12} className="shrink-0" />
+                              By {evt.author}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+      </div>
+    </div>
+  );
+}
+
+// ── Utility export ─────────────────────────────────────────────────────────────
+export function cleanLeadPayload(body: any) {
+  const payload: any = { ...body };
+  if (payload.sumAssuredRequired === '' || payload.sumAssuredRequired == null) {
+    delete payload.sumAssuredRequired;
+  } else {
+    payload.sumAssuredRequired = Number(payload.sumAssuredRequired);
+  }
+  if (payload.premiumBudget === '' || payload.premiumBudget == null) {
+    delete payload.premiumBudget;
+  } else {
+    payload.premiumBudget = Number(payload.premiumBudget);
+  }
+  if (payload.followUpDate === '') {
+    payload.followUpDate = null;
+  } else if (payload.followUpDate) {
+    payload.followUpDate = new Date(payload.followUpDate).toISOString();
+  }
+  return payload;
+}

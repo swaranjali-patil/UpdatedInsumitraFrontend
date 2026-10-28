@@ -1,0 +1,573 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Design tokens ─────────────────────────────────────────────────────────── */
+:root {
+  --primary:       #2563eb;
+  --primary-dark:  #1d4ed8;
+  --primary-light: #eff6ff;
+  --accent:        #7c3aed;
+  --success:       #10b981;
+  --success-bg:    #ecfdf5;
+  --warning:       #f59e0b;
+  --warning-bg:    #fffbeb;
+  --danger:        #ef4444;
+  --danger-bg:     #fef2f2;
+  --bg-body:       #f8fafc;
+  --bg-card:       #ffffff;
+  --text-main:     #0f172a;
+  --text-muted:    #64748b;
+  --border:        #e2e8f0;
+  --border-light:  #f1f5f9;
+  --radius:        1rem;
+  --app-font-size: 0.9375rem;
+  --shadow-xs:     0 1px 2px rgba(0,0,0,0.02);
+  --shadow-sm:     0 2px 8px rgba(0,0,0,0.03), 0 1px 3px rgba(0,0,0,0.02);
+  --shadow:        0 4px 16px rgba(0,0,0,0.04), 0 2px 6px rgba(0,0,0,0.02);
+  --shadow-md:     0 8px 24px rgba(0,0,0,0.05), 0 3px 8px rgba(0,0,0,0.02);
+  --shadow-lg:     0 12px 32px rgba(0,0,0,0.07), 0 4px 12px rgba(0,0,0,0.03);
+}
+
+/* ── Base ──────────────────────────────────────────────────────────────────── */
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html {
+    @apply antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+    scroll-behavior: smooth;
+    font-size: 16px;
+  }
+
+  @media (max-width: 639px) {
+    html {
+      font-size: 14px;
+    }
+  }
+
+  @media (min-width: 640px) and (max-width: 1023px) {
+    html {
+      font-size: 15px;
+    }
+  }
+
+  body {
+    background: var(--bg-body);
+    color: var(--text-main);
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: var(--app-font-size, 0.9375rem);
+    letter-spacing: -0.01em;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, h4 {
+    @apply font-bold;
+    letter-spacing: -0.022em;
+  }
+
+  /* Remove number spinners */
+  input[type='number']::-webkit-inner-spin-button,
+  input[type='number']::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  input[type='number'] { -moz-appearance: textfield; appearance: textfield; }
+  /* Global Table Styles */
+  table {
+    @apply w-full border-collapse border border-slate-200;
+  }
+  th, td {
+    @apply border border-slate-200;
+  }
+  tbody tr:nth-child(even) {
+    @apply bg-slate-50/80;
+  }
+  tbody tr:nth-child(odd) {
+    @apply bg-white;
+  }
+}
+
+/* ── Component layer ───────────────────────────────────────────────────────── */
+@layer components {
+
+  /* ──────────────────────────── Buttons ──────────────────────────────────── */
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-1.5
+           px-4 py-2 sm:px-3.5 sm:py-[7px] rounded-lg text-base sm:text-sm font-semibold
+           bg-blue-600 text-white
+           hover:bg-blue-700 active:bg-blue-800
+           disabled:opacity-50 disabled:cursor-not-allowed
+           transition-all duration-150 select-none;
+    box-shadow: 0 1px 2px rgba(37,99,235,0.2), inset 0 1px 0 rgba(255,255,255,0.1);
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-1.5
+           px-4 py-2 sm:px-3.5 sm:py-[7px] rounded-lg text-base sm:text-sm font-medium
+           bg-white text-gray-700
+           border border-gray-200
+           hover:bg-gray-50 hover:border-gray-300
+           disabled:opacity-50 disabled:cursor-not-allowed
+           transition-all duration-150 select-none;
+    box-shadow: var(--shadow-xs);
+  }
+
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-1.5
+           px-4 py-2 sm:px-3.5 sm:py-[7px] rounded-lg text-base sm:text-sm font-semibold
+           bg-red-600 text-white
+           hover:bg-red-700 active:bg-red-800
+           disabled:opacity-50 disabled:cursor-not-allowed
+           transition-all duration-150 select-none;
+    box-shadow: 0 1px 2px rgba(220,38,38,0.2);
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-1.5
+           px-4 py-2 sm:px-3 sm:py-[7px] rounded-lg text-base sm:text-sm font-medium
+           text-gray-600 hover:bg-gray-100 hover:text-gray-900
+           disabled:opacity-50 disabled:cursor-not-allowed
+           transition-all duration-150 select-none;
+  }
+
+  /* ──────────────────────────── Cards ─────────────────────────────────────── */
+
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-sm);
+    padding: 20px 24px;
+  }
+
+  .card-sm {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: var(--shadow-xs);
+    padding: 14px 16px;
+  }
+
+  .card-panel {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-sm);
+    padding: 24px;
+  }
+
+  /* ──────────────────────────── Inputs ────────────────────────────────────── */
+
+  .input {
+    @apply w-full rounded-lg border bg-white px-3.5 py-2.5 sm:px-3 sm:py-[7px]
+           text-base sm:text-sm text-gray-900 placeholder-gray-400
+           outline-none transition-all duration-150
+           disabled:bg-gray-50 disabled:text-gray-400 disabled:cursor-not-allowed;
+    border-color: var(--border);
+    box-shadow: var(--shadow-xs);
+  }
+  .input:hover:not(:disabled) { border-color: #d1d5db; }
+  .input:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(37,99,235,0.1), var(--shadow-xs);
+    outline: none;
+  }
+
+  .label {
+    @apply block text-xs sm:text-xs font-extrabold uppercase tracking-wider text-slate-900 mb-1.5;
+  }
+
+  /* ──────────────────────────── Badges ────────────────────────────────────── */
+
+  .badge {
+    @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full
+           text-xs font-semibold border tracking-wide;
+  }
+  .badge-blue   { @apply badge bg-blue-50   text-blue-700   border-blue-200/80;   }
+  .badge-green  { @apply badge bg-emerald-50 text-emerald-700 border-emerald-200/80; }
+  .badge-red    { @apply badge bg-red-50    text-red-700    border-red-200/80;    }
+  .badge-yellow { @apply badge bg-amber-50  text-amber-700  border-amber-200/80;  }
+  .badge-purple { @apply badge bg-purple-50 text-purple-700 border-purple-200/80; }
+  .badge-orange { @apply badge bg-orange-50 text-orange-700 border-orange-200/80; }
+  .badge-gray   { @apply badge bg-gray-100  text-gray-600   border-gray-200;      }
+  .badge-teal   { @apply badge bg-teal-50   text-teal-700   border-teal-200/80;   }
+  .badge-indigo { @apply badge bg-indigo-50 text-indigo-700 border-indigo-200/80; }
+
+  /* ──────────────────────────── Toggle group ──────────────────────────────── */
+
+  .toggle-group {
+    @apply inline-flex rounded-lg p-0.5;
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+  }
+  .toggle-group button {
+    @apply px-3.5 py-1.5 text-xs sm:text-sm font-semibold text-gray-500
+           rounded-md transition-all duration-150 whitespace-nowrap;
+  }
+  .toggle-group button.active {
+    @apply bg-white text-blue-600;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
+  }
+
+  /* ──────────────────────────── Page anatomy ──────────────────────────────── */
+
+  .page-header {
+    @apply flex items-center justify-between mb-5;
+  }
+
+  .page-title {
+    @apply text-2xl font-bold text-gray-900 tracking-tight;
+  }
+
+  .page-subtitle {
+    @apply text-sm text-slate-600 font-medium mt-0.5;
+  }
+
+  .section-label {
+    @apply text-xs font-extrabold uppercase tracking-widest text-slate-900 mb-3;
+  }
+
+  /* ──────────────────────────── Misc helpers ──────────────────────────────── */
+
+  .divider { @apply border-t border-gray-100 my-4; }
+
+  .icon-btn {
+    @apply p-1.5 rounded-lg transition-colors duration-150
+           text-gray-400 hover:text-gray-700 hover:bg-gray-100;
+  }
+
+  .form-section {
+    @apply rounded-xl border border-gray-100 bg-gray-50/50 p-4 space-y-3;
+  }
+
+  .form-section-title {
+    @apply text-xs font-extrabold uppercase tracking-widest text-slate-900 mb-1;
+  }
+
+  /* ──────────────────────────── Scrollbar ─────────────────────────────────── */
+
+  .custom-scrollbar::-webkit-scrollbar        { width: 5px; height: 5px; }
+  .custom-scrollbar::-webkit-scrollbar-track  { background: transparent; }
+  .custom-scrollbar::-webkit-scrollbar-thumb  { background: #d1d5db; border-radius: 10px; }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+
+  .tab-scrollbar::-webkit-scrollbar { height: 6px; }
+  .tab-scrollbar::-webkit-scrollbar-track { background: rgba(226, 232, 240, 0.7); border-radius: 9999px; }
+  .tab-scrollbar::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 9999px; }
+  .tab-scrollbar::-webkit-scrollbar-thumb:hover { background: #64748b; }
+  .tab-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: #94a3b8 rgba(226, 232, 240, 0.7);
+  }
+
+  /* Hide scrollbar for Chrome, Safari, Opera */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+  /* Hide scrollbar for IE, Edge and Firefox */
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  /* ──────────────────────────── Tables (legacy) ───────────────────────────── */
+
+  .modern-table { @apply w-full border-collapse; }
+  .modern-table th {
+    @apply px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider
+           text-gray-400 border-b border-gray-100 bg-gray-50/70;
+  }
+  .modern-table td {
+    @apply px-4 py-3 text-sm text-gray-700 border-b border-gray-50;
+  }
+  .hover-row { @apply transition-colors duration-100 cursor-pointer; }
+  .hover-row:hover { @apply bg-blue-50/30; }
+
+  /* ──────────────────────────── Assign badge ──────────────────────────────── */
+
+  .badge-assign {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full
+           text-xs font-semibold bg-gray-100 text-gray-500;
+  }
+
+  /* ──────────────────────────── Stat highlight ────────────────────────────── */
+
+  .stat-ring { @apply rounded-xl p-4 border; }
+}
+
+/* ── Animations ────────────────────────────────────────────────────────────── */
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(6px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.animate-fade-in   { animation: fade-in 0.18s ease-out both; }
+.animate-slide-in  { animation: slide-in-right 0.2s ease-out both; }
+.animate-pulse-dot { animation: pulse-dot 1.5s ease-in-out infinite; }
+
+/* ── Focus visible ─────────────────────────────────────────────────────────── */
+
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* ── Print ─────────────────────────────────────────────────────────────────── */
+
+@media print {
+  .no-print { display: none !important; }
+  body { background: white; }
+}
+
+/* ── Tailwind primary color shim (used via primary-600 etc.) ───────────────── */
+
+.bg-primary-100 { background-color: #dbeafe; }
+.bg-primary-600 { background-color: #2563eb; }
+.bg-primary-700 { background-color: #1d4ed8; }
+.text-primary-600 { color: #2563eb; }
+.text-primary-700 { color: #1d4ed8; }
+.border-primary-500 { border-color: #3b82f6; }
+.ring-primary-500 { --tw-ring-color: #3b82f6; }
+.focus\:ring-primary-500:focus { --tw-ring-color: #3b82f6; }
+
+/* ── Accessibility & Readability Enhancements ───────────────────────────── */
+.text-gray-400 { color: #6b7280 !important; }
+.text-slate-400 { color: #6b7280 !important; }
+.text-gray-500 { color: #4b5563 !important; }
+.text-slate-500 { color: #4b5563 !important; }
+.text-gray-600 { color: #374151 !important; }
+.text-slate-600 { color: #374151 !important; }
+.label, label {
+  color: #0f172a !important;
+  font-weight: 800 !important;
+}
+.page-subtitle { color: #334155 !important; }
+.text-red-600, .text-red-500 { color: #dc2626 !important; }
+
+/* ── Sidebar specific overrides (keeps them crisp on dark bg) ────────────── */
+aside .text-slate-400 { color: #cbd5e1 !important; }
+aside .text-slate-500 { color: #94a3b8 !important; }
+aside .text-blue-400 { color: #38bdf8 !important; }
+aside .text-slate-200 { color: #f8fafc !important; }
+aside .text-slate-100 { color: #f1f5f9 !important; }
+aside .text-slate-300 { color: #e2e8f0 !important; }
+aside .text-slate-500 { color: #94a3b8 !important; }
+aside .text-slate-600 { color: #64748b !important; }
+
+/* ── Fixed Heights to Prevent Component Layout Shifts ── */
+.btn-primary, .btn-secondary, .btn-danger, .btn-ghost, .input, select {
+  height: 2.25rem !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+
+/* ── Global Typography Scaling (Text Size Only) ── */
+body, button, input, select, textarea {
+  font-size: calc(var(--app-font-size, 0.84375rem) * var(--font-scale, 1));
+}
+
+.text-\[10px\] { font-size: calc(10px * var(--font-scale, 1)) !important; }
+.text-\[11px\] { font-size: calc(11px * var(--font-scale, 1)) !important; }
+.text-\[12px\] { font-size: calc(12px * var(--font-scale, 1)) !important; }
+.text-\[13px\] { font-size: calc(13px * var(--font-scale, 1)) !important; }
+.text-\[14px\] { font-size: calc(14px * var(--font-scale, 1)) !important; }
+.text-\[15px\] { font-size: calc(15px * var(--font-scale, 1)) !important; }
+
+.text-xs { font-size: calc(0.75rem * var(--font-scale, 1)) !important; line-height: 1.33 !important; }
+.text-sm { font-size: calc(0.875rem * var(--font-scale, 1)) !important; line-height: 1.43 !important; }
+.text-base { font-size: calc(1rem * var(--font-scale, 1)) !important; line-height: 1.5 !important; }
+.text-lg { font-size: calc(1.125rem * var(--font-scale, 1)) !important; line-height: 1.55 !important; }
+.text-xl { font-size: calc(1.25rem * var(--font-scale, 1)) !important; line-height: 1.4 !important; }
+.text-2xl { font-size: calc(1.5rem * var(--font-scale, 1)) !important; line-height: 1.33 !important; }
+.text-3xl { font-size: calc(1.875rem * var(--font-scale, 1)) !important; line-height: 1.25 !important; }
+.text-4xl { font-size: calc(2.25rem * var(--font-scale, 1)) !important; line-height: 1.2 !important; }
+.text-5xl { font-size: calc(3rem * var(--font-scale, 1)) !important; line-height: 1.15 !important; }
+.text-6xl { font-size: calc(3.75rem * var(--font-scale, 1)) !important; line-height: 1.12 !important; }
+
+@media (min-width: 640px) {
+  .sm\:text-\[11px\] { font-size: calc(11px * var(--font-scale, 1)) !important; }
+  .sm\:text-\[13px\] { font-size: calc(13px * var(--font-scale, 1)) !important; }
+  .sm\:text-xs { font-size: calc(0.75rem * var(--font-scale, 1)) !important; line-height: 1.33 !important; }
+  .sm\:text-sm { font-size: calc(0.875rem * var(--font-scale, 1)) !important; line-height: 1.43 !important; }
+  .sm\:text-base { font-size: calc(1rem * var(--font-scale, 1)) !important; line-height: 1.5 !important; }
+  .sm\:text-lg { font-size: calc(1.125rem * var(--font-scale, 1)) !important; line-height: 1.55 !important; }
+  .sm\:text-xl { font-size: calc(1.25rem * var(--font-scale, 1)) !important; line-height: 1.4 !important; }
+  .sm\:text-2xl { font-size: calc(1.5rem * var(--font-scale, 1)) !important; line-height: 1.33 !important; }
+}
+
+@media (min-width: 768px) {
+  .md\:text-xs { font-size: calc(0.75rem * var(--font-scale, 1)) !important; line-height: 1.33 !important; }
+  .md\:text-sm { font-size: calc(0.875rem * var(--font-scale, 1)) !important; line-height: 1.43 !important; }
+  .md\:text-base { font-size: calc(1rem * var(--font-scale, 1)) !important; line-height: 1.5 !important; }
+  .md\:text-lg { font-size: calc(1.125rem * var(--font-scale, 1)) !important; line-height: 1.55 !important; }
+  .md\:text-xl { font-size: calc(1.25rem * var(--font-scale, 1)) !important; line-height: 1.4 !important; }
+  .md\:text-2xl { font-size: calc(1.5rem * var(--font-scale, 1)) !important; line-height: 1.33 !important; }
+}
+
+@media (min-width: 1024px) {
+  .lg\:text-xs { font-size: calc(0.75rem * var(--font-scale, 1)) !important; line-height: 1.33 !important; }
+  .lg\:text-sm { font-size: calc(0.875rem * var(--font-scale, 1)) !important; line-height: 1.43 !important; }
+  .lg\:text-base { font-size: calc(1rem * var(--font-scale, 1)) !important; line-height: 1.5 !important; }
+  .lg\:text-lg { font-size: calc(1.125rem * var(--font-scale, 1)) !important; line-height: 1.55 !important; }
+  .lg\:text-xl { font-size: calc(1.25rem * var(--font-scale, 1)) !important; line-height: 1.4 !important; }
+  .lg\:text-2xl { font-size: calc(1.5rem * var(--font-scale, 1)) !important; line-height: 1.33 !important; }
+}
+
+/* ── Module Scale 80% (0.80) & Typography Compensation ── */
+.module-scale-80 {
+  zoom: 0.8;
+  --font-scale: 1.2;
+}
+
+@supports not (zoom: 0.8) {
+  .module-scale-80 {
+    transform: scale(0.8);
+    transform-origin: top left;
+    width: 125%;
+    min-height: 125%;
+  }
+}
+
+/* ── Scaled Module Typography Enhancements ── */
+.module-scale-80,
+.module-scale-80 button,
+.module-scale-80 input,
+.module-scale-80 select,
+.module-scale-80 textarea,
+.module-scale-80 table {
+  font-size: calc(var(--app-font-size, 0.84375rem) * 1.2);
+}
+
+.module-scale-80 .text-\[9px\]  { font-size: 11.5px !important; }
+.module-scale-80 .text-\[10px\] { font-size: 12.5px !important; }
+.module-scale-80 .text-\[11px\] { font-size: 13.5px !important; }
+.module-scale-80 .text-\[12px\] { font-size: 14.5px !important; }
+.module-scale-80 .text-\[13px\] { font-size: 15.5px !important; }
+.module-scale-80 .text-\[14px\] { font-size: 16.5px !important; }
+.module-scale-80 .text-\[15px\] { font-size: 17.5px !important; }
+
+.module-scale-80 .text-xs   { font-size: 0.875rem !important; line-height: 1.35 !important; }  /* ~14px */
+.module-scale-80 .text-sm   { font-size: 1rem !important; line-height: 1.45 !important; }      /* ~16px */
+.module-scale-80 .text-base { font-size: 1.125rem !important; line-height: 1.5 !important; }    /* ~18px */
+.module-scale-80 .text-lg   { font-size: 1.25rem !important; line-height: 1.5 !important; }     /* ~20px */
+.module-scale-80 .text-xl   { font-size: 1.375rem !important; line-height: 1.4 !important; }    /* ~22px */
+.module-scale-80 .text-2xl  { font-size: 1.625rem !important; line-height: 1.35 !important; }   /* ~26px */
+.module-scale-80 .text-3xl  { font-size: 2rem !important; line-height: 1.3 !important; }       /* ~32px */
+
+/* Table headers & cells inside scaled modules */
+.module-scale-80 th {
+  font-size: 13.5px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.03em !important;
+}
+.module-scale-80 td {
+  font-size: 14.5px !important;
+}
+
+/* Inputs, buttons & controls inside scaled modules */
+.module-scale-80 .btn-primary,
+.module-scale-80 .btn-secondary,
+.module-scale-80 .btn-danger,
+.module-scale-80 .btn-ghost,
+.module-scale-80 .input,
+.module-scale-80 select {
+  font-size: 14.5px !important;
+  font-weight: 600 !important;
+}
+
+/* Badges & labels */
+.module-scale-80 .label,
+.module-scale-80 label {
+  font-size: 13.5px !important;
+  font-weight: 800 !important;
+  color: #0f172a !important;
+}
+
+/* ── Standardized Page Search Box Sizing & Typography ── */
+.page-search-wrapper {
+  position: relative !important;
+  width: 100% !important;
+  max-width: 17.5rem !important;
+  flex-shrink: 0 !important;
+}
+
+@media (min-width: 640px) {
+  .page-search-wrapper {
+    width: 16rem !important;
+  }
+}
+
+.page-search-input {
+  width: 100% !important;
+  height: 2.25rem !important;
+  background-color: #f8fafc !important;
+  border: 1px solid #cbd5e1 !important;
+  border-radius: 0.75rem !important;
+  padding-left: 2.25rem !important;
+  padding-right: 0.75rem !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  font-size: 0.875rem !important;
+  font-weight: 600 !important;
+  color: #0f172a !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02) !important;
+  transition: all 0.15s ease-in-out !important;
+}
+
+.page-search-input::placeholder {
+  color: #94a3b8 !important;
+  font-weight: 500 !important;
+}
+
+.page-search-input:focus {
+  outline: none !important;
+  background-color: #ffffff !important;
+  border-color: #3b82f6 !important;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15) !important;
+}
+
+.page-search-icon {
+  position: absolute !important;
+  left: 0.75rem !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  color: #94a3b8 !important;
+  pointer-events: none !important;
+  width: 15px !important;
+  height: 15px !important;
+}
+
+/* Fallback for search inputs across pages */
+div.relative > input[placeholder*="Search"],
+div.relative > input[placeholder*="search"] {
+  height: 2.25rem !important;
+  border-radius: 0.75rem !important;
+  font-size: 0.875rem !important;
+  font-weight: 600 !important;
+  padding-left: 2.25rem !important;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
