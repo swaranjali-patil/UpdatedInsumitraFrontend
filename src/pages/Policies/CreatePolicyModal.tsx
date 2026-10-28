@@ -300,7 +300,9 @@ export default function CreatePolicyModal({
               match.isNominee = true;
               match.nomineeName = nomName;
               match.nomineeRelation = n.relationship || match.relationship || 'Spouse';
-              match.nomineeContact = cleanConnectedPhone(n.phone || n.contactNo || match.contactNo);
+              match.nomineeContact = cleanConnectedPhone(n.phone || n.contactNo) || (
+                (!nomName || nomName.toLowerCase() === match.name.toLowerCase()) ? cleanConnectedPhone(match.contactNo) : ''
+              );
               match.nomineeDob = n.dateOfBirth ? n.dateOfBirth.slice(0, 10) : (n.dob || match.dob);
               match.nomineePercentage = n.sharePercent && Number(n.sharePercent) > 0 ? n.sharePercent : (match.nomineePercentage || '');
             } else {
@@ -334,10 +336,13 @@ export default function CreatePolicyModal({
                 const nomName = nameM[1].trim();
                 const match = initialMembers.find(m => m.name.toLowerCase() === nomName.toLowerCase());
                 if (match) {
+                  const parsedContact = contactM ? contactM[1] : '';
                   match.isNominee = true;
                   match.nomineeName = nomName;
                   match.nomineeRelation = relM ? relM[1].trim() : match.relationship;
-                  match.nomineeContact = cleanConnectedPhone(contactM ? contactM[1] : match.contactNo);
+                  match.nomineeContact = cleanConnectedPhone(parsedContact) || (
+                    (!nomName || nomName.toLowerCase() === match.name.toLowerCase()) ? cleanConnectedPhone(match.contactNo) : ''
+                  );
                   match.nomineeDob = dobM && dobM[1].trim() !== 'N/A' ? dobM[1].trim() : match.dob;
                   match.nomineePercentage = shareM && Number(shareM[1]) > 0 ? Number(shareM[1]) : (match.nomineePercentage || '');
                 } else {
@@ -566,7 +571,9 @@ export default function CreatePolicyModal({
                 match.isNominee = true;
                 match.nomineeName = nomName;
                 match.nomineeRelation = n.relationship || match.relationship || 'Spouse';
-                match.nomineeContact = cleanConnectedPhone(n.phone || match.contactNo);
+                match.nomineeContact = cleanConnectedPhone(n.phone) || (
+                  (!nomName || nomName.toLowerCase() === match.name.toLowerCase()) ? cleanConnectedPhone(match.contactNo) : ''
+                );
                 match.nomineePercentage = n.sharePercent && Number(n.sharePercent) > 0 ? n.sharePercent : (match.nomineePercentage || '');
               }
             });
@@ -829,60 +836,71 @@ export default function CreatePolicyModal({
       .trim()
       .toLowerCase();
 
-    const familyMembers: ConnectedPersonItem[] = (contact?.relationships || [])
-      .map((relationship: any) => {
-        const member = relationship.relatedContact;
-        if (!member) return null;
-        if (member.id === contact.id) return null;
+    const combinedRels = [
+      ...(contact?.relationships || []).map((relationship: any) => ({
+        member: relationship.relatedContact,
+        relType: relationship.relationshipType,
+        createdAt: relationship.createdAt,
+      })),
+      ...(contact?.relatedTo || []).map((relationship: any) => ({
+        member: relationship.primaryContact,
+        relType: relationship.relationshipType,
+        createdAt: relationship.createdAt,
+      })),
+    ];
 
-        const name = [member.firstName, member.middleName, member.lastName]
-          .filter(Boolean)
-          .join(' ')
-          .trim();
-        if (!name || name.toLowerCase() === contactFullName) return null;
+    const familyMembers: ConnectedPersonItem[] = [];
+    combinedRels.forEach((rel: any) => {
+      const member = rel.member;
+      if (!member || member.id === contact.id) return;
 
-        const relationshipTypes: Record<string, string> = {
-          SPOUSE: 'Spouse',
-          SON: 'Son',
-          DAUGHTER: 'Daughter',
-          FATHER: 'Father',
-          MOTHER: 'Mother',
-          BROTHER: 'Brother',
-          SISTER: 'Sister',
-          GRANDFATHER: 'Grandfather',
-          GRANDMOTHER: 'Grandmother',
-          GRANDSON: 'Grandson',
-          GRANDDAUGHTER: 'Granddaughter',
-          GRANDPARENT: 'Grandparent',
-          GRANDCHILD: 'Grandchild',
-          UNCLE: 'Uncle',
-          AUNT: 'Aunt / Unty',
-          NEPHEW: 'Nephew',
-          NIECE: 'Niece',
-          OTHER: 'Other',
-        };
-        const relationType = String(relationship.relationshipType || '').toUpperCase();
+      const name = [member.firstName, member.middleName, member.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      if (!name || name.toLowerCase() === contactFullName) return;
 
-        return {
-          id: `contact-${member.id}`,
-          addedAt: relationship.createdAt || member.createdAt || new Date().toISOString(),
-          name,
-          relationship: relationshipTypes[relationType] || 'Dependent',
-          contactNo: cleanConnectedPhone(member.phone || member.alternatePhone),
-          dob: member.dateOfBirth ? String(member.dateOfBirth).slice(0, 10) : '',
-          gender: ['MALE', 'FEMALE', 'OTHER'].includes(String(member.gender).toUpperCase())
-            ? String(member.gender).toUpperCase()
-            : 'MALE',
-          isCovered: true,
-          isNominee: false,
-          nomineeName: '',
-          nomineeRelation: 'Spouse',
-          nomineeContact: '',
-          nomineeDob: '',
-          nomineePercentage: '',
-        };
-      })
-      .filter((member: ConnectedPersonItem | null): member is ConnectedPersonItem => member !== null);
+      const relationshipTypes: Record<string, string> = {
+        SPOUSE: 'Spouse',
+        SON: 'Son',
+        DAUGHTER: 'Daughter',
+        FATHER: 'Father',
+        MOTHER: 'Mother',
+        BROTHER: 'Brother',
+        SISTER: 'Sister',
+        GRANDFATHER: 'Grandfather',
+        GRANDMOTHER: 'Grandmother',
+        GRANDSON: 'Grandson',
+        GRANDDAUGHTER: 'Granddaughter',
+        GRANDPARENT: 'Grandparent',
+        GRANDCHILD: 'Grandchild',
+        UNCLE: 'Uncle',
+        AUNT: 'Aunt / Unty',
+        NEPHEW: 'Nephew',
+        NIECE: 'Niece',
+        OTHER: 'Other',
+      };
+      const relationType = String(rel.relType || '').toUpperCase();
+
+      familyMembers.push({
+        id: `contact-${member.id}`,
+        addedAt: rel.createdAt || member.createdAt || new Date().toISOString(),
+        name,
+        relationship: relationshipTypes[relationType] || 'Dependent',
+        contactNo: cleanConnectedPhone(member.phone || member.alternatePhone || member.mobile || member.whatsappNumber),
+        dob: member.dateOfBirth ? String(member.dateOfBirth).slice(0, 10) : '',
+        gender: ['MALE', 'FEMALE', 'OTHER'].includes(String(member.gender).toUpperCase())
+          ? String(member.gender).toUpperCase()
+          : 'MALE',
+        isCovered: true,
+        isNominee: false,
+        nomineeName: '',
+        nomineeRelation: 'Spouse',
+        nomineeContact: '',
+        nomineeDob: '',
+        nomineePercentage: '',
+      });
+    });
 
     setMembers(previous => {
       // Remove any previously auto-populated contact members, self entries, or matching contact's name
@@ -1179,7 +1197,9 @@ export default function CreatePolicyModal({
             setActiveTab('connectedPersons');
             return;
           }
-          const nomContactRaw = cleanConnectedPhone(p.nomineeContact) || cleanConnectedPhone(p.contactNo);
+          const nomContactRaw = cleanConnectedPhone(p.nomineeContact) || (
+            (!p.nomineeName || p.nomineeName.trim().toLowerCase() === p.name.trim().toLowerCase()) ? cleanConnectedPhone(p.contactNo) : ''
+          );
           const nomContactDigits = nomContactRaw.replace(/\D/g, '');
           if (nomContactDigits.length > 0 && nomContactDigits.length !== 10) {
             toast.error(`Nominee contact number for "${nomName}" must be 10 digits`);
@@ -1397,10 +1417,13 @@ export default function CreatePolicyModal({
       if (validMembers.length > 0) {
         validMembers.forEach((p, idx) => {
           if (p.name.trim()) {
-            cleanNotes += `\nConnected Person ${idx + 1}: Name: ${p.name.trim()}, Relationship: ${p.relationship}, Contact: ${p.contactNo || 'N/A'}, DoB: ${p.dob || 'N/A'}, Gender: ${p.gender || 'MALE'}`;
+            cleanNotes += `\nConnected Person ${idx + 1}: Name: ${p.name.trim()}, Relationship: ${p.relationship}, Contact: ${cleanConnectedPhone(p.contactNo) || 'N/A'}, DoB: ${p.dob || 'N/A'}, Gender: ${p.gender || 'MALE'}`;
           }
           if (p.isNominee) {
-            cleanNotes += `\nNominee Details ${idx + 1}: Name: ${p.nomineeName?.trim() || p.name.trim()}, Relationship: ${p.nomineeRelation || p.relationship}, Contact: ${p.nomineeContact || p.contactNo || 'N/A'}, DoB: ${p.nomineeDob || p.dob || 'N/A'}, Share: ${p.nomineePercentage || 100}%`;
+            const nomPhone = cleanConnectedPhone(p.nomineeContact) || (
+              (!p.nomineeName || p.nomineeName.trim().toLowerCase() === p.name.trim().toLowerCase()) ? cleanConnectedPhone(p.contactNo) : ''
+            );
+            cleanNotes += `\nNominee Details ${idx + 1}: Name: ${p.nomineeName?.trim() || p.name.trim()}, Relationship: ${p.nomineeRelation || p.relationship}, Contact: ${nomPhone || 'N/A'}, DoB: ${p.nomineeDob || p.dob || 'N/A'}, Share: ${p.nomineePercentage || 100}%`;
           }
         });
       }
@@ -1470,7 +1493,12 @@ export default function CreatePolicyModal({
                   relationship: person.nomineeRelation || person.relationship || 'Other',
                   sharePercent: Number(person.nomineePercentage) || 100,
                   dateOfBirth: (person.nomineeDob || person.dob) ? new Date(person.nomineeDob || person.dob).toISOString() : undefined,
-                  phone: (() => { const digits = (cleanConnectedPhone(person.nomineeContact) || cleanConnectedPhone(person.contactNo)).replace(/\D/g, ''); return digits.length === 10 ? digits : undefined; })(),
+                  phone: (() => {
+                    const digits = (cleanConnectedPhone(person.nomineeContact) || (
+                      (!person.nomineeName || person.nomineeName.trim().toLowerCase() === person.name.trim().toLowerCase()) ? cleanConnectedPhone(person.contactNo) : ''
+                    )).replace(/\D/g, '');
+                    return digits.length === 10 ? digits : undefined;
+                  })(),
                 });
               } catch { /* ignore */ }
             }
@@ -3199,7 +3227,11 @@ export default function CreatePolicyModal({
                                 ...(isNom ? {
                                   nomineeName: person.nomineeName || person.name,
                                   nomineeRelation: person.nomineeRelation || person.relationship,
-                                  nomineeContact: cleanConnectedPhone(person.nomineeContact) || cleanConnectedPhone(person.contactNo),
+                                  nomineeContact: cleanConnectedPhone(person.nomineeContact) || (
+                                    (!person.nomineeName || person.nomineeName.trim().toLowerCase() === person.name.trim().toLowerCase())
+                                      ? cleanConnectedPhone(person.contactNo)
+                                      : ''
+                                  ),
                                   nomineeDob: person.nomineeDob || person.dob,
                                   nomineePercentage: person.nomineePercentage && Number(person.nomineePercentage) > 0 ? person.nomineePercentage : '',
                                 } : {})
@@ -3245,7 +3277,7 @@ export default function CreatePolicyModal({
                               <input
                                 type="tel"
                                 maxLength={10}
-                                value={cleanConnectedPhone(person.nomineeContact || person.contactNo)}
+                                value={cleanConnectedPhone(person.nomineeContact || ((!person.nomineeName || person.nomineeName.trim().toLowerCase() === person.name.trim().toLowerCase()) ? person.contactNo : ''))}
                                 onChange={e => updateConnectedPerson(person.id, { nomineeContact: e.target.value.replace(/\D/g, '').slice(0, 10) })}
                                 className="input w-full h-9 text-xs rounded-xl bg-white border border-purple-200"
                                 placeholder="10-digit Phone"

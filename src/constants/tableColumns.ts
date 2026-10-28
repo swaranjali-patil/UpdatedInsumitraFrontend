@@ -309,13 +309,6 @@ export const TABLE_COLUMNS_CONFIG = [
     ]
   },
   {
-    "pageId": "subscription",
-    "pageName": "Subscription",
-    "columns": [
-      "Module"
-    ]
-  },
-  {
     "pageId": "superadmin",
     "pageName": "Superadmin",
     "columns": [

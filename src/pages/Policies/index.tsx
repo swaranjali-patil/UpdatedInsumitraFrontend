@@ -408,7 +408,12 @@ export function cleanConnectedPhone(raw?: string | null): string {
   ) {
     return '';
   }
-  return trimmed;
+  const digits = trimmed.replace(/\D/g, '');
+  if (digits === '0000000000' || /^0+$/.test(digits)) return '';
+  if (digits.length >= 10) {
+    return digits.slice(-10);
+  }
+  return digits;
 }
 
 export function parseExtraNotes(notesText?: string | null): Record<string, any> {
@@ -422,6 +427,7 @@ export function parseExtraNotes(notesText?: string | null): Record<string, any> 
     policyZoneLocationCity: '',
     policyZoneLocationPincode: '',
     policyZoneLocationTier: '',
+    familySize: '',
     deductible: '',
     riders: [] as string[],
     firstYearPremium: undefined as number | undefined,
@@ -527,6 +533,8 @@ export function parseExtraNotes(notesText?: string | null): Record<string, any> 
       res.policyZoneLocationPincode = line.replace('Policy Zone Location Pincode: ', '').trim();
     } else if (line.startsWith('Policy Zone Location Tier: ')) {
       res.policyZoneLocationTier = line.replace('Policy Zone Location Tier: ', '').trim();
+    } else if (line.startsWith('Family Size: ')) {
+      res.familySize = line.replace('Family Size: ', '').trim();
     } else if (line.startsWith('Policy Tenure: ')) {
       res.policyTenure = line.replace('Policy Tenure: ', '').trim();
     } else if (line.startsWith('Policy Term: ')) {
@@ -2483,6 +2491,7 @@ export default function Policies() {
     if (extra.policyZoneLocationTier) {
       setSelectedZoneTier(extra.policyZoneLocationTier);
     }
+    setSelectedFamilySize(extra.familySize || '1');
 
     setSelectedType(compCat || planCat || '');
 
@@ -2628,7 +2637,9 @@ export default function Policies() {
               isNominee: true,
               nomineeName: match.name || person.nomineeName || person.name,
               nomineeRelation: match.relationship || person.nomineeRelation || person.relationship,
-              nomineeContact: match.phone || person.nomineeContact || person.contactNo,
+              nomineeContact: cleanConnectedPhone(match.phone || person.nomineeContact) || (
+                (!match.name || match.name.toLowerCase() === person.name?.toLowerCase()) ? cleanConnectedPhone(person.contactNo) : ''
+              ),
               nomineeDob: match.dateOfBirth ? match.dateOfBirth.slice(0, 10) : (person.nomineeDob || person.dob),
               nomineePercentage: match.sharePercent ?? person.nomineePercentage,
             };
@@ -2642,14 +2653,14 @@ export default function Policies() {
           id: String(Math.random()),
           name: n.name || '',
           relationship: n.relationship || 'Nominee',
-          contactNo: n.contact || '',
+          contactNo: cleanConnectedPhone(n.contact || ''),
           dob: n.dob || '',
           gender: 'MALE',
           isCovered: false,
           isNominee: true,
           nomineeName: n.name || '',
           nomineeRelation: n.relationship || '',
-          nomineeContact: n.contact || '',
+          nomineeContact: cleanConnectedPhone(n.contact || ''),
           nomineeDob: n.dob || '',
           nomineePercentage: n.sharePercent ?? 100,
         }));
@@ -2662,7 +2673,9 @@ export default function Policies() {
               isNominee: true,
               nomineeName: match.name || person.nomineeName || person.name,
               nomineeRelation: match.relationship || person.nomineeRelation || person.relationship,
-              nomineeContact: match.contact || person.nomineeContact || person.contactNo,
+              nomineeContact: cleanConnectedPhone(match.contact || person.nomineeContact) || (
+                (!match.name || match.name.toLowerCase() === person.name?.toLowerCase()) ? cleanConnectedPhone(person.contactNo) : ''
+              ),
               nomineeDob: match.dob || person.nomineeDob || person.dob,
               nomineePercentage: match.sharePercent ?? person.nomineePercentage,
             };
@@ -3253,7 +3266,9 @@ export default function Policies() {
               setActivePolicyTab('connectedPersons');
               return;
             }
-            const nomContact = p.nomineeContact || p.contactNo;
+            const nomContact = cleanConnectedPhone(p.nomineeContact) || (
+              (!p.nomineeName || p.nomineeName.trim().toLowerCase() === p.name.trim().toLowerCase()) ? cleanConnectedPhone(p.contactNo) : ''
+            );
             if (nomContact && nomContact.trim().length > 0 && nomContact.trim().length !== 10) {
               toast.error(`Nominee contact number for "${nomName}" must be 10 digits`);
               setActivePolicyTab('connectedPersons');
@@ -3286,6 +3301,7 @@ export default function Policies() {
       }
       if (policyZoneLocationPincode) extraNotes += `\nPolicy Zone Location Pincode: ${policyZoneLocationPincode}`;
       if (selectedZoneTier) extraNotes += `\nPolicy Zone Location Tier: ${selectedZoneTier}`;
+      if (selectedFamilySize) extraNotes += `\nFamily Size: ${selectedFamilySize}`;
       if (durationYears) {
         extraNotes += `\nPolicy Tenure: ${durationYears} ${Number(durationYears) === 1 ? 'Year' : 'Years'}`;
       }
@@ -3324,20 +3340,26 @@ export default function Policies() {
       }
       if (body.phcRequired || watchPhcRequired) {
         extraNotes += `\nPreventive Health Checkup: Yes (Amount: ₹${body.phcAmount || '0'}, Status: ${body.phcStatus || 'N/A'}, Claim Settled: ${body.phcClaimSettled ? 'Yes' : 'No'}${phcExtraDetails.insuredPersonName ? `, Insured Person: ${phcExtraDetails.insuredPersonName}` : ''})`;
+        extraNotes += `\nPHC Required: Yes`;
         if (phcExtraDetails.insuredPersonName) {
           extraNotes += `\nPHC Insured Person: ${phcExtraDetails.insuredPersonName}`;
         }
         if (phcExtraDetails.phcStage) {
           extraNotes += `\nPHC Stage: ${phcExtraDetails.phcStage}`;
         }
+      } else if (body.phcRequired === false || watchPhcRequired === false) {
+        extraNotes += `\nPreventive Health Checkup: No\nPHC Required: No`;
       }
       if (connectedPersons.length > 0) {
         connectedPersons.forEach((p, idx) => {
           if (p.name.trim()) {
-            extraNotes += `\nConnected Person ${idx + 1}: Name: ${p.name.trim()}, Relationship: ${p.relationship}, Contact: ${p.contactNo || 'N/A'}, DoB: ${p.dob || 'N/A'}, Gender: ${p.gender || 'MALE'}`;
+            extraNotes += `\nConnected Person ${idx + 1}: Name: ${p.name.trim()}, Relationship: ${p.relationship}, Contact: ${cleanConnectedPhone(p.contactNo) || 'N/A'}, DoB: ${p.dob || 'N/A'}, Gender: ${p.gender || 'MALE'}`;
           }
           if (p.isNominee) {
-            extraNotes += `\nNominee Details ${idx + 1}: Name: ${p.nomineeName?.trim() || p.name.trim()}, Relationship: ${p.nomineeRelation || p.relationship}, Contact: ${p.nomineeContact || p.contactNo || 'N/A'}, DoB: ${p.nomineeDob || p.dob || 'N/A'}, Share: ${p.nomineePercentage}%`;
+            const nomPhone = cleanConnectedPhone(p.nomineeContact) || (
+              (!p.nomineeName || p.nomineeName.trim().toLowerCase() === p.name.trim().toLowerCase()) ? cleanConnectedPhone(p.contactNo) : ''
+            );
+            extraNotes += `\nNominee Details ${idx + 1}: Name: ${p.nomineeName?.trim() || p.name.trim()}, Relationship: ${p.nomineeRelation || p.relationship}, Contact: ${nomPhone || 'N/A'}, DoB: ${p.nomineeDob || p.dob || 'N/A'}, Share: ${p.nomineePercentage}%`;
           }
         });
       }
@@ -3397,7 +3419,12 @@ export default function Policies() {
                   relationship: person.nomineeRelation || person.relationship || 'Other',
                   sharePercent: Number(person.nomineePercentage) || 100,
                   dateOfBirth: (person.nomineeDob || person.dob) ? new Date(person.nomineeDob || person.dob).toISOString() : undefined,
-                  phone: person.nomineeContact || person.contactNo || undefined,
+                  phone: (() => {
+                    const digits = (cleanConnectedPhone(person.nomineeContact) || (
+                      (!person.nomineeName || person.nomineeName.trim().toLowerCase() === person.name.trim().toLowerCase()) ? cleanConnectedPhone(person.contactNo) : ''
+                    )).replace(/\D/g, '');
+                    return digits.length === 10 ? digits : undefined;
+                  })(),
                 });
               } catch { /* ignore */ }
             }
@@ -3449,7 +3476,12 @@ export default function Policies() {
                   relationship: person.nomineeRelation || person.relationship || 'Other',
                   sharePercent: Number(person.nomineePercentage) || 100,
                   dateOfBirth: (person.nomineeDob || person.dob) ? new Date(person.nomineeDob || person.dob).toISOString() : undefined,
-                  phone: person.nomineeContact || person.contactNo || undefined,
+                  phone: (() => {
+                    const digits = (cleanConnectedPhone(person.nomineeContact) || (
+                      (!person.nomineeName || person.nomineeName.trim().toLowerCase() === person.name.trim().toLowerCase()) ? cleanConnectedPhone(person.contactNo) : ''
+                    )).replace(/\D/g, '');
+                    return digits.length === 10 ? digits : undefined;
+                  })(),
                 });
               } catch { /* ignore */ }
             }
@@ -3486,6 +3518,7 @@ export default function Policies() {
           setPolicyZoneLocationCity('');
           setPolicyZoneLocationPincode('');
           setSelectedZoneTier('ZONE_1');
+          setSelectedFamilySize('1');
           setSelectedType('');
           setSelectedCompany('');
           setPendingDocs([]);
@@ -3678,31 +3711,50 @@ export default function Policies() {
                     <Settings size={14} />
                   </button>
                   {colPickerOpen && (
-                    <div className="absolute right-0 mt-2 w-52 bg-white border border-slate-200/90 rounded-2xl shadow-2xl p-3 z-50 text-xs space-y-2 animate-fadeIn">
+                    <div className="absolute right-0 mt-2 w-64 max-h-80 overflow-y-auto bg-white border border-slate-200/90 rounded-2xl shadow-2xl p-3 z-50 text-xs space-y-2 animate-fadeIn">
                       <p className="font-extrabold text-slate-400 uppercase tracking-wider mb-1 text-[10px]">Show Columns</p>
                       {[
-                        { key: 'contact.firstName', label: 'Client Name' },
-                        { key: 'policyNumber', label: 'Policy No' },
-                        { key: 'plan.category', label: 'Type' },
-                        { key: 'plan.company.name', label: 'Company' },
-                        { key: 'plan.name', label: 'Plan' },
-                        { key: 'premiumAmount', label: 'Premium' },
+                        { key: 'proposerName', label: 'Proposer Name' },
+                        { key: 'proposerContact', label: 'Proposer Contact No.' },
+                        { key: 'insuredPerson', label: 'Insured Person' },
+                        { key: 'city', label: 'City' },
+                        { key: 'companyCategory', label: 'Insurance Company Category' },
+                        { key: 'plan.company.name', label: 'Insurance Company' },
+                        { key: 'plan.category', label: 'Insurance Plan Category' },
+                        { key: 'plan.name', label: 'Plan Name' },
+                        { key: 'customerCategory', label: 'Customer Category' },
+                        { key: 'policyType', label: 'Policy Type' },
+                        { key: 'policyNumber', label: 'Policy Number' },
+                        { key: 'status', label: 'Policy Status' },
                         { key: 'sumAssured', label: 'Sum Insured' },
-                        { key: 'renewStatus', label: 'Renew Status' },
-                        { key: 'renewAssign', label: 'Renew Assign' },
-                        { key: 'claimStatus', label: 'Claim Status' },
-                        { key: 'claimAssign', label: 'Claim Assign' },
-                      ].map(col => (
-                        <label key={col.key} className="flex flex-wrap items-center gap-2 cursor-pointer font-bold text-slate-700 hover:text-blue-600 transition-colors">
-                          <input
-                            type="checkbox"
-                            checked={visibleColumns[col.key] !== false}
-                            onChange={() => setVisibleColumns(prev => ({ ...prev, [col.key]: !prev[col.key] }))}
-                            className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5"
-                          />
-                          <span>{col.label}</span>
-                        </label>
-                      ))}
+                        { key: 'policyTenure', label: 'Policy Tenure' },
+                        { key: 'policyTerm', label: 'Policy Term' },
+                        { key: 'assignedTo', label: 'Assigned To' },
+                        { key: 'comment', label: 'Comment' },
+                        { key: 'firstYearPremium', label: '1st Year Premium Amount' },
+                        { key: 'secondYearPremium', label: '2nd Year Onwards Premium Amount' },
+                        { key: 'premiumAmount', label: 'Premium Amount' },
+                        { key: 'installmentCase', label: 'Installment Case?' },
+                        { key: 'downpaymentAmount', label: 'Downpayment Amount' },
+                        { key: 'processingFee', label: 'Processing Fee (incl. GST)' },
+                        { key: 'installmentAmount', label: 'Installment Amount' },
+                        { key: 'noOfInstallments', label: 'No. of Installments' },
+                        { key: 'lastInstallmentDate', label: 'Last Installment Date' },
+                        { key: 'nomineeDetails', label: 'Nominee Details' },
+                      ].map(col => {
+                        const isVisible = visibleColumns[col.key] !== false;
+                        return (
+                          <label key={col.key} className="flex items-center gap-2 cursor-pointer font-bold text-slate-700 hover:text-blue-600 transition-colors">
+                            <input
+                              type="checkbox"
+                              checked={isVisible}
+                              onChange={() => setVisibleColumns(prev => ({ ...prev, [col.key]: !isVisible }))}
+                              className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
+                            />
+                            <span>{col.label}</span>
+                          </label>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -4489,35 +4541,45 @@ export default function Policies() {
                                         GRANDPARENT: 'Grandparent', GRANDCHILD: 'Grandchild', UNCLE: 'Uncle', AUNT: 'Aunt / Unty', NEPHEW: 'Nephew', NIECE: 'Niece',
                                         OTHER: 'Other',
                                       };
-                                      const familyMembers: ConnectedPersonItem[] = (fullContact.relationships || [])
-                                        .map((rel: any) => {
-                                          const member = rel.relatedContact;
-                                          if (!member) return null;
-                                          if (member.id === fullContact.id) return null;
-                                          const memName = [member.firstName, member.middleName, member.lastName]
-                                            .filter(Boolean)
-                                            .join(' ')
-                                            .trim();
-                                          if (!memName || memName.toLowerCase() === cFullName) return null;
-                                          const rType = String(rel.relationshipType || '').toUpperCase();
-                                          return {
-                                            id: `contact-${member.id}`,
-                                            addedAt: rel.createdAt || member.createdAt || new Date().toISOString(),
-                                            name: memName,
-                                            relationship: relTypes[rType] || 'Dependent',
-                                            contactNo: cleanConnectedPhone(member.phone || member.alternatePhone || ''),
-                                            dob: member.dateOfBirth ? String(member.dateOfBirth).slice(0, 10) : '',
-                                            gender: ['MALE', 'FEMALE', 'OTHER'].includes(String(member.gender).toUpperCase()) ? String(member.gender).toUpperCase() : 'MALE',
-                                            isCovered: true,
-                                            isNominee: false,
-                                            nomineeName: '',
-                                            nomineeRelation: 'Spouse',
-                                            nomineeContact: '',
-                                            nomineeDob: '',
-                                            nomineePercentage: 100,
-                                          };
-                                        })
-                                        .filter((m: any): m is ConnectedPersonItem => m !== null);
+                                      const combinedRels = [
+                                        ...(fullContact.relationships || []).map((rel: any) => ({
+                                          member: rel.relatedContact,
+                                          relType: rel.relationshipType,
+                                          createdAt: rel.createdAt,
+                                        })),
+                                        ...(fullContact.relatedTo || []).map((rel: any) => ({
+                                          member: rel.primaryContact,
+                                          relType: rel.relationshipType,
+                                          createdAt: rel.createdAt,
+                                        })),
+                                      ];
+                                      const familyMembers: ConnectedPersonItem[] = [];
+                                      combinedRels.forEach((rel: any) => {
+                                        const member = rel.member;
+                                        if (!member || member.id === fullContact.id) return;
+                                        const memName = [member.firstName, member.middleName, member.lastName]
+                                          .filter(Boolean)
+                                          .join(' ')
+                                          .trim();
+                                        if (!memName || memName.toLowerCase() === cFullName) return;
+                                        const rType = String(rel.relType || '').toUpperCase();
+                                        familyMembers.push({
+                                          id: `contact-${member.id}`,
+                                          addedAt: rel.createdAt || member.createdAt || new Date().toISOString(),
+                                          name: memName,
+                                          relationship: relTypes[rType] || 'Dependent',
+                                          contactNo: cleanConnectedPhone(member.phone || member.alternatePhone || member.mobile || member.whatsappNumber || ''),
+                                          dob: member.dateOfBirth ? String(member.dateOfBirth).slice(0, 10) : '',
+                                          gender: ['MALE', 'FEMALE', 'OTHER'].includes(String(member.gender).toUpperCase()) ? String(member.gender).toUpperCase() : 'MALE',
+                                          isCovered: true,
+                                          isNominee: false,
+                                          nomineeName: '',
+                                          nomineeRelation: 'Spouse',
+                                          nomineeContact: '',
+                                          nomineeDob: '',
+                                          nomineePercentage: 100,
+                                        });
+                                      });
 
                                       setConnectedPersons(prev => {
                                         const manual = prev.filter(p => !p.id.startsWith('contact-') && p.name.trim().toLowerCase() !== cFullName && p.relationship?.toLowerCase() !== 'self');
@@ -5939,88 +6001,6 @@ export default function Policies() {
                       </div>
                     )}
                   </div>
-
-                  {/* Section 7: Conditional PHC Details */}
-                  {(selectedCompanyCategory?.toUpperCase() === 'HEALTH' || selectedPlanCategory?.toUpperCase() === 'HEALTH' || selectedType?.toUpperCase() === 'HEALTH' || selectedPlan?.category?.toUpperCase() === 'HEALTH' || watchPhcRequired) && (
-                    <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-visible">
-                      <div
-                        className="bg-gradient-to-r from-teal-50/80 via-slate-50 to-emerald-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none rounded-t-2xl"
-                        onClick={() => setIsPhcCollapsed(prev => !prev)}
-                      >
-                        <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider flex flex-wrap items-center gap-2">
-                          <span className="w-5 h-5 rounded-full bg-gradient-to-br from-teal-600 to-emerald-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">7</span>
-                          Preventive Health Checkup Details
-                        </h4>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-[10px] text-slate-700 font-bold">PHC Benefits & Status</span>
-                          <ChevronDown
-                            size={16}
-                            className={`text-slate-500 transition-transform duration-200 ${isPhcCollapsed ? 'rotate-180' : ''}`}
-                          />
-                        </div>
-                      </div>
-
-                      {!isPhcCollapsed && (
-                        <div className="p-4 space-y-3 animate-fadeIn">
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-                            <div>
-                              <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
-                                Preventive Health Checkup?
-                              </label>
-                              <CustomSelect
-                                value={watchPhcRequired ? 'yes' : 'no'}
-                                onChange={val => setValue('phcRequired', val === 'yes')}
-                                placeholder="Select Option"
-                                options={[
-                                  { value: 'no', label: 'No' },
-                                  { value: 'yes', label: 'Yes' },
-                                ]}
-                              />
-                            </div>
-                          </div>
-                          {watchPhcRequired && (
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 p-3.5 bg-emerald-50/40 rounded-xl border border-emerald-100">
-                              <div>
-                                <label className="label text-[10px] font-extrabold text-emerald-800 uppercase tracking-wider block mb-1">PHC Amount (₹)</label>
-                                <input
-                                  type="number"
-                                  {...register('phcAmount')}
-                                  className="input w-full h-10 text-xs rounded-xl bg-white border border-emerald-200"
-                                  placeholder="Amount"
-                                />
-                              </div>
-                              <div>
-                                <label className="label text-[10px] font-extrabold text-emerald-800 uppercase tracking-wider block mb-1">PHC Status</label>
-                                <CustomSelect
-                                  value={watch('phcStatus') || ''}
-                                  onChange={val => setValue('phcStatus', val)}
-                                  placeholder="Select Status"
-                                  options={[
-                                    { value: '', label: 'Select Status' },
-                                    { value: 'SCHEDULED', label: 'Scheduled' },
-                                    { value: 'COMPLETED', label: 'Completed' },
-                                    { value: 'CANCELLED', label: 'Cancelled' },
-                                  ]}
-                                />
-                              </div>
-                              <div>
-                                <label className="label text-[10px] font-extrabold text-emerald-800 uppercase tracking-wider block mb-1">PHC Claim Settled?</label>
-                                <CustomSelect
-                                  value={watch('phcClaimSettled') ? 'yes' : 'no'}
-                                  onChange={val => setValue('phcClaimSettled', val === 'yes')}
-                                  placeholder="Select Option"
-                                  options={[
-                                    { value: 'no', label: 'No' },
-                                    { value: 'yes', label: 'Yes' },
-                                  ]}
-                                />
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
               )}
 
@@ -6177,7 +6157,7 @@ export default function Policies() {
                               <input
                                 type="tel"
                                 maxLength={10}
-                                value={person.contactNo}
+                                value={cleanConnectedPhone(person.contactNo)}
                                 onChange={e => updateConnectedPerson(person.id, { contactNo: e.target.value.replace(/\D/g, '').slice(0, 10) })}
                                 className="input w-full h-9 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                                 placeholder="10-digit Phone"
@@ -6236,7 +6216,11 @@ export default function Policies() {
                                     ...(isNom ? {
                                       nomineeName: person.nomineeName || person.name,
                                       nomineeRelation: person.nomineeRelation || person.relationship,
-                                      nomineeContact: person.nomineeContact || person.contactNo,
+                                      nomineeContact: cleanConnectedPhone(person.nomineeContact) || (
+                                        (!person.nomineeName || person.nomineeName.trim().toLowerCase() === person.name.trim().toLowerCase())
+                                          ? cleanConnectedPhone(person.contactNo)
+                                          : ''
+                                      ),
                                       nomineeDob: person.nomineeDob || person.dob,
                                     } : {})
                                   });
@@ -6281,7 +6265,7 @@ export default function Policies() {
                                   <input
                                     type="tel"
                                     maxLength={10}
-                                    value={person.nomineeContact || person.contactNo}
+                                    value={cleanConnectedPhone(person.nomineeContact || ((!person.nomineeName || person.nomineeName.trim().toLowerCase() === person.name.trim().toLowerCase()) ? person.contactNo : ''))}
                                     onChange={e => updateConnectedPerson(person.id, { nomineeContact: e.target.value.replace(/\D/g, '').slice(0, 10) })}
                                     className="input w-full h-9 text-xs rounded-xl bg-white border border-purple-200"
                                     placeholder="10-digit Phone"

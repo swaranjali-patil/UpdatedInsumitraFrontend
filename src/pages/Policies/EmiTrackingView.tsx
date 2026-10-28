@@ -18,6 +18,8 @@ import { parseExtraNotes } from './index';
 // ── Types ──────────────────────────────────────────────────────────────────────
 export interface EmiRecord {
   id: string;
+  createdAt?: string;
+  updatedAt?: string;
   policyNo: string;
   customerName: string;
   customerContactNo?: string;
@@ -668,6 +670,8 @@ export default function EmiTrackingView({ selectedMonth }: { selectedMonth: stri
 
         return {
           id: p.id,
+          createdAt: p.createdAt,
+          updatedAt: p.updatedAt,
           policyNo: p.policyNumber || 'N/A',
           customerName: `${c.firstName || ''} ${c.lastName || ''}`.trim() || 'No Name',
           customerContactNo: c.phone || 'N/A',
@@ -907,6 +911,18 @@ export default function EmiTrackingView({ selectedMonth }: { selectedMonth: stri
           };
         }
 
+        // 5. If policy was newly created in this selected month
+        if (isMatch(item.createdAt)) {
+          const upcoming = item.schedule.find(sc => sc.status !== 'PAID') || item.schedule[0];
+          return {
+            ...item,
+            dueDate: upcoming ? upcoming.dueDate : item.dueDate,
+            amount: upcoming ? (upcoming.amount || item.amount) : item.amount,
+            currentEmiNo: upcoming ? upcoming.emiNo : item.currentEmiNo,
+            status: upcoming ? (upcoming.status as any) : item.status,
+          };
+        }
+
         return null;
       })
       .filter(Boolean) as EmiRecord[];
@@ -936,37 +952,27 @@ export default function EmiTrackingView({ selectedMonth }: { selectedMonth: stri
 
   const sortedFilteredData = useMemo(() => {
     let result = [...filteredData];
-    if (!sortKey) {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
+    if (!sortKey || sortKey === 'createdAt') {
+      // Latest / newest entries shown first
       result.sort((a, b) => {
-        const getGroup = (item: any) => {
-          if (item.status === 'PAID') return 3; // Paid
-          const itemDate = parseDateSafe(item.dueDate);
-          if (itemDate) itemDate.setHours(0, 0, 0, 0);
-          return (itemDate && itemDate.getTime() < today.getTime()) || item.status === 'OVERDUE' ? 1 : 2; // 1 = Overdue, 2 = Due
-        };
-
-        const aGroup = getGroup(a);
-        const bGroup = getGroup(b);
-
-        if (aGroup !== bGroup) return aGroup - bGroup; // Overdue -> Due -> Paid
-
-        // Within each status group, sort by due date closest to today
-        const aDate = parseDateSafe(a.dueDate) || new Date(a.dueDate);
-        aDate.setHours(0, 0, 0, 0);
-        const bDate = parseDateSafe(b.dueDate) || new Date(b.dueDate);
-        bDate.setHours(0, 0, 0, 0);
-
-        const aDist = Math.abs(aDate.getTime() - today.getTime());
-        const bDist = Math.abs(bDate.getTime() - today.getTime());
-
-        return aDist - bDist;
+        const timeA = Math.max(
+          a.updatedAt ? new Date(a.updatedAt).getTime() : 0,
+          a.createdAt ? new Date(a.createdAt).getTime() : 0,
+        );
+        const timeB = Math.max(
+          b.updatedAt ? new Date(b.updatedAt).getTime() : 0,
+          b.createdAt ? new Date(b.createdAt).getTime() : 0,
+        );
+        if (timeA !== timeB) {
+          if (!sortKey) return timeB - timeA; // Descending by default: latest entries first
+          return sortDir === 'asc' ? timeA - timeB : timeB - timeA;
+        }
+        return (b.id || '').localeCompare(a.id || '');
       });
     } else {
       result = sortData(result, sortKey, sortDir, (row: any, key: string) => {
         if (key === 'EMI (x/y)') return row.paidEmis / row.totalEmis;
+        if (key === 'createdAt') return Math.max(row.updatedAt ? new Date(row.updatedAt).getTime() : 0, row.createdAt ? new Date(row.createdAt).getTime() : 0);
         return row[key];
       });
     }
@@ -981,7 +987,7 @@ export default function EmiTrackingView({ selectedMonth }: { selectedMonth: stri
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [statusFilter, employeeFilter, insurerFilter, productFilter, searchQuery, selectedMonth]);
+  }, [statusFilter, employeeFilter, insurerFilter, productFilter, searchQuery, selectedMonth, policiesRes]);
 
   useEffect(() => {
     setCurrentPage(page => Math.min(page, totalPages));

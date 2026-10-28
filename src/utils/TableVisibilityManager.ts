@@ -74,7 +74,6 @@ class TableVisibilityManager {
     if (p.includes('/workspace')) return 'workspace';
     if (p.includes('/dashboard')) return 'dashboard';
     if (p.includes('/superadmin')) return 'superadmin';
-    if (p.includes('/subscriptions')) return 'subscription';
     if (p.includes('/operations') || p.includes('/settings')) return 'operations';
     return 'unknown';
   }

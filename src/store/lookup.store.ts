@@ -69,16 +69,6 @@ export const useLookupStore = create<LookupState>((set, get) => ({
   loadTemplates: async (force = false) => {
     if (get().templates.length > 0 && !force) return;
     try {
-      const { useAuthStore } = await import('./auth.store');
-      const user = useAuthStore.getState().user;
-      if (user && user.role !== 'SUPERADMIN') {
-        const { subscriptionsService } = await import('../services/index');
-        const subRes = await subscriptionsService.current();
-        const planName = subRes?.data?.plan?.name || 'Free';
-        if (planName !== 'Enterprise' && planName !== 'Business') {
-          return;
-        }
-      }
       const res = await whatsappService.templates();
       set({ templates: res.data ?? [] });
     } catch (err: any) {

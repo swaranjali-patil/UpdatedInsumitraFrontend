@@ -15,10 +15,10 @@ import { commissionsService, employeesService, workspaceService } from '@api/ind
 import {
   Clock, CheckCircle, Play, Square,
   TrendingUp, ListTodo, ClipboardList,
-  Plus, CheckSquare, Target, User, Shield,
+  Plus, CheckSquare, User, Shield,
   FileText, Users, Calendar, Phone, DollarSign,
   Filter, Check, AlertCircle, LayoutDashboard, ArrowRight, Lock, MessageSquare,
-  ChevronDown, Eye, X, Briefcase, Palmtree
+  ChevronDown, Eye, X
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { DatePicker } from '@comps/common/DatePicker';
@@ -28,9 +28,7 @@ import WorkspaceKpiCards from './components/WorkspaceKpiCards';
 import UnifiedTaskActivityLog from './components/UnifiedTaskActivityLog';
 import MyTasksPanel from './components/MyTasksPanel';
 import DailyProductivitySummary from './components/DailyProductivitySummary';
-import MonthlyPlanPanel from './components/MonthlyPlanPanel';
-import JobDescriptionPanel from './components/JobDescriptionPanel';
-import EmployeeLeavePanel from './components/EmployeeLeavePanel';
+
 function formatTotalDuration(checkIn: string | Date, checkOut: string | Date) {
   const diffMs = new Date(checkOut).getTime() - new Date(checkIn).getTime();
   if (diffMs <= 0) return '0m';
@@ -41,7 +39,7 @@ function formatTotalDuration(checkIn: string | Date, checkOut: string | Date) {
   return `${mins}m`;
 }
 
-type TabType = 'today' | 'my_tasks' | 'targets' | 'leaves' | 'job_description';
+type TabType = 'today' | 'my_tasks' | 'commissions';
 
 const formatPreview = (dateStr?: string) => {
   if (!dateStr) return '';
@@ -369,36 +367,14 @@ export default function Workspace() {
         </button>
 
         <button
-          onClick={() => setActiveTab('targets')}
+          onClick={() => setActiveTab('commissions')}
           className={`shrink-0 whitespace-nowrap flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-xl font-extrabold text-xs transition-all cursor-pointer ${
-            activeTab === 'targets'
+            activeTab === 'commissions'
               ? 'bg-primary-600 text-white shadow-sm'
               : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 bg-white border border-gray-100 sm:border-transparent'
           }`}
         >
-          <Target className="w-4 h-4" /> Targets &amp; Commissions
-        </button>
-
-        <button
-          onClick={() => setActiveTab('leaves')}
-          className={`shrink-0 whitespace-nowrap flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-xl font-extrabold text-xs transition-all cursor-pointer ${
-            activeTab === 'leaves'
-              ? 'bg-primary-600 text-white shadow-sm'
-              : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 bg-white border border-gray-100 sm:border-transparent'
-          }`}
-        >
-          <Palmtree className="w-4 h-4" /> Absence &amp; Leaves
-        </button>
-
-        <button
-          onClick={() => setActiveTab('job_description')}
-          className={`shrink-0 whitespace-nowrap flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-xl font-extrabold text-xs transition-all cursor-pointer ${
-            activeTab === 'job_description'
-              ? 'bg-primary-600 text-white shadow-sm'
-              : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 bg-white border border-gray-100 sm:border-transparent'
-          }`}
-        >
-          <Briefcase className="w-4 h-4" /> Job Description &amp; Expectations
+          <DollarSign className="w-4 h-4" /> Commissions
         </button>
 
         {/* "View Employee Workspace" Button Next to Tabs */}
@@ -458,41 +434,38 @@ export default function Workspace() {
         />
       )}
 
-      {/* TAB 3: MY TARGETS & COMMISSIONS */}
-      {activeTab === 'targets' && (
+      {/* TAB 3: COMMISSIONS */}
+      {activeTab === 'commissions' && (
         <div className="space-y-6">
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            
-            {/* Monthly Target & Plan vs Live Actual Execution (Clubbed) */}
-            <div className="lg:col-span-2">
-              <MonthlyPlanPanel 
-                targetData={target}
-                isViewOnly={!!selectedEmployeeUserId}
-              />
-            </div>
-
-            {/* Compensation Overview (Backend Sourced) */}
-            <div className="card bg-white p-6 rounded-2xl shadow-sm border border-gray-100 space-y-4">
-              <h2 className="text-base font-bold text-gray-800 flex flex-wrap items-center gap-2">
-                <DollarSign className="w-5 h-5 text-green-600" /> Real Backend Compensation
-              </h2>
-
-              <div className="space-y-3">
-                <div className="p-3 bg-gray-50 rounded-xl border border-gray-100 flex items-center justify-between">
-                  <span className="text-xs font-medium text-gray-600">Base Salary</span>
-                  <span className="text-sm font-bold text-gray-900">₹{(target.baseSalary || 0).toLocaleString('en-IN')}</span>
-                </div>
-                <div className="p-3 bg-gray-50 rounded-xl border border-gray-100 flex items-center justify-between">
-                  <span className="text-xs font-medium text-gray-600">Bonus Planned</span>
-                  <span className="text-sm font-bold text-gray-900">₹{(target.bonusPlanned || 0).toLocaleString('en-IN')}</span>
-                </div>
-                <div className="p-3 bg-green-50/60 rounded-xl border border-green-100 flex items-center justify-between">
-                  <span className="text-xs font-medium text-green-700">Monthly Commission</span>
-                  <span className="text-sm font-bold text-green-700">₹{(target.monthlyCommission || 0).toLocaleString('en-IN')}</span>
-                </div>
+          {/* Compensation Overview (Backend Sourced) */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="p-4 bg-white rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between">
+              <div>
+                <span className="text-xs font-semibold text-gray-500 block">Base Salary</span>
+                <span className="text-lg font-bold text-gray-900">₹{(target.baseSalary || 0).toLocaleString('en-IN')}</span>
+              </div>
+              <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
+                <DollarSign className="w-5 h-5" />
               </div>
             </div>
-
+            <div className="p-4 bg-white rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between">
+              <div>
+                <span className="text-xs font-semibold text-gray-500 block">Bonus Planned</span>
+                <span className="text-lg font-bold text-gray-900">₹{(target.bonusPlanned || 0).toLocaleString('en-IN')}</span>
+              </div>
+              <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center font-bold">
+                <TrendingUp className="w-5 h-5" />
+              </div>
+            </div>
+            <div className="p-4 bg-white rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between">
+              <div>
+                <span className="text-xs font-semibold text-emerald-600 block">Monthly Commission</span>
+                <span className="text-lg font-bold text-emerald-600">₹{(target.monthlyCommission || 0).toLocaleString('en-IN')}</span>
+              </div>
+              <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold">
+                <DollarSign className="w-5 h-5" />
+              </div>
+            </div>
           </div>
 
           {/* Commissions List */}
@@ -571,24 +544,6 @@ export default function Workspace() {
             );
           })()}
         </div>
-      )}
-
-      {/* TAB 4: ABSENCE & LEAVES */}
-      {activeTab === 'leaves' && (
-        <EmployeeLeavePanel
-          employeeId={selectedEmployeeUserId}
-          employeeName={selectedEmployeeObj ? `${selectedEmployeeObj.firstName} ${selectedEmployeeObj.lastName}` : undefined}
-          isViewOnly={!!selectedEmployeeUserId}
-        />
-      )}
-
-      {/* TAB 5: JOB DESCRIPTION & ROLE EXPECTATIONS */}
-      {activeTab === 'job_description' && (
-        <JobDescriptionPanel
-          employeeId={selectedEmployeeUserId}
-          employeeName={selectedEmployeeObj ? `${selectedEmployeeObj.firstName} ${selectedEmployeeObj.lastName}` : undefined}
-          isViewOnly={false}
-        />
       )}
 
     </div>

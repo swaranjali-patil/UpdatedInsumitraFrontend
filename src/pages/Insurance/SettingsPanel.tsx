@@ -26,23 +26,15 @@ interface Rule {
   isProtected?: boolean;
 }
 
-interface Role {
-  id: number;
-  name: string;
-  desc: string;
-  users: number;
-  status: 'Active' | 'Inactive';
-}
-
 import TableColumnSettings from './TableColumnSettings';
 
 interface SettingsPanelProps {
-  initialSubTab?: 'dashboard' | 'compulsory' | 'master' | 'access' | 'employee_access' | 'backup' | 'audit' | 'columns';
+  initialSubTab?: 'dashboard' | 'compulsory' | 'master' | 'backup' | 'columns';
   onBack?: () => void;
 }
 
 export default function SettingsPanel({ initialSubTab = 'dashboard', onBack }: SettingsPanelProps) {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'compulsory' | 'master' | 'access' | 'employee_access' | 'backup' | 'audit' | 'columns'>(initialSubTab);
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'compulsory' | 'master' | 'backup' | 'columns'>(initialSubTab);
 
   useEffect(() => {
     setActiveTab(initialSubTab);
@@ -51,7 +43,6 @@ export default function SettingsPanel({ initialSubTab = 'dashboard', onBack }: S
   // --- SUBTABS ---
   const [compulsorySubTab, setCompulsorySubTab] = useState<'rules' | 'preferences'>('rules');
   const [dropdownSubTab, setDropdownSubTab] = useState<'lists' | 'usage'>('lists');
-  const [accessSubTab, setAccessSubTab] = useState<'roles' | 'permissions' | 'users'>('roles');
 
   // --- FILTERS & SEARCH STATE ---
   const [compulsoryModuleFilter, setCompulsoryModuleFilter] = useState('All Modules');
@@ -60,12 +51,9 @@ export default function SettingsPanel({ initialSubTab = 'dashboard', onBack }: S
   const [dropdownModuleFilter, setDropdownModuleFilter] = useState('All Modules');
   const [dropdownSearch, setDropdownSearch] = useState('');
 
-  const [accessSearch, setAccessSearch] = useState('');
-
   // --- MODALS STATE ---
   const [showAddRuleModal, setShowAddRuleModal] = useState(false);
   const [showAddDropdownModal, setShowAddDropdownModal] = useState(false);
-  const [showAddRoleModal, setShowAddRoleModal] = useState(false);
 
   // --- FORM STATES ---
   const [newRule, setNewRule] = useState({ module: 'Insurance Company', name: '', label: '', required: true });
@@ -82,7 +70,6 @@ export default function SettingsPanel({ initialSubTab = 'dashboard', onBack }: S
     options: [],
     newOptionInput: ''
   });
-  const [newRole, setNewRole] = useState({ name: '', desc: '', users: 0 });
 
   const [editingRule, setEditingRule] = useState<{ id: string | number; module: string; name: string; label: string; required: boolean } | null>(null);
   const [editingDropdown, setEditingDropdown] = useState<DropdownMenu | null>(null);
@@ -457,16 +444,6 @@ export default function SettingsPanel({ initialSubTab = 'dashboard', onBack }: S
 
   const { dropdownMenus, setDropdownMenus, usageMappings, setUsageMappings } = useMasterDropdowns();
 
-  const initialRoles: Role[] = [
-    { id: 1, name: 'Owner', desc: 'Full access to all modules & settings', users: 1, status: 'Active' },
-    { id: 2, name: 'Admin', desc: 'Manage system data & configuration', users: 2, status: 'Active' },
-    { id: 3, name: 'Operations', desc: 'Manage daily operations data', users: 5, status: 'Active' },
-    { id: 4, name: 'Claims', desc: 'Access to claims related modules', users: 8, status: 'Active' },
-    { id: 5, name: 'Finance', desc: 'Access to finance & payout modules', users: 3, status: 'Active' },
-    { id: 6, name: 'Employee', desc: 'Basic access for employees', users: 12, status: 'Active' },
-  ];
-  const [roles, setRoles] = useState<Role[]>(initialRoles);
-
   // --- HANDLERS ---
   const handleToggleRequired = (id: number | string) => {
     const target = fieldRules.find((r: Rule) => r.id === id);
@@ -679,32 +656,6 @@ export default function SettingsPanel({ initialSubTab = 'dashboard', onBack }: S
     toast.success('Dropdown source updated for field');
   };
 
-  const handleAddRole = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newRole.name.trim() || !newRole.desc.trim()) {
-      toast.error('Please enter role name and description');
-      return;
-    }
-    const newRoleObj: Role = {
-      id: Date.now(),
-      name: newRole.name.trim(),
-      desc: newRole.desc.trim(),
-      users: Number(newRole.users) || 0,
-      status: 'Active'
-    };
-    setRoles(prev => [newRoleObj, ...prev]);
-    setShowAddRoleModal(false);
-    setNewRole({ name: '', desc: '', users: 0 });
-    toast.success('Role added successfully!');
-  };
-
-  const handleDeleteRole = (id: number) => {
-    if (confirm('Are you sure you want to delete this role?')) {
-      setRoles(prev => prev.filter(r => r.id !== id));
-      toast.success('Role deleted');
-    }
-  };
-
   // --- BACKUP & RESTORE IMPLEMENTATION ---
   const handleBackup = () => {
     toast.success('Backup initiated. Check downloads folder soon.');
@@ -789,11 +740,6 @@ export default function SettingsPanel({ initialSubTab = 'dashboard', onBack }: S
     return matchMod && matchTxt;
   });
 
-  const filteredRoles = roles.filter(role => {
-    return role.name.toLowerCase().includes(accessSearch.toLowerCase()) ||
-           role.desc.toLowerCase().includes(accessSearch.toLowerCase());
-  });
-
   return (
     <div className="w-full">
       {/* ── Sub-navigation Header for Master Settings & Backups ── */}
@@ -842,28 +788,6 @@ export default function SettingsPanel({ initialSubTab = 'dashboard', onBack }: S
           >
             <Database size={13} />
             <span>Table Columns</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('access')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-              activeTab === 'access'
-                ? 'bg-primary-600 text-white shadow-sm'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-            }`}
-          >
-            <ShieldCheck size={13} />
-            <span>Access Control</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('audit')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-              activeTab === 'audit'
-                ? 'bg-primary-600 text-white shadow-sm'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-            }`}
-          >
-            <FileText size={13} />
-            <span>Audit Logs</span>
           </button>
           <button
             onClick={() => setActiveTab('backup')}
@@ -939,40 +863,6 @@ export default function SettingsPanel({ initialSubTab = 'dashboard', onBack }: S
                   <div>
                     <h4 className="font-bold text-slate-900 text-sm">Table Column Selection</h4>
                     <p className="text-xs text-slate-500 font-semibold leading-tight mt-0.5">Control which table columns to show or hide globally</p>
-                  </div>
-                </div>
-                <ChevronRight size={16} className="text-slate-400 group-hover:text-indigo-600 transition-colors shrink-0" />
-              </div>
-
-              {/* Card 4: Access Control */}
-              <div 
-                onClick={() => setActiveTab('access')}
-                className="bg-white rounded-2xl border border-slate-200/60 p-5 flex items-center justify-between cursor-pointer hover:border-indigo-300 hover:shadow-sm hover:scale-[1.01] transition-all group"
-              >
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center shrink-0 shadow-2xs">
-                    <ShieldCheck size={22} strokeWidth={2.2} />
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-slate-900 text-sm">Access Control & Roles</h4>
-                    <p className="text-xs text-slate-500 font-semibold leading-tight mt-0.5">Manage permissions, user roles & module security</p>
-                  </div>
-                </div>
-                <ChevronRight size={16} className="text-slate-400 group-hover:text-indigo-600 transition-colors shrink-0" />
-              </div>
-
-              {/* Card 5: Audit Logs */}
-              <div 
-                onClick={() => setActiveTab('audit')}
-                className="bg-white rounded-2xl border border-slate-200/60 p-5 flex items-center justify-between cursor-pointer hover:border-indigo-300 hover:shadow-sm hover:scale-[1.01] transition-all group"
-              >
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 border border-amber-100 flex items-center justify-center shrink-0 shadow-2xs">
-                    <FileText size={22} strokeWidth={2.2} />
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-slate-900 text-sm">Audit Logs</h4>
-                    <p className="text-xs text-slate-500 font-semibold leading-tight mt-0.5">View all system & data change logs</p>
                   </div>
                 </div>
                 <ChevronRight size={16} className="text-slate-400 group-hover:text-indigo-600 transition-colors shrink-0" />
@@ -1674,183 +1564,6 @@ export default function SettingsPanel({ initialSubTab = 'dashboard', onBack }: S
         </div>
       )}
 
-      {/* 4. ACCESS CONTROL SUBPAGE */}
-      {activeTab === 'access' && (
-        <div className="p-6 space-y-6">
-          {/* Breadcrumb Header */}
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
-              <button onClick={() => setActiveTab('dashboard')} className="hover:text-primary-600 transition-colors flex items-center gap-1">
-                <ArrowLeft size={13} /> Master Settings & Backups
-              </button>
-              <span>&gt;</span>
-              <span className="text-slate-800">Access Control</span>
-            </div>
-            <h2 className="text-xl font-black text-slate-900 tracking-tight mt-2">Access Control</h2>
-            <p className="text-xs text-slate-500 font-semibold leading-tight mt-0.5">Manage roles, permissions & user access</p>
-          </div>
-
-          {/* Subtabs */}
-          <div className="flex gap-4 border-b border-slate-150">
-            <button 
-              onClick={() => setAccessSubTab('roles')}
-              className={`pb-2 text-xs font-semibold border-b-2 transition-all -mb-px ${
-                accessSubTab === 'roles' ? 'border-primary-600 text-primary-700 font-bold' : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Roles
-            </button>
-            <button 
-              onClick={() => setAccessSubTab('permissions')}
-              className={`pb-2 text-xs font-semibold border-b-2 transition-all -mb-px ${
-                accessSubTab === 'permissions' ? 'border-primary-600 text-primary-700 font-bold' : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Permissions
-            </button>
-            <button 
-              onClick={() => setAccessSubTab('users')}
-              className={`pb-2 text-xs font-semibold border-b-2 transition-all -mb-px ${
-                accessSubTab === 'users' ? 'border-primary-600 text-primary-700 font-bold' : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              Users
-            </button>
-          </div>
-
-          {accessSubTab === 'roles' ? (
-            <div className="space-y-4">
-              {/* Controls bar */}
-              <div className="flex flex-col sm:flex-row gap-3 items-center justify-between">
-                <div className="relative flex-1 sm:w-64 min-w-[200px] w-full">
-                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <input 
-                    type="text"
-                    value={accessSearch}
-                    onChange={(e) => setAccessSearch(e.target.value)}
-                    placeholder="Search roles..."
-                    className="border border-slate-200 rounded-xl pl-9 pr-4 py-1.5 text-xs font-medium w-full focus:outline-none focus:ring-1 focus:ring-primary-500 bg-white"
-                  />
-                </div>
-
-                <button 
-                  onClick={() => setShowAddRoleModal(true)}
-                  className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-primary-600 hover:bg-primary-700 text-white text-xs font-semibold transition-colors cursor-pointer shadow-sm shadow-primary-500/10 w-full sm:w-auto justify-center"
-                >
-                  <Plus size={13} />
-                  Add Role
-                </button>
-              </div>
-
-              {/* Data Table */}
-              <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-                <table className="w-full text-xs text-left">
-                  <thead className="bg-slate-55/60 text-slate-600 font-bold border-b border-slate-200 uppercase tracking-wider">
-                    <tr>
-                      <th className="px-5 py-3">Role Name</th>
-                      <th className="px-5 py-3">Description</th>
-                      <th className="px-5 py-3 w-32 text-center">Users</th>
-                      <th className="px-5 py-3 w-28">Status</th>
-                      <th className="px-5 py-3 text-right w-24">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {filteredRoles.map((role) => (
-                      <tr key={role.id} className="hover:bg-slate-50/50">
-                        <td className="px-5 py-3.5 font-bold text-slate-800">{role.name}</td>
-                        <td className="px-5 py-3.5 font-semibold text-slate-500">{role.desc}</td>
-                        <td className="px-5 py-3.5 text-center font-bold text-slate-700">{role.users}</td>
-                        <td className="px-5 py-3.5">
-                          <span className="inline-flex px-2 py-0.5 rounded-full font-bold text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200/50 uppercase">
-                            {role.status}
-                          </span>
-                        </td>
-                        <td className="px-5 py-3.5 text-right">
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button 
-                              onClick={() => toast.success(`Mock editing permissions for '${role.name}'`)}
-                              className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded transition-all cursor-pointer"
-                              title="Edit Role"
-                            >
-                              <Pencil size={13} />
-                            </button>
-                            <button 
-                              onClick={() => handleDeleteRole(role.id)}
-                              className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-all cursor-pointer"
-                              title="Delete Role"
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                    {filteredRoles.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="px-5 py-8 text-center text-slate-400 font-medium">No roles match search criteria.</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-                <div className="bg-slate-50/50 border-t border-slate-150 px-5 py-3 flex items-center justify-between text-slate-500 font-semibold">
-                  <span>Showing 1 to {filteredRoles.length} of {roles.length} entries</span>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="bg-white border border-slate-200 rounded-2xl p-6 text-center max-w-md mx-auto space-y-3">
-              <ShieldCheck size={36} className="mx-auto text-primary-500" />
-              <h4 className="font-bold text-slate-800 text-sm">Role Permission Matrix</h4>
-              <p className="text-xs text-slate-500 leading-normal">
-                Detailed access grids for Create, Read, Update, Delete (CRUD) operations on Contacts, Policies, and Claims are validated in backend middleware.
-              </p>
-              <button 
-                onClick={() => toast.success('Permissions mapping saved')}
-                className="btn-primary text-xs px-4 py-2 mt-2 mx-auto cursor-pointer"
-              >
-                Access System Matrix
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* 5. EMPLOYEE ACCESS & LOGIN CREDENTIALS */}
-      {activeTab === 'employee_access' && (
-        <div className="p-6 space-y-6">
-          {/* Breadcrumb Header */}
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
-              <button onClick={() => setActiveTab('dashboard')} className="hover:text-primary-600 transition-colors flex items-center gap-1">
-                <ArrowLeft size={13} /> Master Settings & Backups
-              </button>
-              <span>&gt;</span>
-              <span className="text-slate-800">Employee Access & Login</span>
-            </div>
-            <h2 className="text-xl font-black text-slate-900 tracking-tight mt-2">Employee Access & Login</h2>
-            <p className="text-xs text-slate-500 font-semibold leading-tight mt-0.5">Manage employee profiles and system credentials</p>
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center max-w-md mx-auto space-y-4 shadow-2xs">
-            <div className="w-16 h-16 rounded-2xl bg-indigo-50 text-indigo-600 border border-indigo-100 flex items-center justify-center mx-auto shadow-2xs">
-              <User size={30} strokeWidth={2} />
-            </div>
-            <div className="space-y-1.5">
-              <h4 className="font-bold text-slate-800 text-sm">Credentials Managed Externally</h4>
-              <p className="text-xs text-slate-500 leading-relaxed">
-                Employee profile details, login passwords, and activation statuses are managed globally under the **Employees Directory** module.
-              </p>
-            </div>
-            <button 
-              onClick={() => window.location.href = '/employees'}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-primary-600 hover:bg-primary-700 text-white text-xs font-bold transition-all cursor-pointer shadow-md shadow-primary-500/15"
-            >
-              Go to Employees Directory
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* 6. DATABASE BACKUP & RESTORE */}
       {activeTab === 'backup' && (
         <div className="p-6 space-y-6">
@@ -1908,59 +1621,7 @@ export default function SettingsPanel({ initialSubTab = 'dashboard', onBack }: S
         </div>
       )}
 
-      {/* 7. AUDIT LOGS */}
-      {activeTab === 'audit' && (
-        <div className="p-6 space-y-6">
-          {/* Breadcrumb Header */}
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
-              <button onClick={() => setActiveTab('dashboard')} className="hover:text-primary-600 transition-colors flex items-center gap-1 cursor-pointer">
-                <ArrowLeft size={13} /> Master Settings & Backups
-              </button>
-              <span>&gt;</span>
-              <span className="text-slate-800">Audit Logs</span>
-            </div>
-            <h2 className="text-xl font-black text-slate-900 tracking-tight mt-2">Audit Logs</h2>
-            <p className="text-xs text-slate-500 font-semibold leading-tight mt-0.5">View all system & data change logs</p>
-          </div>
 
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <input className="input max-w-xs text-xs py-1.5" placeholder="Search logs..." />
-            </div>
-            <div className="overflow-x-auto border border-slate-100 rounded-xl bg-white shadow-2xs">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead>
-                  <tr className="bg-slate-50/75 border-b text-slate-550 font-bold uppercase tracking-wider text-[10px]">
-                    <th className="p-3">User</th>
-                    <th className="p-3">Action</th>
-                    <th className="p-3">Module</th>
-                    <th className="p-3">Details</th>
-                    <th className="p-3">Date & Time</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {[
-                    { user: 'Rahul Mehta', action: 'Created', mod: 'Insurance Company', desc: 'Added HDFC ERGO', time: '20 May 2024 10:30 AM' },
-                    { user: 'Anjali Mehta', action: 'Updated', mod: 'Plan Name', desc: 'Updated plan details', time: '20 May 2024 09:15 AM' },
-                    { user: 'Vikram Joshi', action: 'Deleted', mod: 'Agent / Agency', desc: 'Deleted agent record', time: '20 May 2024 05:45 PM' },
-                    { user: 'Pooja Sharma', action: 'Created', mod: 'Hospital', desc: 'Added new hospital', time: '19 May 2024 03:20 PM' },
-                    { user: 'Suresh Kumar', action: 'Updated', mod: 'Policy', desc: 'Updated policy status', time: '19 May 2024 11:10 AM' }
-                  ].map((c, i) => (
-                    <tr key={i} className="hover:bg-slate-50/50">
-                      <td className="p-3 font-semibold text-slate-800">{c.user}</td>
-                      <td className="p-3 text-slate-600">{c.action}</td>
-                      <td className="p-3 text-slate-500">{c.mod}</td>
-                      <td className="p-3 text-slate-600">{c.desc}</td>
-                      <td className="p-3 text-slate-500">{c.time}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* --- ADD COMPULSORY RULE MODAL --- */}
       {showAddRuleModal && (
@@ -2437,68 +2098,6 @@ export default function SettingsPanel({ initialSubTab = 'dashboard', onBack }: S
                   className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-xl text-xs font-semibold cursor-pointer shadow-sm"
                 >
                   Save Changes
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* --- ADD ROLE MODAL --- */}
-      {showAddRoleModal && (
-        <div className="fixed inset-0 z-55 flex items-center justify-center bg-slate-900/40 backdrop-blur-[2px]">
-          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-xl animate-fadeIn">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-              <h3 className="text-sm font-black text-slate-955 uppercase tracking-wide">Add Access Control Role</h3>
-              <button onClick={() => setShowAddRoleModal(false)} className="text-slate-400 hover:text-slate-700 cursor-pointer">
-                <X size={16} />
-              </button>
-            </div>
-            <form onSubmit={handleAddRole} className="space-y-4">
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wide block">Role Name</label>
-                <input 
-                  type="text"
-                  placeholder="e.g. Super User"
-                  value={newRole.name}
-                  onChange={(e) => setNewRole(prev => ({ ...prev, name: e.target.value }))}
-                  className="w-full border border-slate-250 rounded-xl px-3.5 py-2 text-xs focus:ring-1 focus:ring-primary-500"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wide block">Role Description</label>
-                <textarea 
-                  placeholder="e.g. Read-write access to insurance but cannot export databases..."
-                  value={newRole.desc}
-                  onChange={(e) => setNewRole(prev => ({ ...prev, desc: e.target.value }))}
-                  rows={3}
-                  className="w-full border border-slate-250 rounded-xl px-3.5 py-2 text-xs focus:ring-1 focus:ring-primary-500"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wide block">Associated Users Count</label>
-                <input 
-                  type="number"
-                  placeholder="0"
-                  value={newRole.users || ''}
-                  onChange={(e) => setNewRole(prev => ({ ...prev, users: Number(e.target.value) }))}
-                  className="w-full border border-slate-250 rounded-xl px-3.5 py-2 text-xs focus:ring-1 focus:ring-primary-500"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-2">
-                <button 
-                  type="button"
-                  onClick={() => setShowAddRoleModal(false)}
-                  className="px-4 py-2 border border-slate-200 hover:bg-slate-50 rounded-xl text-slate-600 text-xs font-semibold cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button 
-                  type="submit"
-                  className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-xl text-xs font-semibold cursor-pointer"
-                >
-                  Save Role
                 </button>
               </div>
             </form>

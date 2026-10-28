@@ -638,8 +638,8 @@ export default function PhcTrackingView() {
   }, []);
   const activePhcFilterCount = (policyTypeFilter !== 'All' ? 1 : 0) + (phcStatusFilter !== 'All' ? 1 : 0) + (phcYearFilter !== 'All' ? 1 : 0) + (companyFilter !== 'All' ? 1 : 0) + (fromDate || toDate ? 1 : 0);
 
-  const [sortKey, setSortKey] = useState<string>('');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [sortKey, setSortKey] = useState<string>('createdAt');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
   const {
     data: phcResponse,
@@ -681,12 +681,44 @@ export default function PhcTrackingView() {
     return map;
   }, [allPoliciesRes]);
 
+  const policyMetaMap = useMemo(() => {
+    const map = new Map<string, { notes?: string; updatedAt?: string; createdAt?: string }>();
+    const getArrayData = (obj: any): any[] => {
+      if (!obj) return [];
+      if (Array.isArray(obj)) return obj;
+      if (obj.data && Array.isArray(obj.data)) return obj.data;
+      if (obj.items && Array.isArray(obj.items)) return obj.items;
+      return [];
+    };
+    const list = getArrayData(allPoliciesRes);
+    list.forEach((p: any) => {
+      const meta = { notes: p.notes || '', updatedAt: p.updatedAt, createdAt: p.createdAt };
+      if (p.policyNumber) map.set(p.policyNumber.trim(), meta);
+      if (p.id) map.set(p.id, meta);
+    });
+    return map;
+  }, [allPoliciesRes]);
+
   const enrichedPhcData = useMemo(() => {
     return phcData.map(p => {
-      const polNotes = (p as any).notes || policyNotesMap.get(p.policyNo?.trim()) || policyNotesMap.get(p.id) || '';
-      return enrichPhcRecord(p, polNotes);
+      const meta = policyMetaMap.get(p.policyNo?.trim()) || policyMetaMap.get(p.id);
+      const polNotes = (p as any).notes || meta?.notes || policyNotesMap.get(p.policyNo?.trim()) || policyNotesMap.get(p.id) || '';
+      const enriched = enrichPhcRecord(p, polNotes);
+      const upA = meta?.updatedAt ? new Date(meta.updatedAt).getTime() : 0;
+      const upB = (p as any).updatedAt ? new Date((p as any).updatedAt).getTime() : 0;
+      const effectiveUpdatedAt = (upA >= upB && upA > 0) ? meta?.updatedAt : (p as any).updatedAt;
+
+      const crA = meta?.createdAt ? new Date(meta.createdAt).getTime() : 0;
+      const crB = (p as any).createdAt ? new Date((p as any).createdAt).getTime() : 0;
+      const effectiveCreatedAt = (crA >= crB && crA > 0) ? meta?.createdAt : (p as any).createdAt;
+
+      return {
+        ...enriched,
+        updatedAt: effectiveUpdatedAt,
+        createdAt: effectiveCreatedAt,
+      };
     });
-  }, [phcData, policyNotesMap]);
+  }, [phcData, policyMetaMap, policyNotesMap]);
 
   const filteredData = useMemo(() => {
     let list = enrichedPhcData.filter(p => {
@@ -751,22 +783,34 @@ export default function PhcTrackingView() {
     }
     return list;
   }, [
-    activeTab, companyFilter, dateFilterType, fromDate, phcData, phcStatusFilter,
+    activeTab, companyFilter, dateFilterType, fromDate, enrichedPhcData, phcStatusFilter,
     phcYearFilter, policyTypeFilter, searchQuery, toDate, policyNotesMap,
   ]);
 
   const sortedFilteredData = useMemo(() => {
-    if (!sortKey) {
+    if (!sortKey || sortKey === 'createdAt') {
       return [...filteredData].sort((a: any, b: any) => {
-        const uA = Number(a.utilizedAmount || 0);
-        const uB = Number(b.utilizedAmount || 0);
-        if (uA !== uB) return uB - uA; // Policies with utilization (e.g. Vikas Mohite) appear first!
-        const elA = Number(a.eligibleAmount || 0);
-        const elB = Number(b.eligibleAmount || 0);
-        return elB - elA;
+        const latestA = Math.max(
+          a.updatedAt ? new Date(a.updatedAt).getTime() : 0,
+          a.createdAt ? new Date(a.createdAt).getTime() : 0
+        );
+        const latestB = Math.max(
+          b.updatedAt ? new Date(b.updatedAt).getTime() : 0,
+          b.createdAt ? new Date(b.createdAt).getTime() : 0
+        );
+        if (latestA !== latestB) {
+          return sortDir === 'asc' ? latestA - latestB : latestB - latestA;
+        }
+        return String(b.id || '').localeCompare(String(a.id || ''));
       });
     }
     return sortData(filteredData, sortKey, sortDir, (row: any, key: string) => {
+      if (key === 'createdAt') {
+        return Math.max(
+          row.updatedAt ? new Date(row.updatedAt).getTime() : 0,
+          row.createdAt ? new Date(row.createdAt).getTime() : 0
+        );
+      }
       return row[key];
     });
   }, [filteredData, sortKey, sortDir]);
@@ -965,7 +1009,7 @@ export default function PhcTrackingView() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [activeTab, companyFilter, fromDate, phcStatusFilter, phcYearFilter, policyTypeFilter, searchQuery, toDate]);
+  }, [activeTab, companyFilter, fromDate, phcData, phcStatusFilter, phcYearFilter, policyTypeFilter, searchQuery, toDate]);
 
   useEffect(() => {
     setCurrentPage(page => Math.min(page, totalPages));
@@ -1262,7 +1306,7 @@ export default function PhcTrackingView() {
         <div className="max-h-[420px] overflow-auto custom-scrollbar overscroll-contain">
           {activeTab === 'dependencies' ? (
             <table className="w-full text-left text-xs">
-              <thead>
+              <thead className="sticky top-0 z-20">
                 <tr className="bg-slate-50/80 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
                   <th className="px-3 py-3 border border-slate-200 text-center w-10">Sr No.</th>
                   {[
@@ -1323,8 +1367,8 @@ export default function PhcTrackingView() {
             </table>
           ) : (
           <table className="w-full text-left text-xs">
-            <thead>
-              <tr className="bg-slate-50/80 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+            <thead className="sticky top-0 z-20">
+                <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
                 <th className="px-3 py-3 border border-slate-200 text-center w-10">
                   <input type="checkbox" className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/20 cursor-pointer"
                     checked={selectedRows.size === paginatedData.length && paginatedData.length > 0}

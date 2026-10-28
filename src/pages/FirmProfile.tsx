@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@store/auth.store';
-import { tenantService, subscriptionsService, agencyDetailsService, bannersService } from '@api/index';
+import { tenantService, agencyDetailsService, bannersService } from '@api/index';
 import { deletionRequestsService } from '@api/deletionRequestsService';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -131,15 +131,7 @@ export default function FirmProfile() {
   const navigate = useNavigate();
   const isOwner  = user?.role === 'OWNER' || user?.role === 'SUPERADMIN';
 
-  /* ─ Subscription gating ─ */
-  const { data: subRes } = useQuery({
-    queryKey: ['subscription', 'current'],
-    queryFn: () => subscriptionsService.current(),
-    staleTime: 5 * 60_000,
-  });
-  const planName           = subRes?.data?.plan?.name || 'Free';
-  const isFirmProfileEnabled = user?.role === 'SUPERADMIN'
-    || planName === 'Growth' || planName === 'Business' || planName === 'Enterprise';
+  const isFirmProfileEnabled = true;
 
   /* ─ Fetch tenant ─ */
   const { data: tenantData, isLoading } = useQuery({
@@ -246,28 +238,7 @@ export default function FirmProfile() {
     onSuccess: () => { toast.success('Deleted'); refetchBanners(); },
   });
 
-  /* ─ Locked overlay (Free/Starter plans) ─ */
-  const LockedOverlay = () => (
-    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center text-center p-6">
-      <div className="w-16 h-16 rounded-2xl bg-pink-500/10 flex items-center justify-center mb-4">
-        <Lock size={28} className="text-pink-400 animate-pulse" />
-      </div>
-      <h2 className="text-base font-bold text-white mb-2">Firm Profile Locked</h2>
-      <p className="text-sm text-slate-400 max-w-xs leading-relaxed mb-5">
-        Upgrade to the <strong className="text-white">Growth</strong> plan or above to customize your agency branding,
-        credentials, and white-label settings.
-      </p>
-      <button
-        onClick={() => navigate('/subscription')}
-        className="px-6 py-2.5 bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600
-          text-white text-sm font-bold rounded-xl shadow-lg shadow-pink-500/25 transition-all uppercase tracking-wide"
-      >
-        Upgrade Now
-      </button>
-    </div>
-  );
 
-  if (!isFirmProfileEnabled) return <LockedOverlay />;
 
   return (
     <div className="space-y-6">

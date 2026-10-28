@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { policiesService } from '@api/index';
+import { cleanConnectedPhone } from '../../Policies/index';
 import { 
   Shield, 
   Users, 
@@ -98,8 +99,53 @@ export default function ClaimPolicyDetailsTab({
   const agentName = p.agentName
     || `${p.agent?.firstName || p.assignedEmployee?.employeeProfile?.firstName || ''} ${p.agent?.lastName || p.assignedEmployee?.employeeProfile?.lastName || ''}`.trim()
     || '—';
-  const membersList: any[] = p.members || [];
-  const nomineesList: any[] = p.nominees || [];
+  const membersList: any[] = useMemo(() => {
+    if (Array.isArray(p.members) && p.members.length > 0) return p.members;
+    const list: any[] = [];
+    (p.notes || '').split(/\r?\n/).forEach((line: string) => {
+      if (line.includes('Connected Person')) {
+        const nameM = line.match(/Name:\s*([^,]+)/i);
+        const relM = line.match(/Relationship:\s*([^,]+)/i);
+        const contactM = line.match(/Contact:\s*([^,]+)/i);
+        const dobM = line.match(/DoB:\s*([^,]+)/i);
+        const genderM = line.match(/Gender:\s*([^,]+)/i);
+        if (nameM) {
+          list.push({
+            name: nameM[1].trim(),
+            relationship: relM ? relM[1].trim() : 'Member',
+            phone: contactM && contactM[1].trim() !== 'N/A' ? contactM[1].trim() : '',
+            dateOfBirth: dobM && dobM[1].trim() !== 'N/A' ? dobM[1].trim() : null,
+            gender: genderM ? genderM[1].trim() : undefined,
+          });
+        }
+      }
+    });
+    return list;
+  }, [p.members, p.notes]);
+
+  const nomineesList: any[] = useMemo(() => {
+    if (Array.isArray(p.nominees) && p.nominees.length > 0) return p.nominees;
+    const list: any[] = [];
+    (p.notes || '').split(/\r?\n/).forEach((line: string) => {
+      if (line.includes('Nominee Details') || line.startsWith('Nominee:')) {
+        const nameM = line.match(/Name:\s*([^,]+)/i) || line.match(/Nominee:\s*([^,\n\r]+)/i);
+        const relM = line.match(/Relationship:\s*([^,]+)/i);
+        const contactM = line.match(/Contact:\s*([^,]+)/i);
+        const dobM = line.match(/DoB:\s*([^,]+)/i);
+        const shareM = line.match(/Share:\s*([0-9.]+)%/i);
+        if (nameM) {
+          list.push({
+            name: nameM[1].trim(),
+            relationship: relM ? relM[1].trim() : 'Nominee',
+            phone: contactM && contactM[1].trim() !== 'N/A' ? contactM[1].trim() : '',
+            dateOfBirth: dobM && dobM[1].trim() !== 'N/A' ? dobM[1].trim() : null,
+            sharePercent: shareM ? shareM[1] : undefined,
+          });
+        }
+      }
+    });
+    return list;
+  }, [p.nominees, p.notes]);
   const paymentsList: any[] = p.payments || [];
   const policyClaimsList: any[] = p.claims || [];
   const policyType = p.policyType || p.policyCategory || p.plan?.subCategory || '—';
@@ -349,8 +395,11 @@ export default function ClaimPolicyDetailsTab({
                 <div key={m.id || idx} className="p-2.5 rounded-xl bg-slate-50/60 border border-slate-100 text-xs flex items-center justify-between">
                   <div>
                     <span className="font-bold text-slate-900 block">{m.name || `${m.firstName || ''} ${m.lastName || ''}`}</span>
-                    <span className="text-[10px] text-slate-500">
-                      {m.relationship || 'Member'}
+                    <span className="text-[10px] text-slate-500 flex flex-wrap items-center gap-1.5 mt-0.5">
+                      <span>{m.relationship || 'Member'}</span>
+                      {cleanConnectedPhone(m.phone || m.contactNo || m.contact) && (
+                        <span className="font-semibold text-slate-700">· 📞 {cleanConnectedPhone(m.phone || m.contactNo || m.contact)}</span>
+                      )}
                       {m.dateOfBirth ? ` · DOB: ${format(new Date(m.dateOfBirth), 'dd/MMM/yyyy')}` : ''}
                       {m.gender ? ` · ${m.gender}` : ''}
                     </span>
@@ -384,8 +433,11 @@ export default function ClaimPolicyDetailsTab({
                 <div key={n.id || idx} className="p-2.5 rounded-xl bg-slate-50/60 border border-slate-100 text-xs flex items-center justify-between">
                   <div>
                     <span className="font-bold text-slate-900 block">{n.name}</span>
-                    <span className="text-[10px] text-slate-500">
-                      {n.relationship || 'Nominee'}
+                    <span className="text-[10px] text-slate-500 flex flex-wrap items-center gap-1.5 mt-0.5">
+                      <span>{n.relationship || 'Nominee'}</span>
+                      {cleanConnectedPhone(n.phone || n.contactNo || n.contact) && (
+                        <span className="font-semibold text-slate-700">· 📞 {cleanConnectedPhone(n.phone || n.contactNo || n.contact)}</span>
+                      )}
                       {n.dateOfBirth ? ` · DOB: ${format(new Date(n.dateOfBirth), 'dd/MMM/yyyy')}` : ''}
                     </span>
                   </div>

@@ -581,6 +581,8 @@ export default function Contacts() {
   const qc = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const openedPolicyRef = useRef<string | null>(null);
+  const openedFamilyRef = useRef<string | null>(null);
+  const openedDirectContactRef = useRef<string | null>(null);
   const isDirectPolicyModalRef = useRef(false);
   const [activeTab, setActiveTab] = useState<'contacts' | 'customers' | 'birthdays'>('contacts');
   const [page, setPage] = useState(1);
@@ -901,6 +903,7 @@ export default function Contacts() {
     firstName: '',
     middleName: '',
     lastName: '',
+    motherName: '',
     fullName: '',
     gender: '',
     maritalStatus: '',
@@ -1236,9 +1239,9 @@ export default function Contacts() {
     setFamilyMemberModalOpen(true);
   };
 
-  const openEditFamilyMemberModal = (idx: number) => {
+  const openEditFamilyMemberModal = (idx: number, memberData?: any) => {
     setEditingFamilyMemberIdx(idx);
-    setSelectedFamilyMemberForModal(familyMembers[idx] || null);
+    setSelectedFamilyMemberForModal(memberData || familyMembers[idx] || null);
     setFamilyMemberModalOpen(true);
   };
 
@@ -1319,12 +1322,21 @@ export default function Contacts() {
         let targetFamContactId = fam.contactId;
         if (targetFamContactId && targetFamContactId !== editContactId) {
           await contactsService.update(targetFamContactId, famPayload);
-          await contactsService.addRelationship(editContactId, {
-            relatedContactId: targetFamContactId,
-            relationshipType: relType,
-            relationship: relType,
-            ...famPayload,
-          });
+          if (fam.id) {
+            await contactsService.updateRelationship(editContactId, fam.id, {
+              relatedContactId: targetFamContactId,
+              relationshipType: relType,
+              relationship: relType,
+              ...famPayload,
+            });
+          } else {
+            await contactsService.addRelationship(editContactId, {
+              relatedContactId: targetFamContactId,
+              relationshipType: relType,
+              relationship: relType,
+              ...famPayload,
+            });
+          }
         } else {
           const addRes = await contactsService.addRelationship(editContactId, {
             name: fullFamName,
@@ -1679,9 +1691,16 @@ export default function Contacts() {
     const map: Record<string, any[]> = {};
     policyListArray.forEach((p: any) => {
       const keys = [p.contactId, p.contact?.id, p.contact?.contactId].filter(Boolean);
+      if (Array.isArray(p.members)) {
+        p.members.forEach((m: any) => {
+          if (m?.contactId) keys.push(m.contactId);
+        });
+      }
       keys.forEach(k => {
         if (!map[k]) map[k] = [];
-        map[k].push(p);
+        if (!map[k].some((existing: any) => existing.id === p.id)) {
+          map[k].push(p);
+        }
       });
     });
     return map;
@@ -1778,6 +1797,7 @@ export default function Contacts() {
       firstName: '',
       middleName: '',
       lastName: '',
+      motherName: '',
       gender: '',
       maritalStatus: '',
       dateOfBirth: '',
@@ -1884,6 +1904,7 @@ export default function Contacts() {
       firstName: initialNames.firstName,
       middleName: initialNames.middleName,
       lastName: initialNames.lastName,
+      motherName: fallbackContact.motherName || fallbackContact.contact?.motherName || '',
       gender: fallbackContact.gender || fallbackContact.contact?.gender || '',
       maritalStatus: fallbackContact.maritalStatus || fallbackContact.contact?.maritalStatus || '',
       weddingAnniversaryDate: fallbackContact.weddingAnniversaryDate || '',
@@ -1959,6 +1980,7 @@ export default function Contacts() {
           firstName: updatedNames.firstName,
           middleName: updatedNames.middleName,
           lastName: updatedNames.lastName,
+          motherName: contact.motherName || fallbackContact.motherName || fallbackContact.contact?.motherName || '',
           gender: contact.gender || fallbackContact.gender || fallbackContact.contact?.gender || '',
           maritalStatus: contact.maritalStatus || fallbackContact.maritalStatus || fallbackContact.contact?.maritalStatus || '',
           weddingAnniversaryDate: contact.weddingAnniversaryDate || fallbackContact.weddingAnniversaryDate || '',
@@ -2207,33 +2229,74 @@ export default function Contacts() {
     }
   };
 
+  const openPolicyInNewTab = (contactId: string, policyId?: string) => {
+    const url = new URL('/contacts', window.location.origin);
+    url.searchParams.set('openPolicyContact', contactId);
+    if (policyId) {
+      url.searchParams.set('openPolicyId', policyId);
+    } else {
+      url.searchParams.set('openNewPolicy', '1');
+    }
+    window.open(url.toString(), '_blank', 'noopener,noreferrer');
+  };
+
+  const openFamilyMemberInNewTab = (contactId: string, memberIdx?: number | null) => {
+    const url = new URL('/contacts', window.location.origin);
+    url.searchParams.set('openFamilyContact', contactId);
+    if (memberIdx !== null && memberIdx !== undefined && memberIdx >= 0) {
+      url.searchParams.set('openFamilyMemberIdx', String(memberIdx));
+    } else {
+      url.searchParams.set('openNewFamilyMember', '1');
+    }
+    window.open(url.toString(), '_blank', 'noopener,noreferrer');
+  };
+
+  const openContactInNewTab = (contactId: string) => {
+    const url = new URL('/contacts', window.location.origin);
+    url.searchParams.set('openContactId', contactId);
+    window.open(url.toString(), '_blank', 'noopener,noreferrer');
+  };
+
+  // Handle URL query parameters to open Policy Modal in a new tab
   useEffect(() => {
     const policyId = searchParams.get('openPolicyId');
+    const openNewPolicy = searchParams.get('openNewPolicy') === '1' || searchParams.get('openNewPolicy') === 'true';
     const contactId = searchParams.get('openPolicyContact');
-    if (!policyId || !contactId) return;
+    if (!contactId || (!policyId && !openNewPolicy)) return;
 
-    const requestKey = `${contactId}:${policyId}`;
+    const requestKey = `${contactId}:${policyId || 'new'}`;
     if (openedPolicyRef.current === requestKey) return;
     openedPolicyRef.current = requestKey;
 
     const loadPolicyModal = async () => {
       try {
-        const [contactRes, policyRes] = await Promise.all([
-          contactsService.get(contactId),
-          policiesService.get(policyId),
-        ]);
-        const contact = contactRes?.data?.data || contactRes?.data || contactRes;
-        const policy = policyRes?.data?.data || policyRes?.data || policyRes;
-        if (!contact?.id || !policy?.id) {
-          throw new Error('Contact or policy details were not found');
-        }
+        if (policyId) {
+          const [contactRes, policyRes] = await Promise.all([
+            contactsService.get(contactId),
+            policiesService.get(policyId),
+          ]);
+          const contact = contactRes?.data?.data || contactRes?.data || contactRes;
+          const policy = policyRes?.data?.data || policyRes?.data || policyRes;
+          if (!contact?.id || !policy?.id) {
+            throw new Error('Contact or policy details were not found');
+          }
 
-        isDirectPolicyModalRef.current = true;
-        setEditContactId(contact.id);
-        setLoadedContact(contact);
-        setPolicyToEdit(policy);
-        setActiveLeadTab('Policy');
-        setCreatePolicyModalOpen(true);
+          await openLeadEdit(contact, { defaultTab: 'Policy' });
+          setPolicyToEdit(policy);
+          setActiveLeadTab('Policy');
+          setCreatePolicyModalOpen(true);
+        } else {
+          const contactRes = await contactsService.get(contactId);
+          const contact = contactRes?.data?.data || contactRes?.data || contactRes;
+          if (!contact?.id) {
+            throw new Error('Contact details were not found');
+          }
+
+          await openLeadEdit(contact, { defaultTab: 'Policy' });
+          setPolicyToEdit(null);
+          setActiveLeadTab('Policy');
+          setCreatePolicyModalOpen(true);
+        }
         navigate('/contacts', { replace: true });
       } catch (error: any) {
         openedPolicyRef.current = null;
@@ -2244,42 +2307,198 @@ export default function Contacts() {
     void loadPolicyModal();
   }, [navigate, searchParams]);
 
+  // Handle URL query parameters to open Family Member Modal in a new tab
   useEffect(() => {
-    if (!leadModalOpen || activeLeadTab !== 'Policy' || !editContactId || createPolicyModalOpen) return;
+    const contactId = searchParams.get('openFamilyContact');
+    const memberIdxStr = searchParams.get('openFamilyMemberIdx');
+    const isNewFamily = searchParams.get('openNewFamilyMember') === '1' || searchParams.get('openNewFamilyMember') === 'true';
 
-    const contactPolicies = [
-      ...(loadedContact?.policies || []),
-      ...(loadedContact?.id ? policyMap[loadedContact.id] || [] : []),
-      ...(loadedContact?.contactId ? policyMap[loadedContact.contactId] || [] : []),
-      ...(policyMap[editContactId] || []),
-    ];
-    const hasActivePolicy = contactPolicies.some((policy: any) => {
-      const status = (policy.status || 'ACTIVE').toUpperCase();
-      return !['EXPIRED', 'LAPSED', 'CANCELLED', 'INACTIVE'].includes(status)
-        && (!policy.endDate || new Date(policy.endDate) >= new Date());
-    });
-    if (!hasActivePolicy) return;
+    if (!contactId || (memberIdxStr === null && !isNewFamily)) return;
 
-    const openPolicyTab = (event: KeyboardEvent) => {
-      if (event.key !== 'Enter' || (!event.ctrlKey && !event.metaKey)) return;
+    const requestKey = `${contactId}:family:${memberIdxStr ?? 'new'}`;
+    if (openedFamilyRef.current === requestKey) return;
+    openedFamilyRef.current = requestKey;
 
-      event.preventDefault();
-      const activePolicy = contactPolicies.find((policy: any) => {
-        const status = (policy.status || 'ACTIVE').toUpperCase();
-        return !['EXPIRED', 'LAPSED', 'CANCELLED', 'INACTIVE'].includes(status)
-          && (!policy.endDate || new Date(policy.endDate) >= new Date());
-      });
-      if (!activePolicy?.id) return;
+    const loadFamilyModal = async () => {
+      try {
+        const contactRes = await contactsService.get(contactId);
+        const contact = contactRes?.data?.data || contactRes?.data || contactRes;
+        if (!contact?.id) {
+          throw new Error('Contact details were not found');
+        }
 
-      const url = new URL('/contacts', window.location.origin);
-      url.searchParams.set('openPolicyContact', editContactId);
-      url.searchParams.set('openPolicyId', activePolicy.id);
-      window.open(url.toString(), '_blank', 'noopener,noreferrer');
+        await openLeadEdit(contact, { defaultTab: 'Family' });
+
+        if (isNewFamily || memberIdxStr === null) {
+          openAddFamilyMemberModal();
+        } else {
+          const idx = parseInt(memberIdxStr, 10);
+          const validIdx = Number.isFinite(idx) && idx >= 0 ? idx : 0;
+          const rels = (contact.relationships || []).map((r: any) => {
+            const c = r.relatedContact || r.contact || {};
+            const parsedNames = extractNameFields(c);
+            const firstAddr = c.addresses?.[0] || {};
+            const firstOcc = c.occupations?.find((o: any) => o.isPrimary) || c.occupations?.[0] || {};
+            const rawDob = c?.dateOfBirth ? c.dateOfBirth.split('T')[0] : '';
+            const computedAge = rawDob ? String(calculateAge(rawDob)) : '';
+            return {
+              id: r.id,
+              contactId: c.id,
+              addedAt: r.createdAt || c.createdAt || contact.createdAt || new Date().toISOString(),
+              name: `${parsedNames.firstName} ${parsedNames.middleName} ${parsedNames.lastName}`.replace(/\s+/g, ' ').trim(),
+              firstName: parsedNames.firstName,
+              middleName: parsedNames.middleName,
+              lastName: parsedNames.lastName,
+              relation: (r.relationshipType || 'OTHER').toUpperCase(),
+              dob: rawDob,
+              age: computedAge,
+              gender: c.gender || '',
+              phone: (c.phone && !c.phone.startsWith('00') && c.phone !== '0000000000') ? c.phone : '',
+              whatsapp: (c.whatsappNumber || c.phone || ''),
+              email: c.email || '',
+              isDependent: !!(c.isDependent ?? r.isDependent),
+              occupation: firstOcc.title || firstOcc.type || '',
+              occupationType: firstOcc.type || '',
+              companyName: firstOcc.companyName || '',
+              annualIncome: c.annualIncome ? String(c.annualIncome) : '',
+              city: firstAddr.city || '',
+              state: firstAddr.state || '',
+              district: firstAddr.district || '',
+              pincode: firstAddr.pincode || '',
+              streetAddress: firstAddr.line1 || '',
+              medicalHistory: c.medicalHistory || [],
+              declaredMedicalHistory: c.declaredMedicalHistory || [],
+              notDeclaredMedicalHistory: c.notDeclaredMedicalHistory || [],
+              medicalHistoryDetails: c.medicalHistoryDetails || '',
+              surgeryDetails: c.surgeryDetails || '',
+              prescriptionDetails: c.prescriptionDetails || '',
+            };
+          });
+          const targetMember = rels[validIdx] || null;
+          setEditingFamilyMemberIdx(validIdx);
+          setSelectedFamilyMemberForModal(targetMember);
+          setFamilyMemberModalOpen(true);
+        }
+        navigate('/contacts', { replace: true });
+      } catch (error: any) {
+        openedFamilyRef.current = null;
+        toast.error(error.response?.data?.message || error.message || 'Failed to open family member details');
+      }
     };
 
-    window.addEventListener('keydown', openPolicyTab);
-    return () => window.removeEventListener('keydown', openPolicyTab);
-  }, [activeLeadTab, createPolicyModalOpen, editContactId, leadModalOpen, loadedContact, policyMap]);
+    void loadFamilyModal();
+  }, [navigate, searchParams]);
+
+  // Handle URL query parameters to open Contact Modal directly
+  useEffect(() => {
+    const directContactId = searchParams.get('openContactId');
+    if (!directContactId) return;
+
+    const requestKey = `contact:${directContactId}`;
+    if (openedDirectContactRef.current === requestKey) return;
+    openedDirectContactRef.current = requestKey;
+
+    const loadDirectContact = async () => {
+      try {
+        const contactRes = await contactsService.get(directContactId);
+        const contact = contactRes?.data?.data || contactRes?.data || contactRes;
+        if (!contact?.id) {
+          throw new Error('Contact details were not found');
+        }
+
+        await openLeadEdit(contact);
+        navigate('/contacts', { replace: true });
+      } catch (error: any) {
+        openedDirectContactRef.current = null;
+        toast.error(error.response?.data?.message || error.message || 'Failed to open contact');
+      }
+    };
+
+    void loadDirectContact();
+  }, [navigate, searchParams]);
+
+  // Ctrl + Enter shortcut: open Policy or Family Member modal in new tab
+  useEffect(() => {
+    const handleCtrlEnter = (event: KeyboardEvent) => {
+      if (event.key !== 'Enter' || (!event.ctrlKey && !event.metaKey)) return;
+
+      // If currently inside FamilyMemberModal
+      if (familyMemberModalOpen) {
+        event.preventDefault();
+        event.stopPropagation();
+        const contactId = editContactId || loadedContact?.id;
+        if (contactId) {
+          openFamilyMemberInNewTab(contactId, editingFamilyMemberIdx);
+        }
+        return;
+      }
+
+      // If currently inside CreatePolicyModal
+      if (createPolicyModalOpen) {
+        event.preventDefault();
+        event.stopPropagation();
+        const contactId = editContactId || loadedContact?.id;
+        if (contactId) {
+          openPolicyInNewTab(contactId, policyToEdit?.id);
+        }
+        return;
+      }
+
+      // If inside lead/contact modal
+      if (leadModalOpen) {
+        const contactId = editContactId || loadedContact?.id;
+        if (!contactId) return;
+
+        if (activeLeadTab === 'Policy') {
+          event.preventDefault();
+          event.stopPropagation();
+          const contactPolicies = [
+            ...(loadedContact?.policies || []),
+            ...(loadedContact?.id ? policyMap[loadedContact.id] || [] : []),
+            ...(loadedContact?.contactId ? policyMap[loadedContact.contactId] || [] : []),
+            ...(policyMap[contactId] || []),
+          ];
+          const activePolicy = contactPolicies.find((policy: any) => {
+            const status = (policy.status || 'ACTIVE').toUpperCase();
+            return !['EXPIRED', 'LAPSED', 'CANCELLED', 'INACTIVE'].includes(status)
+              && (!policy.endDate || new Date(policy.endDate) >= new Date());
+          }) || contactPolicies[0];
+
+          if (activePolicy?.id) {
+            openPolicyInNewTab(contactId, activePolicy.id);
+          } else {
+            openPolicyInNewTab(contactId);
+          }
+          return;
+        }
+
+        if (activeLeadTab === 'Family') {
+          event.preventDefault();
+          event.stopPropagation();
+          if (familyMembers.length > 0) {
+            openFamilyMemberInNewTab(contactId, 0);
+          } else {
+            openFamilyMemberInNewTab(contactId);
+          }
+          return;
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleCtrlEnter);
+    return () => window.removeEventListener('keydown', handleCtrlEnter);
+  }, [
+    activeLeadTab,
+    createPolicyModalOpen,
+    editContactId,
+    editingFamilyMemberIdx,
+    familyMemberModalOpen,
+    familyMembers,
+    leadModalOpen,
+    loadedContact,
+    policyMap,
+    policyToEdit,
+  ]);
 
   const openLeadView = (leadOrContact: any) => {
     setContactNavHistory([]);
@@ -2608,6 +2827,7 @@ export default function Contacts() {
         const updateBody: any = {
           firstName,
           lastName,
+          motherName: personalFields.motherName?.trim() || null,
           isDependent: !!personalFields.isDependent,
           dependentNo: personalFields.isDependent ? personalFields.dependentNo : undefined,
           role: personalFields.role || 'Contact',
@@ -2719,6 +2939,7 @@ export default function Contacts() {
         const contactBody: any = {
           firstName,
           lastName,
+          motherName: personalFields.motherName?.trim() || undefined,
           phone: cleanPhone,
           isDependent: !!personalFields.isDependent,
           dependentNo: personalFields.isDependent ? personalFields.dependentNo : undefined,
@@ -2791,7 +3012,7 @@ export default function Contacts() {
       const curEmpId = currentUser?.id;
 
       // Save Family Members only when creating a new contact (when editing, family members are saved individually via the Family modal)
-      if (!editContactId) {
+      if (!editContactId && contactId) {
         for (let i = 0; i < familyMembers.length; i++) {
         const fam = familyMembers[i];
         const famFirst = (fam.firstName || '').trim() || (fam.name || '').trim().split(/\s+/)[0] || '';
@@ -2851,19 +3072,35 @@ export default function Contacts() {
 
             if (targetFamContactId && targetFamContactId !== contactId) {
               await contactsService.update(targetFamContactId, famPayload);
-              await contactsService.addRelationship(contactId!, {
+              const relationshipResponse = await contactsService.addRelationship(contactId!, {
                 relatedContactId: targetFamContactId,
                 relationshipType: relType,
                 relationship: relType,
                 ...famPayload,
               });
+              const savedRelationship = relationshipResponse?.data?.relationship || relationshipResponse?.data || relationshipResponse;
+              const savedContact = savedRelationship?.relatedContact || relationshipResponse?.data?.relatedContact;
+              setFamilyMembers(prev => prev.map((member, index) => index === i ? {
+                ...member,
+                id: savedRelationship?.id || member.id,
+                contactId: savedContact?.id || targetFamContactId,
+                relation: savedRelationship?.relationshipType || relType,
+              } : member));
             } else {
-              await contactsService.addRelationship(contactId!, {
+              const relationshipResponse = await contactsService.addRelationship(contactId!, {
                 name: fullFamName,
                 relationshipType: relType,
                 relationship: relType,
                 ...famPayload,
               });
+              const savedRelationship = relationshipResponse?.data?.relationship || relationshipResponse?.data || relationshipResponse;
+              const savedContact = savedRelationship?.relatedContact || relationshipResponse?.data?.relatedContact;
+              setFamilyMembers(prev => prev.map((member, index) => index === i ? {
+                ...member,
+                id: savedRelationship?.id || member.id,
+                contactId: savedContact?.id || member.contactId,
+                relation: savedRelationship?.relationshipType || relType,
+              } : member));
             }
           } catch (famErr: any) {
             console.error('Failed to save family member:', famErr);
@@ -3118,6 +3355,7 @@ export default function Contacts() {
       contactStatus: 'Active',
       isActive: true,
       fullName: '',
+      motherName: '',
       gender: '',
       maritalStatus: '',
       dateOfBirth: '',
@@ -3768,9 +4006,17 @@ export default function Contacts() {
             type="button"
             onClick={(e) => {
               e.stopPropagation();
+              if (e.ctrlKey || e.metaKey) {
+                const cid = r.contactId || r.id;
+                if (cid) {
+                  openContactInNewTab(cid);
+                  return;
+                }
+              }
               openLeadView(r);
             }}
             className="text-left font-extrabold text-slate-900 text-sm hover:text-blue-600 transition-colors cursor-pointer"
+            title="Open contact (Ctrl+Click to open in new tab)"
           >
             {fullName}
           </button>
@@ -3960,9 +4206,17 @@ export default function Contacts() {
             type="button"
             onClick={(e) => {
               e.stopPropagation();
+              if (e.ctrlKey || e.metaKey) {
+                const cid = r.contactId || r.id;
+                if (cid) {
+                  openContactInNewTab(cid);
+                  return;
+                }
+              }
               openLeadView(r);
             }}
             className="text-left font-extrabold text-slate-900 text-sm hover:text-blue-600 transition-colors cursor-pointer"
+            title="Open contact (Ctrl+Click to open in new tab)"
           >
             {fullName}
           </button>
@@ -4138,9 +4392,17 @@ export default function Contacts() {
             type="button"
             onClick={(e) => {
               e.stopPropagation();
+              if (e.ctrlKey || e.metaKey) {
+                const cid = r.contactId || r.id;
+                if (cid) {
+                  openContactInNewTab(cid);
+                  return;
+                }
+              }
               openLeadView(r);
             }}
             className="text-left font-extrabold text-slate-900 text-sm hover:text-blue-600 transition-colors cursor-pointer"
+            title="Open contact (Ctrl+Click to open in new tab)"
           >
             {fullName}
           </button>
@@ -4289,8 +4551,7 @@ export default function Contacts() {
         ? CUSTOMER_COLS
         : CONTACT_COLS;
     return cols.filter(c => {
-      // Primary identifiers and actions must ALWAYS be visible
-      if (c.key === 'name' || c.key === 'phone' || c.key === 'actions') return true;
+      if (c.key === 'actions') return true;
       return visibleColumns[String(c.key)] !== false;
     });
   }, [activeTab, visibleColumns, CUSTOMER_COLS, CONTACT_COLS, BIRTHDAY_COLS]);
@@ -4552,17 +4813,23 @@ export default function Contacts() {
                 <Settings size={14} />
               </button>
               {showColPicker && (
-                <div className="absolute right-0 mt-2 w-52 bg-white border border-slate-200/90 rounded-2xl shadow-2xl p-3 z-50 text-xs space-y-2 animate-fadeIn">
+                <div className="absolute right-0 mt-2 w-56 max-h-80 overflow-y-auto bg-white border border-slate-200/90 rounded-2xl shadow-2xl p-3 z-50 text-xs space-y-2 animate-fadeIn">
                   <p className="font-extrabold text-slate-400 uppercase tracking-wider mb-1 text-[10px]">Show Columns</p>
-                  {CONTACT_COLS.map(c => {
+                  {(activeTab === 'birthdays'
+                    ? BIRTHDAY_COLS
+                    : activeTab === 'customers'
+                      ? CUSTOMER_COLS
+                      : CONTACT_COLS
+                  ).map(c => {
                     if (c.key === 'actions') return null;
+                    const isVisible = visibleColumns[String(c.key)] !== false;
                     return (
-                      <label key={String(c.key)} className="flex flex-wrap items-center gap-2 cursor-pointer font-bold text-slate-700 hover:text-blue-600 transition-colors">
+                      <label key={String(c.key)} className="flex items-center gap-2 cursor-pointer font-bold text-slate-700 hover:text-blue-600 transition-colors">
                         <input
                           type="checkbox"
-                          checked={visibleColumns[String(c.key)] !== false}
-                          onChange={() => setVisibleColumns(prev => ({ ...prev, [String(c.key)]: !prev[String(c.key)] }))}
-                          className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5"
+                          checked={isVisible}
+                          onChange={() => setVisibleColumns(prev => ({ ...prev, [String(c.key)]: !isVisible }))}
+                          className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
                         />
                         <span>{c.label}</span>
                       </label>
@@ -6455,8 +6722,17 @@ export default function Contacts() {
                   </div>
                   <button
                     type="button"
-                    onClick={openAddFamilyMemberModal}
+                    onClick={(e) => {
+                      if (e.ctrlKey || e.metaKey) {
+                        e.preventDefault();
+                        const contactId = editContactId || loadedContact?.id;
+                        if (contactId) openFamilyMemberInNewTab(contactId);
+                        return;
+                      }
+                      openAddFamilyMemberModal();
+                    }}
                     className="flex items-center justify-center gap-2 px-4 py-2.5 border-2 border-blue-400 text-blue-600 text-xs font-bold rounded-xl hover:bg-blue-50 cursor-pointer transition-all shadow-xs shrink-0"
+                    title="Add Family Member (Ctrl+Click to open in new tab)"
                   >
                     <Plus size={15} />
                     + Add Family Member
@@ -6475,8 +6751,17 @@ export default function Contacts() {
                       </p>
                       <button
                         type="button"
-                        onClick={openAddFamilyMemberModal}
+                        onClick={(e) => {
+                          if (e.ctrlKey || e.metaKey) {
+                            e.preventDefault();
+                            const contactId = editContactId || loadedContact?.id;
+                            if (contactId) openFamilyMemberInNewTab(contactId);
+                            return;
+                          }
+                          openAddFamilyMemberModal();
+                        }}
                         className="mt-4 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition-all flex items-center gap-1.5 cursor-pointer"
+                        title="Add First Family Member (Ctrl+Click to open in new tab)"
                       >
                         <Plus size={14} />
                         Add First Family Member
@@ -6523,9 +6808,17 @@ export default function Contacts() {
                           >
                             {/* Card Header (Clicking card opens Family Member popup in Edit mode, same like new policy!) */}
                             <div
-                              onClick={() => openEditFamilyMemberModal(idx)}
+                              onClick={(e) => {
+                                if (e.ctrlKey || e.metaKey) {
+                                  e.preventDefault();
+                                  const contactId = editContactId || loadedContact?.id;
+                                  if (contactId) openFamilyMemberInNewTab(contactId, idx);
+                                  return;
+                                }
+                                openEditFamilyMemberModal(idx);
+                              }}
                               className={`flex items-center justify-between bg-gradient-to-r ${headerGradient} px-4 py-3 cursor-pointer select-none`}
-                              title="Click to open Family Member form popup"
+                              title="Click to open Family Member form popup (Ctrl+Click to open in new tab)"
                             >
                               <div className="flex items-center gap-3 min-w-0 flex-1">
                                 <div className="w-7 h-7 rounded-lg bg-white/20 backdrop-blur-sm flex items-center justify-center text-white shrink-0 font-black text-xs">
@@ -6558,9 +6851,16 @@ export default function Contacts() {
                                 {member.contactId && (
                                   <button
                                     type="button"
-                                    onClick={() => navigateToContact({ id: member.contactId })}
+                                    onClick={(e) => {
+                                      if (e.ctrlKey || e.metaKey) {
+                                        e.preventDefault();
+                                        openContactInNewTab(member.contactId);
+                                        return;
+                                      }
+                                      navigateToContact({ id: member.contactId });
+                                    }}
                                     className="px-2.5 py-1 rounded-lg bg-white/20 hover:bg-white/30 text-white font-bold text-[10px] flex items-center gap-1 transition-all cursor-pointer"
-                                    title="Open this family member's direct Contact Form"
+                                    title="Open this family member's direct Contact Form (Ctrl+Click to open in new tab)"
                                   >
                                     <ExternalLink size={12} />
                                     <span className="hidden sm:inline">Open Contact</span>
@@ -6568,12 +6868,20 @@ export default function Contacts() {
                                 )}
                                 <button
                                   type="button"
-                                  onClick={() => openEditFamilyMemberModal(idx)}
+                                  onClick={(e) => {
+                                    if (e.ctrlKey || e.metaKey) {
+                                      e.preventDefault();
+                                      const contactId = editContactId || loadedContact?.id;
+                                      if (contactId) openFamilyMemberInNewTab(contactId, idx);
+                                      return;
+                                    }
+                                    openEditFamilyMemberModal(idx);
+                                  }}
                                   className="p-1.5 rounded-lg bg-white/15 hover:bg-white/30 text-white font-bold text-xs flex items-center gap-1 transition-all cursor-pointer"
-                                  title="Edit Family Member Details in Popup"
+                                  title="Edit Family Member Details in Popup (Ctrl+Click to open in new tab)"
                                 >
                                   <Pencil size={13} />
-                                  <span className="text-[11px] hidden sm:inline">Edit</span>
+                                  <span className="text-[11px]">Edit</span>
                                 </button>
                                 <button
                                   type="button"
@@ -6588,8 +6896,17 @@ export default function Contacts() {
 
                             {/* Card Body Summary */}
                             <div
-                              onClick={() => openEditFamilyMemberModal(idx)}
+                              onClick={(e) => {
+                                if (e.ctrlKey || e.metaKey) {
+                                  e.preventDefault();
+                                  const contactId = editContactId || loadedContact?.id;
+                                  if (contactId) openFamilyMemberInNewTab(contactId, idx);
+                                  return;
+                                }
+                                openEditFamilyMemberModal(idx);
+                              }}
                               className="p-3.5 bg-slate-50/40 hover:bg-slate-50/80 transition-colors cursor-pointer grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs text-slate-600"
+                              title="Click to open Family Member form popup (Ctrl+Click to open in new tab)"
                             >
                               <div>
                                 <span className="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">Contact</span>
@@ -6642,8 +6959,17 @@ export default function Contacts() {
                       {/* Add Another Member Button */}
                       <button
                         type="button"
-                        onClick={openAddFamilyMemberModal}
+                        onClick={(e) => {
+                          if (e.ctrlKey || e.metaKey) {
+                            e.preventDefault();
+                            const contactId = editContactId || loadedContact?.id;
+                            if (contactId) openFamilyMemberInNewTab(contactId);
+                            return;
+                          }
+                          openAddFamilyMemberModal();
+                        }}
                         className="w-full mt-2 py-3 rounded-2xl border-2 border-dashed border-blue-300 hover:border-blue-500 bg-blue-50/40 hover:bg-blue-50 text-blue-600 hover:text-blue-700 text-xs font-extrabold flex items-center justify-center gap-2 transition-all cursor-pointer group"
+                        title="Add Another Family Member (Ctrl+Click to open in new tab)"
                       >
                         <Plus size={15} />
                         + Add Another Family Member
@@ -6655,11 +6981,74 @@ export default function Contacts() {
             )}
 
             {activeLeadTab === 'Policy' && (() => {
+              // Collect all connected family contact IDs
+              const connectedContactIds = new Set<string>();
+              if (loadedContact?.id) connectedContactIds.add(String(loadedContact.id));
+              if (loadedContact?.contactId) connectedContactIds.add(String(loadedContact.contactId));
+              if (editContactId) connectedContactIds.add(String(editContactId));
+
+              (loadedContact?.relatedTo || []).forEach((r: any) => {
+                if (r.primaryContactId) connectedContactIds.add(String(r.primaryContactId));
+                if (r.primaryContact?.id) connectedContactIds.add(String(r.primaryContact.id));
+              });
+
+              (loadedContact?.relationships || []).forEach((r: any) => {
+                if (r.relatedContactId) connectedContactIds.add(String(r.relatedContactId));
+                if (r.relatedContact?.id) connectedContactIds.add(String(r.relatedContact.id));
+                if (r.primaryContactId) connectedContactIds.add(String(r.primaryContactId));
+                if (r.primaryContact?.id) connectedContactIds.add(String(r.primaryContact.id));
+              });
+
+              familyMembers.forEach((m: any) => {
+                if (m.contactId) connectedContactIds.add(String(m.contactId));
+                if (m.id) connectedContactIds.add(String(m.id));
+              });
+
               const direct = loadedContact?.policies || [];
-              const map1 = loadedContact?.id ? (policyMap[loadedContact.id] || []) : [];
-              const map2 = loadedContact?.contactId ? (policyMap[loadedContact.contactId] || []) : [];
-              const map3 = editContactId ? (policyMap[editContactId] || []) : [];
-              const combined = [...direct, ...map1, ...map2, ...map3];
+              const mappedFromPolicyMap = Array.from(connectedContactIds).flatMap(cid => policyMap[cid] || []);
+
+              // Also match by contact name & phone in policyListArray
+              const contactName = `${loadedContact?.firstName || personalFields?.firstName || ''} ${loadedContact?.lastName || personalFields?.lastName || ''}`.trim().toLowerCase();
+              const contactPhone = (loadedContact?.phone || personalFields?.whatsappNumber || personalFields?.callingNumber || '').replace(/\D/g, '').slice(-10);
+
+              const familyNames = new Set<string>();
+              if (contactName) familyNames.add(contactName);
+              familyMembers.forEach((m: any) => {
+                const name = (m.name || `${m.firstName || ''} ${m.lastName || ''}`).trim().toLowerCase();
+                if (name) familyNames.add(name);
+              });
+
+              const matchedFromAllPolicies = policyListArray.filter((p: any) => {
+                const pContactId = String(p.contactId || p.contact?.id || p.contact?.contactId || '');
+                if (pContactId && connectedContactIds.has(pContactId)) return true;
+
+                if (Array.isArray(p.members)) {
+                  const hasMember = p.members.some((m: any) => {
+                    if (m.contactId && connectedContactIds.has(String(m.contactId))) return true;
+                    const mName = String(m.name || '').trim().toLowerCase();
+                    return mName && familyNames.has(mName);
+                  });
+                  if (hasMember) return true;
+                }
+
+                const notesStr = typeof p.notes === 'string' ? p.notes.toLowerCase() : '';
+                if (notesStr && familyNames.size > 0) {
+                  for (const famName of familyNames) {
+                    if (famName.length > 2 && notesStr.includes(famName)) {
+                      return true;
+                    }
+                  }
+                }
+
+                if (contactPhone && contactPhone.length === 10) {
+                  const pPhone = String(p.contact?.phone || '').replace(/\D/g, '').slice(-10);
+                  if (pPhone && pPhone === contactPhone) return true;
+                }
+
+                return false;
+              });
+
+              const combined = [...direct, ...mappedFromPolicyMap, ...matchedFromAllPolicies];
               const uniqueMap = new Map();
               combined.forEach(p => { if (p && p.id) uniqueMap.set(p.id, p); });
               const displayedPolicies = Array.from(uniqueMap.values());
@@ -6701,13 +7090,20 @@ export default function Contacts() {
                     <div
                       onClick={(e) => {
                         e.stopPropagation();
+                        if (e.ctrlKey || e.metaKey) {
+                          const contactId = editContactId || loadedContact?.id;
+                          if (contactId && policy?.id) {
+                            openPolicyInNewTab(contactId, policy.id);
+                          }
+                          return;
+                        }
                         if (policy) {
                           setPolicyToEdit(policy);
                           setCreatePolicyModalOpen(true);
                         }
                       }}
                       className={`flex items-center justify-between bg-gradient-to-r ${headerTone} px-4 py-3 cursor-pointer select-none`}
-                      title="Click to open Policy Form in View Mode"
+                      title="Click to open Policy Form in View Mode (Ctrl+Click to open in new tab)"
                     >
                       <div className="flex items-center gap-3 min-w-0 flex-1">
                         <div className="w-8 h-8 rounded-xl bg-white/15 backdrop-blur-sm flex items-center justify-center text-white shrink-0">
@@ -6787,12 +7183,20 @@ export default function Contacts() {
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
+                              if (e.ctrlKey || e.metaKey) {
+                                const contactId = editContactId || loadedContact?.id;
+                                if (contactId && policy?.id) {
+                                  openPolicyInNewTab(contactId, policy.id);
+                                }
+                                return;
+                              }
                               if (policy) {
                                 setPolicyToEdit(policy);
                                 setCreatePolicyModalOpen(true);
                               }
                             }}
                             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors cursor-pointer"
+                            title="Open Policy Form (Ctrl+Click to open in new tab)"
                           >
                             <FileText size={13} /> Open Policy Form
                           </button>
@@ -6812,15 +7216,21 @@ export default function Contacts() {
                     </p>
                     <button
                       type="button"
-                      onClick={() => {
-                        if (!editContactId) {
+                      onClick={(e) => {
+                        const contactId = editContactId || loadedContact?.id;
+                        if (!contactId) {
                           toast.error('Please save the contact details first before adding a policy.');
+                          return;
+                        }
+                        if (e.ctrlKey || e.metaKey) {
+                          openPolicyInNewTab(contactId);
                           return;
                         }
                         setPolicyToEdit(null);
                         setCreatePolicyModalOpen(true);
                       }}
                       className="flex items-center justify-center gap-2 px-4 py-2.5 border-2 border-blue-400 text-blue-600 text-xs font-semibold rounded-lg hover:bg-blue-50 cursor-pointer transition-colors"
+                      title="Add New Policy (Ctrl+Click to open in new tab)"
                     >
                       + Add New Policy
                     </button>

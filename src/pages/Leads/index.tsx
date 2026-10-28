@@ -1366,12 +1366,60 @@ export default function Leads() {
       if (search && !fullName.includes(sTerm) && !(lead.contact?.phone || '').includes(sTerm) && !(lead.contact?.email || '').toLowerCase().includes(sTerm) && !(lead.leadId || '').toLowerCase().includes(sTerm)) return false;
       if (filterPlans.length > 0) {
         const planCategory = String(lead.plan?.category || '').toUpperCase();
-        const interests = (lead.interests || []).map((interest: string) => interest.toLowerCase());
+        const planName = String(lead.plan?.name || '').toLowerCase();
+        const interests = (lead.interests || []).map((interest: string) => String(interest).toLowerCase());
         const matchesPlanCategory = filterPlans.some(category => {
-          if (category === 'ACCIDENT') {
-            return planCategory.includes('ACCIDENT') || interests.some((interest: string) => interest.includes('accident'));
+          if (category === 'LIFE') {
+            return (
+              planCategory === 'LIFE' ||
+              planCategory === 'TERM' ||
+              planCategory.includes('LIFE') ||
+              planCategory.includes('TERM') ||
+              interests.some((i: string) => i.includes('life') || i.includes('term')) ||
+              planName.includes('life') ||
+              planName.includes('term')
+            );
           }
-          return planCategory === category;
+          if (category === 'HEALTH') {
+            return (
+              planCategory === 'HEALTH' ||
+              planCategory.includes('HEALTH') ||
+              interests.some((i: string) => i.includes('health')) ||
+              planName.includes('health')
+            );
+          }
+          if (category === 'ACCIDENT') {
+            return (
+              planCategory.includes('ACCIDENT') ||
+              interests.some((i: string) => i.includes('accident')) ||
+              planName.includes('accident')
+            );
+          }
+          if (category === 'MOTOR') {
+            return (
+              planCategory.includes('MOTOR') ||
+              planCategory.includes('VEHICLE') ||
+              planCategory.includes('CAR') ||
+              planCategory.includes('BIKE') ||
+              interests.some((i: string) => i.includes('motor') || i.includes('vehicle') || i.includes('car') || i.includes('bike')) ||
+              planName.includes('motor') || planName.includes('car') || planName.includes('bike')
+            );
+          }
+          if (category === 'TRAVEL') {
+            return (
+              planCategory.includes('TRAVEL') ||
+              interests.some((i: string) => i.includes('travel')) ||
+              planName.includes('travel')
+            );
+          }
+          if (category === 'GENERAL') {
+            return (
+              planCategory.includes('GENERAL') ||
+              interests.some((i: string) => i.includes('general')) ||
+              planName.includes('general')
+            );
+          }
+          return planCategory === category || interests.some((i: string) => i.toUpperCase() === category);
         });
         if (!matchesPlanCategory) return false;
       }
@@ -1476,16 +1524,16 @@ export default function Leads() {
           const leadInterests = (lead.interests || []).map((i: string) => i.toLowerCase());
 
           if (hasHealth) {
-            if (cat === 'HEALTH' || leadInterests.some((i: string) => i.includes('health'))) matchesProduct = true;
+            if (cat === 'HEALTH' || cat.includes('HEALTH') || leadInterests.some((i: string) => i.includes('health')) || (lead.plan?.name || '').toLowerCase().includes('health')) matchesProduct = true;
           }
           if (hasLife) {
-            if (cat === 'LIFE' || leadInterests.some((i: string) => i.includes('life'))) matchesProduct = true;
+            if (cat === 'LIFE' || cat === 'TERM' || cat.includes('LIFE') || cat.includes('TERM') || leadInterests.some((i: string) => i.includes('life') || i.includes('term')) || (lead.plan?.name || '').toLowerCase().includes('life') || (lead.plan?.name || '').toLowerCase().includes('term')) matchesProduct = true;
           }
           if (hasAccident) {
-            if (cat.includes('ACCIDENT') || leadInterests.some((i: string) => i.includes('accident'))) matchesProduct = true;
+            if (cat.includes('ACCIDENT') || leadInterests.some((i: string) => i.includes('accident')) || (lead.plan?.name || '').toLowerCase().includes('accident')) matchesProduct = true;
           }
           if (hasMf) {
-            if (cat === 'MF' || cat === 'MUTUAL_FUNDS' || leadInterests.some((i: string) => i.includes('mutual') || i.includes('fund') || i === 'mf')) matchesProduct = true;
+            if (cat === 'MF' || cat === 'MUTUAL_FUNDS' || leadInterests.some((i: string) => i.includes('mutual') || i.includes('fund') || i === 'mf') || (lead.plan?.name || '').toLowerCase().includes('mutual')) matchesProduct = true;
           }
           if (!matchesProduct) return false;
         }

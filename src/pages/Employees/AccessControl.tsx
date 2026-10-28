@@ -28,8 +28,6 @@ export const SYSTEM_MODULES = [
   { key: 'commissions',       label: 'Commissions',        category: 'Finance',     desc: 'Payout structures, insurer reconciliations & rates' },
   { key: 'employees',         label: 'Employees Directory',category: 'Administration', desc: 'Staff directory, targets, attendance & leaves' },
   { key: 'deletion_requests', label: 'Delete Requests',    category: 'Administration', desc: 'Review & approve record purge / deletion requests' },
-  { key: 'subscription',      label: 'Subscription',       category: 'Administration', desc: 'Billing plan, seat limits & invoices' },
-  { key: 'firm_profile',      label: 'Firm Profile',       category: 'Administration', desc: 'Agency branding, licenses, branches & master data' },
 ];
 
 const PRESETS = [

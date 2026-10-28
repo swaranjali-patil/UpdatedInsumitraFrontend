@@ -4,12 +4,11 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { insuranceService, contactsService, leadsService, policiesService, claimsService } from '@api/index';
 import {
   Plus, Pencil, Trash2, Building2, Shield, ChevronDown, ChevronRight,
-  Download, Filter, FileText, Users, TrendingUp, Briefcase, Type, X, ShieldCheck,
-  ArrowLeft, Search, Check, Lock, Calendar, Star, Layers
+  Download, FileText, Users, TrendingUp, Briefcase, Type, X, ShieldCheck,
+  ArrowLeft, Search, Check, Lock, Calendar, Star
 } from 'lucide-react';
 import Modal from '@comps/common/Modal';
 import SettingsPanel from './SettingsPanel';
-import PolicyScenariosTab from './PolicyScenariosTab';
 import DeletionRequests from '../DeletionRequests';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -46,112 +45,6 @@ const planSchema = z.object({
   isActive: z.boolean().optional(),
 });
 type PlanForm = z.infer<typeof planSchema>;
-
-const CATEGORIES = ['LIFE', 'HEALTH', 'MOTOR', 'TRAVEL', 'HOME', 'FIRE', 'MARINE', 'TERM', 'ULIP', 'PENSION', 'OTHER'];
-const DASHBOARD_FILTER_MODULES = ['Contacts', 'Leads', 'Policies', 'Claims'];
-const DASHBOARD_FILTER_DATE_RANGES = ['Today', 'Last 7 days', 'Last 30 days', 'This month', 'This quarter', 'This year', 'Custom'];
-const DASHBOARD_FILTERS_STORAGE_KEY = 'insumitra_dashboard_filter_config';
-
-type DashboardFilterConfiguration = {
-  modules: string[];
-  categories: string[];
-  branches: string[];
-  dateRanges: string[];
-};
-
-const DEFAULT_DASHBOARD_FILTERS: DashboardFilterConfiguration = {
-  modules: DASHBOARD_FILTER_MODULES,
-  categories: CATEGORIES,
-  branches: [],
-  dateRanges: DASHBOARD_FILTER_DATE_RANGES,
-};
-
-function loadDashboardFilterConfiguration(): DashboardFilterConfiguration {
-  try {
-    const stored = localStorage.getItem(DASHBOARD_FILTERS_STORAGE_KEY);
-    if (!stored) return DEFAULT_DASHBOARD_FILTERS;
-
-    const parsed = JSON.parse(stored);
-    return {
-      modules: Array.isArray(parsed.modules) ? parsed.modules.filter((value: unknown): value is string => typeof value === 'string' && DASHBOARD_FILTER_MODULES.includes(value)) : DEFAULT_DASHBOARD_FILTERS.modules,
-      categories: Array.isArray(parsed.categories) ? parsed.categories.filter((value: unknown): value is string => typeof value === 'string' && value.trim().length > 0) : DEFAULT_DASHBOARD_FILTERS.categories,
-      branches: Array.isArray(parsed.branches) ? parsed.branches.filter((value: unknown): value is string => typeof value === 'string' && value.trim().length > 0) : DEFAULT_DASHBOARD_FILTERS.branches,
-      dateRanges: Array.isArray(parsed.dateRanges) ? parsed.dateRanges.filter((value: unknown): value is string => typeof value === 'string' && DASHBOARD_FILTER_DATE_RANGES.includes(value)) : DEFAULT_DASHBOARD_FILTERS.dateRanges,
-    };
-  } catch {
-    return DEFAULT_DASHBOARD_FILTERS;
-  }
-}
-
-function FilterOptionEditor({
-  title,
-  description,
-  placeholder,
-  optionType,
-  options,
-  onChange,
-}: {
-  title: string;
-  description: string;
-  placeholder: string;
-  optionType: string;
-  options: string[];
-  onChange: (options: string[]) => void;
-}) {
-  const [newOption, setNewOption] = useState('');
-
-  const addOption = () => {
-    const value = newOption.trim();
-    if (!value) return;
-    if (options.some(option => option.toLowerCase() === value.toLowerCase())) {
-      toast.error(`${optionType} already exists`);
-      return;
-    }
-    onChange([...options, value]);
-    setNewOption('');
-  };
-
-  return (
-    <section className="rounded-xl border border-slate-200 p-4 space-y-3">
-      <div>
-        <h4 className="text-xs font-bold text-slate-800">{title}</h4>
-        <p className="text-[11px] text-slate-500 mt-1">{description}</p>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {options.length ? options.map(option => (
-          <span key={option} className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700">
-            {option}
-            <button
-              type="button"
-              onClick={() => onChange(options.filter(item => item !== option))}
-              aria-label={`Remove ${option}`}
-              className="text-slate-400 hover:text-red-600"
-            >
-              <X size={13} />
-            </button>
-          </span>
-        )) : <span className="text-xs text-slate-400">No options added</span>}
-      </div>
-      <div className="flex gap-2">
-        <input
-          value={newOption}
-          onChange={event => setNewOption(event.target.value)}
-          onKeyDown={event => {
-            if (event.key === 'Enter') {
-              event.preventDefault();
-              addOption();
-            }
-          }}
-          placeholder={placeholder}
-          className="min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-primary-500"
-        />
-        <button type="button" onClick={addOption} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-          Add
-        </button>
-      </div>
-    </section>
-  );
-}
 
 /* ─── Helpers ───────────────────────────────────────────────────────────────── */
 function fmtDate(v: any): string {
@@ -670,16 +563,15 @@ export default function Insurance() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab');
 
-  const [activeTab, setActiveTab]         = useState<'companies' | 'scenarios' | 'export' | 'display' | 'settings' | 'delete_requests'>(
-    (tabParam === 'scenarios' || tabParam === 'settings' || tabParam === 'export' || tabParam === 'display' || tabParam === 'delete_requests') ? tabParam : 'companies'
+  const [activeTab, setActiveTab]         = useState<'companies' | 'export' | 'display' | 'settings' | 'delete_requests'>(
+    (tabParam === 'settings' || tabParam === 'export' || tabParam === 'display' || tabParam === 'delete_requests') ? tabParam : 'companies'
   );
 
-  const [settingsSubTab, setSettingsSubTab] = useState<'dashboard' | 'compulsory' | 'master' | 'access' | 'employee_access' | 'backup' | 'audit'>('dashboard');
-  const [currentView, setCurrentView] = useState<'dashboard' | 'companies' | 'plans' | 'riders' | 'agents' | 'resources' | 'filters' | 'add_hospital' | 'add_doctor' | 'search_settings' | 'mapping'>('dashboard');
-  const [dashboardFilterConfig, setDashboardFilterConfig] = useState<DashboardFilterConfiguration>(loadDashboardFilterConfiguration);
+  const [settingsSubTab, setSettingsSubTab] = useState<'dashboard' | 'compulsory' | 'master' | 'backup' | 'columns'>('dashboard');
+  const [currentView, setCurrentView] = useState<'dashboard' | 'companies' | 'plans' | 'riders' | 'agents' | 'add_hospital' | 'add_doctor' | 'search_settings' | 'mapping'>('dashboard');
 
   useEffect(() => {
-    if (tabParam && tabParam !== activeTab && ['companies', 'scenarios', 'settings', 'export', 'display', 'delete_requests'].includes(tabParam)) {
+    if (tabParam && tabParam !== activeTab && ['companies', 'settings', 'export', 'display', 'delete_requests'].includes(tabParam)) {
       setActiveTab(tabParam as any);
     }
   }, [tabParam]);
@@ -696,32 +588,6 @@ export default function Insurance() {
       setSearchParams(searchParams, { replace: true });
     }
   }, [activeTab, searchParams, setSearchParams]);
-
-  const saveDashboardFilterConfiguration = () => {
-    if (!dashboardFilterConfig.modules.length || !dashboardFilterConfig.categories.length || !dashboardFilterConfig.dateRanges.length) {
-      toast.error('Select at least one module, category, and date range');
-      return;
-    }
-
-    try {
-      localStorage.setItem(DASHBOARD_FILTERS_STORAGE_KEY, JSON.stringify(dashboardFilterConfig));
-      window.dispatchEvent(new CustomEvent('insumitra_dashboard_filters_updated', { detail: dashboardFilterConfig }));
-      toast.success('Dashboard filter configurations saved');
-    } catch {
-      toast.error('Unable to save dashboard filter configurations');
-    }
-  };
-
-  const resetDashboardFilterConfiguration = () => {
-    try {
-      localStorage.setItem(DASHBOARD_FILTERS_STORAGE_KEY, JSON.stringify(DEFAULT_DASHBOARD_FILTERS));
-      setDashboardFilterConfig(DEFAULT_DASHBOARD_FILTERS);
-      window.dispatchEvent(new CustomEvent('insumitra_dashboard_filters_updated', { detail: DEFAULT_DASHBOARD_FILTERS }));
-      toast.success('Dashboard filter defaults restored');
-    } catch {
-      toast.error('Unable to restore dashboard filter defaults');
-    }
-  };
 
   const [companySearch, setCompanySearch] = useState('');
   const [planSearch, setPlanSearch]       = useState('');
@@ -1492,7 +1358,6 @@ export default function Insurance() {
 
   const TABS = [
     { id: 'companies', label: 'Insurance Companies & Plans', icon: Building2 },
-    { id: 'scenarios', label: 'Policy Scenarios', icon: Layers },
     { id: 'settings',  label: 'Master Settings & Backups',   icon: ShieldCheck },
     { id: 'export',    label: 'Bulk Data Export',            icon: Download },
     { id: 'display',   label: 'Font Size',                   icon: Type },
@@ -1522,9 +1387,6 @@ export default function Insurance() {
           );
         })}
       </div>
-
-      {/* ── Tab: Policy Scenarios ─────────────────────────────────────────────── */}
-      {activeTab === 'scenarios' && <PolicyScenariosTab />}
 
       {/* ── Tab: Insurance Companies ─────────────────────────────────────────── */}
       {activeTab === 'companies' && (
@@ -1680,36 +1542,6 @@ export default function Insurance() {
                       <p className="text-[10px] text-slate-500 mt-0.5 leading-snug">Add & manage agents and agencies</p>
                     </div>
                     <ChevronRight size={14} className="text-slate-300 group-hover:text-orange-500 group-hover:translate-x-0.5 transition-all shrink-0" />
-                  </div>
-
-                  {/* Resource Centre */}
-                  <div 
-                    onClick={() => setCurrentView('resources')}
-                    className="flex items-center gap-4 bg-white border border-slate-100 rounded-2xl p-4 cursor-pointer hover:shadow-lg hover:border-cyan-500/20 hover:scale-[1.01] transition-all duration-200 group"
-                  >
-                    <div className="w-10 h-10 rounded-xl bg-cyan-50 text-cyan-600 flex items-center justify-center shrink-0">
-                      <Briefcase size={18} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h4 className="text-xs font-bold text-slate-900 tracking-tight">Resource Centre</h4>
-                      <p className="text-[10px] text-slate-500 mt-0.5 leading-snug">Upload policy wordings, claim forms, hospital list, etc.</p>
-                    </div>
-                    <ChevronRight size={14} className="text-slate-300 group-hover:text-cyan-500 group-hover:translate-x-0.5 transition-all shrink-0" />
-                  </div>
-
-                  {/* Dashboard Filters */}
-                  <div 
-                    onClick={() => setCurrentView('filters')}
-                    className="flex items-center gap-4 bg-white border border-slate-100 rounded-2xl p-4 cursor-pointer hover:shadow-lg hover:border-teal-500/20 hover:scale-[1.01] transition-all duration-200 group"
-                  >
-                    <div className="w-10 h-10 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center shrink-0">
-                      <Filter size={18} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h4 className="text-xs font-bold text-slate-900 tracking-tight">Dashboard Filters</h4>
-                      <p className="text-[10px] text-slate-500 mt-0.5 leading-snug">Manage filters used in dashboards</p>
-                    </div>
-                    <ChevronRight size={14} className="text-slate-300 group-hover:text-teal-500 group-hover:translate-x-0.5 transition-all shrink-0" />
                   </div>
                 </div>
               </div>
@@ -2054,135 +1886,6 @@ export default function Insurance() {
                         ))}
                       </tbody>
                     </table>
-                  </div>
-                </div>
-              )}
-
-              {/* 5. RESOURCES */}
-              {currentView === 'resources' && (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <h3 className="text-sm font-black text-slate-900 uppercase tracking-wide">Resource Centre</h3>
-                    <button onClick={() => toast.success('Mock Upload Resource triggered')} className="btn-primary text-xs py-1 px-3 flex items-center gap-1 cursor-pointer">
-                      <Plus size={13} /> Upload File
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    {[
-                      { title: 'Policy Wordings', count: 18, desc: 'Official terms and conditions brochures' },
-                      { title: 'Claim Forms', count: 12, desc: 'Pre-auth and claim reimbursement forms' },
-                      { title: 'Hospital Lists', count: 6, desc: 'Cashless network directory guides' }
-                    ].map((folder, i) => (
-                      <div key={i} className="bg-white border border-slate-200 rounded-2xl p-5 hover:shadow-md cursor-pointer transition-all space-y-2">
-                        <div className="w-10 h-10 rounded-xl bg-cyan-50 text-cyan-600 flex items-center justify-center shrink-0"><Briefcase size={20} /></div>
-                        <h4 className="font-bold text-slate-900 text-sm">{folder.title}</h4>
-                        <p className="text-xs text-slate-500 font-semibold">{folder.desc}</p>
-                        <span className="inline-block text-[10px] bg-slate-100 text-slate-600 font-bold px-2 py-0.5 rounded-full mt-2">{folder.count} Files</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {/* 6. FILTERS */}
-              {currentView === 'filters' && (
-                <div className="space-y-4 max-w-4xl mx-auto">
-                  <h3 className="text-sm font-black text-slate-900 uppercase tracking-wide">Dashboard Filters</h3>
-                  <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-5">
-                    <div className="flex items-start gap-3">
-                      <Filter size={20} className="text-slate-500 mt-0.5 shrink-0" />
-                      <div>
-                        <h4 className="font-bold text-slate-800 text-sm">Dashboard Filters Master Data</h4>
-                        <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                          Choose which modules and date ranges are available, and maintain the category and branch options used by dashboard filters.
-                        </p>
-                      </div>
-                    </div>
-
-                    <section className="rounded-xl border border-slate-200 p-4 space-y-3">
-                      <div>
-                        <h4 className="text-xs font-bold text-slate-800">Available modules</h4>
-                        <p className="text-[11px] text-slate-500 mt-1">Select the modules that can be filtered from dashboards.</p>
-                      </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                        {DASHBOARD_FILTER_MODULES.map(module => (
-                          <label key={module} className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={dashboardFilterConfig.modules.includes(module)}
-                              onChange={event => setDashboardFilterConfig(current => ({
-                                ...current,
-                                modules: event.target.checked
-                                  ? [...current.modules, module]
-                                  : current.modules.filter(value => value !== module),
-                              }))}
-                              className="rounded border-slate-300 text-primary-600 focus:ring-primary-500"
-                            />
-                            {module}
-                          </label>
-                        ))}
-                      </div>
-                    </section>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <FilterOptionEditor
-                        title="Category options"
-                        description="Add or remove categories offered by dashboard filters."
-                        placeholder="Add a category"
-                        optionType="Category"
-                        options={dashboardFilterConfig.categories}
-                        onChange={categories => setDashboardFilterConfig(current => ({ ...current, categories }))}
-                      />
-                      <FilterOptionEditor
-                        title="Branch options"
-                        description="Maintain the branch list available for dashboard branch mapping."
-                        placeholder="Add a branch"
-                        optionType="Branch"
-                        options={dashboardFilterConfig.branches}
-                        onChange={branches => setDashboardFilterConfig(current => ({ ...current, branches }))}
-                      />
-                    </div>
-
-                    <section className="rounded-xl border border-slate-200 p-4 space-y-3">
-                      <div>
-                        <h4 className="text-xs font-bold text-slate-800">Available date ranges</h4>
-                        <p className="text-[11px] text-slate-500 mt-1">Select the date range choices shown in dashboard filters.</p>
-                      </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                        {DASHBOARD_FILTER_DATE_RANGES.map(dateRange => (
-                          <label key={dateRange} className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={dashboardFilterConfig.dateRanges.includes(dateRange)}
-                              onChange={event => setDashboardFilterConfig(current => ({
-                                ...current,
-                                dateRanges: event.target.checked
-                                  ? [...current.dateRanges, dateRange]
-                                  : current.dateRanges.filter(value => value !== dateRange),
-                              }))}
-                              className="rounded border-slate-300 text-primary-600 focus:ring-primary-500"
-                            />
-                            {dateRange}
-                          </label>
-                        ))}
-                      </div>
-                    </section>
-
-                    <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 border-t border-slate-100 pt-4">
-                      <button
-                        type="button"
-                        onClick={resetDashboardFilterConfiguration}
-                        className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                      >
-                        Reset to Defaults
-                      </button>
-                      <button
-                        type="button"
-                        onClick={saveDashboardFilterConfiguration}
-                        className="btn-primary text-xs px-4 py-2"
-                      >
-                        Save Configurations
-                      </button>
-                    </div>
                   </div>
                 </div>
               )}

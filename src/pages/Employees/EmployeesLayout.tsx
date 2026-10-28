@@ -1,13 +1,13 @@
 import { useState, useMemo } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { 
-  Plus, AlertTriangle, AlertCircle, Users, Target, CalendarCheck, 
+  Plus, AlertTriangle, AlertCircle, Users, Target, 
   FileText, ShieldCheck, Search, ChevronDown, X, Upload, 
   User, Briefcase, Landmark, Sparkles, Eye, EyeOff, 
   CheckCircle2, Link2, Unlink, ArrowRight, ArrowLeft
 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { employeesService, subscriptionsService, contactsService } from '@api/index';
+import { employeesService, contactsService } from '@api/index';
 import Modal from '@comps/common/Modal';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -114,23 +114,8 @@ export default function EmployeesLayout() {
   const canEditEmployees = canEditModule(user, 'employees');
   const canManageEmployees = canManageModule(user, 'employees');
 
-  // Subscription + seat count
-  const { data: subRes } = useQuery({
-    queryKey: ['subscription', 'current'],
-    queryFn: subscriptionsService.current,
-    staleTime: 5 * 60_000,
-  });
-  const { data: empMeta } = useQuery({
-    queryKey: ['employees', 1],
-    queryFn: () => employeesService.list({ page: 1, limit: 1 }),
-  });
-
-  const sub              = subRes?.data;
-  const maxUsers         = sub?.plan?.maxUsers ?? 1;
-  const activeUsersCount = empMeta?.meta?.total ?? 0;
-  const usagePercentage  = maxUsers > 0 ? (activeUsersCount / maxUsers) * 100 : 0;
-  const isLimitReached   = maxUsers !== -1 && activeUsersCount >= maxUsers;
-  const isNearLimit      = maxUsers !== -1 && usagePercentage >= 80 && usagePercentage < 100;
+  const isLimitReached   = false;
+  const isNearLimit      = false;
 
   const { register, handleSubmit, reset, setValue, trigger, formState: { errors } } = useForm<CreateForm>({
     resolver: zodResolver(createSchema),
@@ -267,35 +252,7 @@ export default function EmployeesLayout() {
 
   return (
     <div className="space-y-4 relative pb-20 text-sm sm:text-base">
-      {/* Near-limit warning */}
-      {isNearLimit && (
-        <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 p-4 rounded-xl flex items-center justify-between text-sm shadow-sm">
-          <div className="flex flex-wrap items-center gap-2">
-            <AlertTriangle className="w-5 h-5 text-yellow-600 flex-shrink-0" />
-            <span>
-              <span className="font-semibold">Capacity Warning:</span> You have used {activeUsersCount} of your {maxUsers === -1 ? 'unlimited' : maxUsers} seats ({Math.round(usagePercentage)}%).
-            </span>
-          </div>
-          {user?.role === 'OWNER' && (
-            <button onClick={() => navigate('/subscription')} className="text-xs font-semibold text-primary-700 hover:text-primary-800 underline cursor-pointer">Upgrade Now</button>
-          )}
-        </div>
-      )}
 
-      {/* Limit-reached error */}
-      {isLimitReached && (
-        <div className="bg-red-50 border border-red-200 text-red-800 p-4 rounded-xl flex items-center justify-between text-sm shadow-sm">
-          <div className="flex flex-wrap items-center gap-2">
-            <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
-            <span>
-              <span className="font-semibold">Limit Reached:</span> You have reached your limit of {maxUsers} user/employee seats.
-            </span>
-          </div>
-          {user?.role === 'OWNER' && (
-            <button onClick={() => navigate('/subscription')} className="text-xs font-semibold text-primary-700 hover:text-primary-800 underline cursor-pointer">Upgrade Now</button>
-          )}
-        </div>
-      )}
 
       {/* Page Header */}
       <div className="flex items-center justify-between">
@@ -306,9 +263,6 @@ export default function EmployeesLayout() {
       <div className="flex items-center gap-2 border-b border-slate-200/80 pb-3 overflow-x-auto no-scrollbar flex-nowrap scroll-smooth">
         {[
           { label: 'Directory', path: '/employees', icon: Users },
-          { label: 'Job Descriptions', path: '/employees/job-descriptions', icon: Briefcase },
-          { label: 'Targets', path: '/employees/targets', icon: Target },
-          { label: 'Attendance & Leaves', path: '/employees/attendance', icon: CalendarCheck },
           { label: 'Reports', path: '/employees/eod-reports', icon: FileText },
           ...(canManageEmployees ? [{ label: 'Access Control', path: '/employees/access-control', icon: ShieldCheck }] : []),
         ].map(tab => {

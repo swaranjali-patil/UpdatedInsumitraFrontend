@@ -3,7 +3,7 @@ import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import {
   Plus, X, User, FileText, Pencil, Trash2, Upload, Search, Filter, Download,
   MessageCircle, Calendar, Shield, Heart, MapPin, Briefcase, UserCircle2,
-  FileCheck2, ShieldCheck, Clock, ChevronDown, LayoutGrid, List, Eye, History, AlertTriangle, Users, CalendarDays
+  FileCheck2, ShieldCheck, Clock, ChevronDown, LayoutGrid, List, Eye, History, AlertTriangle, Users, CalendarDays, Settings
 } from 'lucide-react';
 import { useClaims, useCreateClaim, useUpdateClaimStatus, useDeleteClaim } from '@hooks/useClaims';
 import { usePolicies } from '@hooks/usePolicies';
@@ -14,6 +14,7 @@ import ActivityTimeline from '@comps/common/ActivityTimeline';
 import ImportFormatModal from '@comps/common/ImportFormatModal';
 import * as XLSX from 'xlsx';
 import ClaimPolicyDetailsTab from './components/ClaimPolicyDetailsTab';
+import { cleanConnectedPhone } from '../Policies/index';
 
 export function getPolicyYearString(p: any): string {
   if (!p) return '';
@@ -515,7 +516,7 @@ export function extractConnectedPersonsAndNominees(policy?: any, contact?: any):
     result.push({
       name: cleanName,
       relationship: (person.relationship || '').trim(),
-      phone: (person.phone || '').replace(/\D/g, '').slice(0, 10),
+      phone: cleanConnectedPhone(person.phone),
       dob: cleanDob,
       percentage: person.percentage !== undefined && person.percentage !== null && person.percentage !== '' ? person.percentage : '',
       comment: person.comment || '',
@@ -625,7 +626,22 @@ export function extractConnectedPersonsAndNominees(policy?: any, contact?: any):
       addPerson({
         name: fullName,
         relationship: r.relationshipType || r.relation || r.relationship || '',
-        phone: c.phone || c.mobile || '',
+        phone: c.phone || c.alternatePhone || c.mobile || c.whatsappNumber || '',
+        dob: c.dateOfBirth || c.dob || '',
+        source: 'contact_family',
+      });
+    });
+  }
+
+  // 5b. Extract from contact.relatedTo (Reverse Family relationships)
+  if (Array.isArray(contact?.relatedTo)) {
+    contact.relatedTo.forEach((r: any) => {
+      const c = r.primaryContact || {};
+      const fullName = [c.firstName, c.middleName, c.lastName].filter(Boolean).join(' ').trim() || c.name || '';
+      addPerson({
+        name: fullName,
+        relationship: r.relationshipType || r.relation || r.relationship || '',
+        phone: c.phone || c.alternatePhone || c.mobile || c.whatsappNumber || '',
         dob: c.dateOfBirth || c.dob || '',
         source: 'contact_family',
       });
@@ -639,7 +655,7 @@ export function extractConnectedPersonsAndNominees(policy?: any, contact?: any):
       addPerson({
         name: fullName,
         relationship: m.relation || m.relationship || m.relationshipType || '',
-        phone: m.phone || m.contactNo || m.mobile || '',
+        phone: m.phone || m.alternatePhone || m.contactNo || m.mobile || m.whatsappNumber || '',
         dob: m.dob || m.dateOfBirth || '',
         source: 'contact_family',
       });
@@ -653,7 +669,7 @@ export function extractConnectedPersonsAndNominees(policy?: any, contact?: any):
       addPerson({
         name: fullName,
         relationship: m.relation || m.relationship || m.relationshipType || '',
-        phone: m.phone || m.contactNo || m.mobile || '',
+        phone: m.phone || m.alternatePhone || m.contactNo || m.mobile || m.whatsappNumber || '',
         dob: m.dob || m.dateOfBirth || '',
         source: 'contact_family',
       });
@@ -874,7 +890,14 @@ function ClaimEditForm({ initial, isPending, onSave, onCancel, employees }: {
   // Hospitalisation Details
   const [diagnosisSimple, setDiagnosisSimple] = useState(notesData.diagnosisSimple || '');
   const [roomCategory, setRoomCategory] = useState(notesData.roomCategory || '');
-  const [typeOfManagement, setTypeOfManagement] = useState(notesData.typeOfManagement || '');
+  const initialTypeOfManagement = notesData.typeOfManagement || '';
+  const standardManagementTypes = ['Surgical', 'Medicinal', 'Other'];
+  const [typeOfManagement, setTypeOfManagement] = useState(
+    standardManagementTypes.includes(initialTypeOfManagement) ? initialTypeOfManagement : (initialTypeOfManagement ? 'Other' : '')
+  );
+  const [otherManagementDetail, setOtherManagementDetail] = useState(
+    initialTypeOfManagement && !standardManagementTypes.includes(initialTypeOfManagement) ? initialTypeOfManagement : ''
+  );
   const [typeOfAdmission, setTypeOfAdmission] = useState(notesData.typeOfAdmission || '');
   const [isMedicoLegalCase, setIsMedicoLegalCase] = useState(notesData.isMedicoLegalCase || '');
   const [isFirLegalDocAvailable, setIsFirLegalDocAvailable] = useState(notesData.isFirLegalDocAvailable || '');
@@ -1069,7 +1092,7 @@ function ClaimEditForm({ initial, isPending, onSave, onCancel, employees }: {
           hospitalContactNo, hospitalEmail, hospitalRating, hospitalType, claimsPerson1Name,
           claimsPerson1Contact, claimsPerson2Name, claimsPerson2Contact, hospitalComment,
           hospitalDoctors: JSON.stringify(doctors),
-          diagnosisSimple, roomCategory, typeOfManagement, typeOfAdmission, isMedicoLegalCase, isFirLegalDocAvailable, hospitalisationComment, amtAnesthesia, billingComment,
+          diagnosisSimple, roomCategory, typeOfManagement: typeOfManagement === 'Other' ? (otherManagementDetail || 'Other') : typeOfManagement, typeOfAdmission, isMedicoLegalCase, isFirLegalDocAvailable, hospitalisationComment, amtAnesthesia, billingComment,
           amtFinalBill, amtNonPayables, amtCopay, amtDeductible, amtBalanceEMIs, amtNcdRecovery, amtExcessSumInsured, amtExcessAilmentLimit, amtHigherRoomRent, amtReasonableCost, amtOtherRecoveries, amtPatientToPay, amtExcessAgreedPackage, amtNetworkDiscount, amtNotCollected, amtPayableToInsured, approvalComment, fileUploadComment
 
         })
@@ -1300,7 +1323,7 @@ function ClaimEditForm({ initial, isPending, onSave, onCancel, employees }: {
             </div>
           </div>
           {!collapsedSections['death'] && (
-            <div className="p-2.5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+            <fieldset disabled={claimType.trim().toLowerCase() !== 'death claim'} className="p-2.5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 border-0 min-w-0">
                       <div>
                         <label className="label text-gray-500">Date of Admission <br/><span className="text-[10px] font-normal">(In case of hosp.)</span></label>
                         <input
@@ -1384,7 +1407,7 @@ function ClaimEditForm({ initial, isPending, onSave, onCancel, employees }: {
               <label className="label text-gray-500">Comment</label>
               <textarea className="input mt-1" rows={1} value={deathComment} onChange={e => setDeathComment(e.target.value)} />
             </div>
-          </div>
+          </fieldset>
         )}
       </div>
 
@@ -1998,6 +2021,15 @@ function ClaimEditForm({ initial, isPending, onSave, onCancel, employees }: {
                       placeholder="Select Option"
                       options={['Surgical', 'Medicinal', 'Other']}
                     />
+                    {typeOfManagement === 'Other' && (
+                      <input
+                        type="text"
+                        className="input mt-1 py-1 text-xs"
+                        value={otherManagementDetail}
+                        onChange={e => setOtherManagementDetail(e.target.value)}
+                        placeholder="Specify type of management"
+                      />
+                    )}
                   </div>
                   <div>
                     <label className="label text-[10px]">Type of Admission</label>
@@ -2685,6 +2717,8 @@ export default function Claims() {
   const { user: authUser } = useAuthStore();
   const [page, setPage] = useState(1);
   const [modalOpen, setModalOpen] = useState(false);
+  const [showColPicker, setShowColPicker] = useState(false);
+  const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (searchParams.get('action') === 'add') {
@@ -2700,6 +2734,7 @@ export default function Claims() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({ newProposer: false, newClaim: false, newDeath: true, newNominee: true, newHospital: false });
   const toggleCollapse = (sec: string) => setCollapsedSections(prev => ({ ...prev, [sec]: !prev[sec] }));
+  const [otherManagementDetail, setOtherManagementDetail] = useState('');
 
   // Doctor array state for new claim
   const [newDoctors, setNewDoctors] = useState<any[]>([]);
@@ -3256,6 +3291,7 @@ export default function Claims() {
   const stats = useMemo(() => {
     let totalClaimed = 0;
     let totalSettled = 0;
+    let totalPending = 0;
     const companyMap: Record<string, { count: number; claimed: number; settled: number }> = {};
     const hospitalMap: Record<string, { count: number; claimed: number; settled: number }> = {};
     const typeMap: Record<string, { count: number; claimed: number; settled: number }> = {};
@@ -3270,7 +3306,14 @@ export default function Claims() {
     filteredClaims.forEach((c: any) => {
       const notes = getClaimNotesData(c.notes);
       const claimed = Number(c.claimAmount || 0);
-      const settled = Number(c.approvedAmount || 0);
+      const approved = Number(c.approvedAmount || 0);
+      const notedSettlement = Number(notes.amtPayableToInsured || 0);
+      const isSettled = getClaimUiStatus(c) === 'Settled';
+      const settled = approved > 0
+        ? approved
+        : notedSettlement > 0
+          ? notedSettlement
+          : isSettled ? claimed : 0;
       const company = c.policy?.plan?.company?.name || 'Unknown Company';
       const hospital = notes.hospital || 'Outpatient / Other';
       const type = c.claimType || 'Other';
@@ -3278,6 +3321,7 @@ export default function Claims() {
 
       totalClaimed += claimed;
       totalSettled += settled;
+      totalPending += Math.max(0, claimed - settled);
 
       // Company
       if (!companyMap[company]) companyMap[company] = { count: 0, claimed: 0, settled: 0 };
@@ -3304,7 +3348,7 @@ export default function Claims() {
       statusMap[statusStr].settled += settled;
     });
 
-    const pendingClaimed = totalClaimed - totalSettled;
+    const pendingClaimed = totalPending;
     const settlementRatio = totalClaimed > 0 ? (totalSettled / totalClaimed) * 100 : 0;
     const avgClaim = filteredClaims.length > 0 ? totalClaimed / filteredClaims.length : 0;
 
@@ -3882,7 +3926,7 @@ export default function Claims() {
         nominees: JSON.stringify(newNominees),
         hospitalName, hospitalState, hospitalCity, hospitalPincode, hospitalContactNo, hospitalEmail, hospitalRating, hospitalType, claimsPerson1Name, claimsPerson1Contact, claimsPerson2Name, claimsPerson2Contact, hospitalComment,
         hospitalDoctors: JSON.stringify(newDoctors),
-        diagnosisSimple, roomCategory, typeOfManagement, typeOfAdmission, isMedicoLegalCase, isFirLegalDocAvailable, hospitalisationComment, amtAnesthesia, billingComment,
+        diagnosisSimple, roomCategory, typeOfManagement: typeOfManagement === 'Other' ? (otherManagementDetail || 'Other') : typeOfManagement, typeOfAdmission, isMedicoLegalCase, isFirLegalDocAvailable, hospitalisationComment, amtAnesthesia, billingComment,
         amtFinalBill, amtNonPayables, amtCopay, amtDeductible, amtBalanceEMIs, amtNcdRecovery, amtExcessSumInsured, amtExcessAilmentLimit, amtHigherRoomRent, amtReasonableCost, amtOtherRecoveries, amtPatientToPay, amtExcessAgreedPackage, amtNetworkDiscount, amtNotCollected, amtPayableToInsured, approvalComment
       });
       const res = await createClaim.mutateAsync({
@@ -4048,6 +4092,10 @@ export default function Claims() {
       ),
     },
   ];
+ 
+  const activeCols = useMemo(() => {
+    return COLS.filter(c => c.key === 'actions' || visibleColumns[String(c.key)] !== false);
+  }, [COLS, visibleColumns]);
 
   const genClaimNumber = () => `CLM-${Date.now().toString().slice(-8)}`;
 
@@ -4161,6 +4209,39 @@ export default function Claims() {
           >
             {showAnalytics ? 'Hide Analytics' : 'Show Analytics'}
           </button>
+
+          {/* Column Picker Toggle */}
+          <div className="relative">
+            <button
+              onClick={() => setShowColPicker(!showColPicker)}
+              className={clsx(
+                "p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-500 hover:text-slate-700 cursor-pointer shadow-2xs transition-all flex items-center gap-1.5 text-xs font-bold bg-white shrink-0",
+                showColPicker && "bg-blue-50 border-blue-200 text-blue-600"
+              )}
+              title="Toggle Columns"
+            >
+              <Settings size={14} />
+            </button>
+            {showColPicker && (
+              <div className="absolute right-0 mt-2 w-52 bg-white border border-slate-200/90 rounded-2xl shadow-2xl p-3 z-50 text-xs space-y-2 animate-fadeIn">
+                <p className="font-extrabold text-slate-400 uppercase tracking-wider mb-1 text-[10px]">Show Columns</p>
+                {COLS.filter(c => c.key !== 'actions').map(col => {
+                  const isVisible = visibleColumns[String(col.key)] !== false;
+                  return (
+                    <label key={String(col.key)} className="flex items-center gap-2 cursor-pointer font-bold text-slate-700 hover:text-blue-600 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={isVisible}
+                        onChange={() => setVisibleColumns(prev => ({ ...prev, [String(col.key)]: !isVisible }))}
+                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
+                      />
+                      <span>{col.label}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </div>
 
           {/* Advanced Filters Toggle Button (Policy Page Style) */}
           <button
@@ -5155,7 +5236,7 @@ export default function Claims() {
       {viewMode === 'table' ? (
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
           <DataTable
-            columns={COLS.map(c => ({ ...c, sortable: c.key !== 'actions' }))}
+            columns={activeCols.map(c => ({ ...c, sortable: c.key !== 'actions' }))}
             data={paginatedClaims}
             total={sortedClaims.length}
             page={page}
@@ -5697,7 +5778,7 @@ export default function Claims() {
                     </div>
                   </div>
                   {!collapsedSections['newDeath'] && (
-                    <div className="p-4 bg-slate-50/40 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <fieldset disabled={(watch('claimType') || '').trim().toLowerCase() !== 'death claim'} className="p-4 bg-slate-50/40 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 border-0 min-w-0">
                       <div>
                         <label className="label text-slate-700 font-bold">Date of Admission <br/><span className="text-[10px] font-normal text-slate-500">(In case of hosp.)</span></label>
                         <input
@@ -5783,7 +5864,7 @@ export default function Claims() {
                         <label className="label text-slate-700 font-bold">Comment</label>
                         <textarea {...register('deathComment')} className="input mt-1 bg-white" rows={1} />
                       </div>
-                    </div>
+                    </fieldset>
                   )}
                 </div>
 
@@ -6415,6 +6496,15 @@ export default function Claims() {
                             placeholder="Select Option"
                             options={['Surgical', 'Medicinal', 'Other']}
                           />
+                          {watch('typeOfManagement') === 'Other' && (
+                            <input
+                              type="text"
+                              className="input mt-1 py-1 text-xs"
+                              value={otherManagementDetail}
+                              onChange={e => setOtherManagementDetail(e.target.value)}
+                              placeholder="Specify type of management"
+                            />
+                          )}
                         </div>
                         <div>
                           <label className="label text-[10px]">Type of Admission</label>
@@ -7125,6 +7215,17 @@ export function ClaimDetailView({ claim, onEdit }: { claim: any; onEdit?: () => 
     }
   })();
 
+  const parsedNominees: any[] = (() => {
+    try {
+      const list = JSON.parse(notesData.nominees || '[]');
+      if (Array.isArray(list) && list.length > 0) return list;
+    } catch {}
+    if (Array.isArray(claim?.policy?.nominees) && claim.policy.nominees.length > 0) {
+      return claim.policy.nominees;
+    }
+    return [];
+  })();
+
   const statusIcons: Record<string, any> = {
     Settled: <ShieldCheck className="text-green-600" />,
     Approved: <FileCheck2 className="text-emerald-600" />,
@@ -7316,6 +7417,40 @@ export function ClaimDetailView({ claim, onEdit }: { claim: any; onEdit?: () => 
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Nominees section in ClaimDetailView */}
+      {parsedNominees.length > 0 && (
+        <div className="space-y-2">
+          <label className="text-[11px] font-bold text-gray-400 uppercase tracking-wider block">Nominee Details</label>
+          <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3 space-y-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+              {parsedNominees.map((nom: any, i: number) => {
+                const phone = cleanConnectedPhone(nom.phone || nom.contactNo || nom.contact);
+                return (
+                  <div key={i} className="bg-white border border-slate-200 rounded-lg p-2.5 shadow-2xs">
+                    <div className="font-bold text-slate-800 flex items-center justify-between">
+                      <span>{nom.name || 'Nominee'}</span>
+                      {nom.percentage != null && nom.percentage !== '' && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 font-bold">
+                          {nom.percentage}%
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-slate-500 mt-0.5">{nom.relationship || 'Nominee'}</div>
+                    {phone && (
+                      <div className="text-[11px] font-semibold text-slate-700 mt-1 flex items-center gap-1">
+                        <span>📞</span>
+                        <span>{phone}</span>
+                      </div>
+                    )}
+                    {nom.comment && <div className="text-[10px] text-slate-400 mt-1 italic">{nom.comment}</div>}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}

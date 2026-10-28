@@ -6,6 +6,7 @@ interface DatalistInputProps {
   options: string[];
   placeholder?: string;
   className?: string;
+  disabled?: boolean;
 }
 
 export const DatalistInput: React.FC<DatalistInputProps> = ({
@@ -14,6 +15,7 @@ export const DatalistInput: React.FC<DatalistInputProps> = ({
   options,
   placeholder = 'Select or enter...',
   className = '',
+  disabled = false,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState(value || '');
@@ -45,23 +47,26 @@ export const DatalistInput: React.FC<DatalistInputProps> = ({
       <div className="relative flex items-center">
         <input
           type="text"
-          className={`${className} pr-8`}
+          className={`${className} pr-8 disabled:bg-slate-50 disabled:text-slate-700 disabled:cursor-not-allowed`}
           placeholder={placeholder}
           value={query}
+          disabled={disabled}
           onChange={e => {
+            if (disabled) return;
             const val = e.target.value;
             setQuery(val);
             onChange(val);
             setIsOpen(true);
           }}
-          onFocus={() => setIsOpen(true)}
-          onClick={() => setIsOpen(true)}
+          onFocus={() => !disabled && setIsOpen(true)}
+          onClick={() => !disabled && setIsOpen(true)}
         />
         <button
           type="button"
           tabIndex={-1}
-          onClick={() => setIsOpen(prev => !prev)}
-          className="absolute right-3 text-slate-400 hover:text-slate-600 focus:outline-none cursor-pointer p-1"
+          disabled={disabled}
+          onClick={() => !disabled && setIsOpen(prev => !prev)}
+          className={`absolute right-3 text-slate-400 focus:outline-none p-1 ${disabled ? 'cursor-not-allowed opacity-50' : 'hover:text-slate-600 cursor-pointer'}`}
         >
           <svg className={`w-4 h-4 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
@@ -69,7 +74,7 @@ export const DatalistInput: React.FC<DatalistInputProps> = ({
         </button>
       </div>
 
-      {isOpen && (
+      {isOpen && !disabled && (
         <div className="absolute z-[9999] left-0 right-0 mt-1 max-h-60 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-xl divide-y divide-slate-50">
           {displayOptions.map((option, idx) => (
             <div

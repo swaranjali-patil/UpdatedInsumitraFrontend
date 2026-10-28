@@ -9,6 +9,20 @@ export const isProxyHost = () => {
 
 export const BASE_URL = import.meta.env.VITE_API_URL ?? '/api/v1';
 
+// ── Backend wake-up ping (Render free tier cold-start fix) ──────────────────
+// Fire a silent health ping when running on the hosted domain so Render wakes
+// up before the user's real API calls are made.
+(function pingBackendOnLoad() {
+  if (typeof window === 'undefined') return;
+  if (!isProxyHost()) return;
+  // Use a simple fetch so it doesn't go through axios interceptors
+  try {
+    fetch('/api-proxy.php?__path=/health', { method: 'GET', credentials: 'same-origin' }).catch(() => {});
+  } catch {
+    // ignore
+  }
+})();
+
 export function applyProxyIfNeeded(config: InternalAxiosRequestConfig): InternalAxiosRequestConfig {
   if (isProxyHost() && config.url && !config.url.startsWith('/api-proxy.php')) {
     const rawUrl = config.url.replace(/^https?:\/\/[^/]+\/api\/v1/, '').replace(/^\/api\/v1/, '');

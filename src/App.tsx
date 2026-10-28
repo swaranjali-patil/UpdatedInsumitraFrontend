@@ -3,7 +3,6 @@ import { lazy, Suspense } from 'react';
 import { useAuthStore } from '@store/auth.store';
 import { useClientStore } from '@store/client.store';
 import { useQuery } from '@tanstack/react-query';
-import { subscriptionsService } from '@api/index';
 import Layout from '@comps/layout/Layout';
 import ClientLayout from '@comps/layout/ClientLayout';
 
@@ -36,22 +35,16 @@ const Claims         = lazy(() => import('@pages/Claims'));
 const ClaimDetail    = lazy(() => import('@pages/Claims/ClaimDetail'));
 const Employees        = lazy(() => import('@pages/Employees'));
 const EmployeesLayout  = lazy(() => import('@pages/Employees/EmployeesLayout'));
-const EmployeeTargets  = lazy(() => import('@pages/Employees/Targets'));
-const EmployeeAttend   = lazy(() => import('@pages/Employees/Attendance'));
 const EmployeeEod      = lazy(() => import('@pages/Employees/EodReports'));
 const EmployeeAccess   = lazy(() => import('@pages/Employees/AccessControl'));
-const EmployeeJobDescriptions = lazy(() => import('@pages/Employees/JobDescriptions'));
 const EmployeeDetail   = lazy(() => import('@pages/Employees/EmployeeDetail'));
 const Commissions    = lazy(() => import('@pages/Commissions'));
-const WhatsApp       = lazy(() => import('@pages/WhatsApp'));
 const Calendar       = lazy(() => import('@pages/Calendar'));
 const Settings       = lazy(() => import('@pages/Settings'));
-const Subscription   = lazy(() => import('@pages/Subscription'));
 const Insurance      = lazy(() => import('@pages/Insurance'));
 const Documents      = lazy(() => import('@pages/Documents'));
 const DeletionRequests = lazy(() => import('@pages/DeletionRequests'));
 const GlobalSearch   = lazy(() => import('@pages/Search'));
-const FirmProfile    = lazy(() => import('@pages/FirmProfile'));
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const token = useAuthStore(s => s.accessToken);
@@ -84,40 +77,7 @@ function AdminOrAuthorizedRoute({ children, permission }: { children: React.Reac
   return <Navigate to="/workspace" replace />;
 }
 
-function PlanProtectedRoute({ children, feature }: { children: React.ReactNode; feature: string }) {
-  const user = useAuthStore(s => s.user);
-  
-  const { data: subRes, isLoading } = useQuery({
-    queryKey: ['subscription', 'current'],
-    queryFn: subscriptionsService.current,
-    staleTime: 5 * 60_000,
-    enabled: !!user && user.role !== 'CONTACT',
-  });
-
-  if (isLoading) {
-    return <Loader />;
-  }
-
-  const sub = subRes?.data;
-  const planName = sub?.plan?.name || 'Free';
-
-  const isFeatureEnabled = (plan: string, feat: string): boolean => {
-    if (user?.role === 'SUPERADMIN') return true;
-
-    // Only WhatsApp requires Enterprise / Business plan
-    if (feat === 'whatsapp') {
-      return plan === 'Enterprise' || plan === 'Business';
-    }
-
-    // All other features are unlocked
-    return true;
-  };
-
-  if (!isFeatureEnabled(planName, feature)) {
-    const redirectPath = (user?.role === 'EMPLOYEE' || planName === 'Free') ? '/workspace' : '/dashboard';
-    return <Navigate to={redirectPath} replace />;
-  }
-
+function PlanProtectedRoute({ children }: { children: React.ReactNode; feature?: string }) {
   return <>{children}</>;
 }
 
@@ -142,13 +102,6 @@ function Loader() {
 function IndexRedirect() {
   const user = useAuthStore(s => s.user);
 
-  const { data: subRes, isLoading } = useQuery({
-    queryKey: ['subscription', 'current'],
-    queryFn: subscriptionsService.current,
-    staleTime: 5 * 60_000,
-    enabled: !!user && user.role !== 'CONTACT',
-  });
-
   if (!user) return <Navigate to="/login" replace />;
 
   if (user.role === 'CONTACT') {
@@ -159,17 +112,7 @@ function IndexRedirect() {
     return <Navigate to="/superadmin" replace />;
   }
 
-  if (isLoading) {
-    return <Loader />;
-  }
-
-  const sub = subRes?.data;
-  const planName = sub?.plan?.name || 'Free';
-
   if (user.role === 'OWNER' || user.role === 'ADMIN') {
-    if (planName === 'Free') {
-      return <Navigate to="/workspace" replace />;
-    }
     return <Navigate to="/dashboard" replace />;
   }
 
@@ -270,19 +213,18 @@ export default function App() {
           }
         >
           <Route index                element={<Suspense fallback={<Loader />}><Employees /></Suspense>} />
-          <Route path="targets"        element={<Suspense fallback={<Loader />}><EmployeeTargets /></Suspense>} />
-          <Route path="attendance"     element={<Suspense fallback={<Loader />}><EmployeeAttend /></Suspense>} />
+          <Route path="targets"        element={<Navigate to="/employees" replace />} />
+          <Route path="attendance"     element={<Navigate to="/employees" replace />} />
           <Route path="eod-reports"    element={<Suspense fallback={<Loader />}><EmployeeEod /></Suspense>} />
           <Route path="access-control" element={<Suspense fallback={<Loader />}><EmployeeAccess /></Suspense>} />
-          <Route path="job-descriptions" element={<Suspense fallback={<Loader />}><EmployeeJobDescriptions /></Suspense>} />
+          <Route path="job-descriptions" element={<Navigate to="/employees" replace />} />
         </Route>
         <Route path="employees/:id" element={<AdminOrAuthorizedRoute permission="manage_employees"><PlanProtectedRoute feature="employees"><Suspense fallback={<Loader />}><EmployeeDetail /></Suspense></PlanProtectedRoute></AdminOrAuthorizedRoute>} />
         <Route path="commissions"  element={<OwnerRoute><PlanProtectedRoute feature="commissions"><Suspense fallback={<Loader />}><Commissions /></Suspense></PlanProtectedRoute></OwnerRoute>} />
-        <Route path="whatsapp/*"   element={<AdminOrAuthorizedRoute permission="manage_whatsapp"><PlanProtectedRoute feature="whatsapp"><Suspense fallback={<Loader />}><WhatsApp /></Suspense></PlanProtectedRoute></AdminOrAuthorizedRoute>} />
-        <Route path="calendar"     element={<Suspense fallback={<Loader />}><Calendar /></Suspense>} />
+        {/* <Route path="calendar"     element={<Suspense fallback={<Loader />}><Calendar /></Suspense>} /> */}
         <Route path="settings"     element={<OwnerRoute><Suspense fallback={<Loader />}><Settings /></Suspense></OwnerRoute>} />
-        <Route path="firm-profile" element={<OwnerRoute><PlanProtectedRoute feature="branding"><Suspense fallback={<Loader />}><FirmProfile /></Suspense></PlanProtectedRoute></OwnerRoute>} />
-        <Route path="subscription" element={<OwnerRoute><Suspense fallback={<Loader />}><Subscription /></Suspense></OwnerRoute>} />
+        <Route path="firm-profile" element={<Navigate to="/dashboard" replace />} />
+        <Route path="subscription" element={<Navigate to="/dashboard" replace />} />
         <Route path="operations"   element={<OwnerRoute><PlanProtectedRoute feature="operations"><Suspense fallback={<Loader />}><Insurance /></Suspense></PlanProtectedRoute></OwnerRoute>} />
         <Route path="documents"    element={<OwnerRoute><PlanProtectedRoute feature="documents"><Suspense fallback={<Loader />}><Documents /></Suspense></PlanProtectedRoute></OwnerRoute>} />
         <Route path="search"       element={<OwnerRoute><Suspense fallback={<Loader />}><GlobalSearch /></Suspense></OwnerRoute>} />

@@ -109,13 +109,15 @@ function MultiSelectBox({
   selectedValues,
   onChange,
   badgeColor = 'blue',
-  placeholder = 'Select Conditions...'
+  placeholder = 'Select Conditions...',
+  disabled = false,
 }: {
   label: string;
   selectedValues: string[];
   onChange: (vals: string[]) => void;
   badgeColor?: 'blue' | 'orange';
   placeholder?: string;
+  disabled?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -128,8 +130,10 @@ function MultiSelectBox({
     <div className="relative">
       <label className="label text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">{label}</label>
       <div
-        onClick={() => setIsOpen(!isOpen)}
-        className="input min-h-[40px] w-full cursor-pointer flex items-center justify-between gap-2 flex-wrap py-1.5 px-3 bg-white border border-slate-200 rounded-xl hover:border-slate-300 transition-all"
+        onClick={() => !disabled && setIsOpen(!isOpen)}
+        className={`input min-h-[40px] w-full flex items-center justify-between gap-2 flex-wrap py-1.5 px-3 border border-slate-200 rounded-xl transition-all ${
+          disabled ? 'bg-slate-50 text-slate-500 cursor-not-allowed' : 'bg-white cursor-pointer hover:border-slate-300'
+        }`}
       >
         {selectedValues.length === 0 ? (
           <span className="text-slate-400 text-xs font-normal">{placeholder}</span>
@@ -145,23 +149,27 @@ function MultiSelectBox({
                 }`}
               >
                 {val}
-                <span
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onChange(selectedValues.filter(v => v !== val));
-                  }}
-                  className="hover:text-red-600 font-bold cursor-pointer ml-0.5"
-                >
-                  ×
-                </span>
+                {!disabled && (
+                  <span
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onChange(selectedValues.filter(v => v !== val));
+                    }}
+                    className="hover:text-red-600 font-bold cursor-pointer ml-0.5"
+                  >
+                    ×
+                  </span>
+                )}
               </span>
             ))}
           </div>
         )}
-        <ChevronDown size={14} className={`text-slate-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        {!disabled && (
+          <ChevronDown size={14} className={`text-slate-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        )}
       </div>
 
-      {isOpen && (
+      {isOpen && !disabled && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
           <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-xl z-50 p-2 max-h-56 overflow-y-auto">
@@ -384,6 +392,7 @@ export default function FamilyMemberModal({
   const firstNameInputRef = useRef<HTMLInputElement | null>(null);
   const [formData, setFormData] = useState<Record<string, any>>(() => buildInitialFormData(initialData, primaryContact));
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [isViewMode, setIsViewMode] = useState<boolean>(Boolean(isEditing));
 
   const toggleCollapse = (key: string) => {
     setCollapsed(prev => ({ ...prev, [key]: !prev[key] }));
@@ -397,12 +406,15 @@ export default function FamilyMemberModal({
     if (open) {
       setFormData(buildInitialFormData(initialData, primaryContact));
       setCollapsed({});
+      setIsViewMode(Boolean(isEditing));
     }
   }
 
   useEffect(() => {
-    if (open && isEditing && initialData) {
-      setFormData(buildInitialFormData(initialData, primaryContact));
+    if (open) {
+      setFormData(buildInitialFormData(isEditing ? initialData : null, primaryContact));
+      setCollapsed({});
+      setIsViewMode(Boolean(isEditing));
     }
   }, [open, initialData, isEditing, primaryContact]);
 
@@ -498,7 +510,7 @@ export default function FamilyMemberModal({
     <Modal
       open={open}
       onClose={onClose}
-      initialFocus={firstNameInputRef}
+      initialFocus={isViewMode ? undefined : firstNameInputRef}
       closeOnEscapeAndBackdrop={false}
       zIndexClass="z-[70]"
       title={isEditing ? 'Edit Family Member Details' : 'Add Family Member Details'}
@@ -507,24 +519,44 @@ export default function FamilyMemberModal({
       icon={<Users className="text-blue-600" size={20} />}
       actions={
         <div className="flex flex-wrap items-center gap-2.5 mr-1">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-2 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-all cursor-pointer"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleSave}
-            className="px-5 py-2 text-xs font-bold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 shadow-md shadow-blue-500/25 rounded-xl transition-all cursor-pointer"
-          >
-            {isEditing ? 'Update Family Member' : 'Save Family Member'}
-          </button>
+          {isEditing && isViewMode ? (
+            <button
+              type="button"
+              className="px-3 sm:px-5 py-1.5 sm:py-2 text-[10px] sm:text-xs font-extrabold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl cursor-pointer shadow-md shadow-blue-500/20 transition-all hover:scale-105"
+              onClick={() => setIsViewMode(false)}
+            >
+              Edit
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  if (isEditing) {
+                    setFormData(buildInitialFormData(initialData, primaryContact));
+                    setIsViewMode(true);
+                  } else {
+                    onClose();
+                  }
+                }}
+                className="px-4 py-2 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSave}
+                className="px-5 py-2 text-xs font-bold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 shadow-md shadow-blue-500/25 rounded-xl transition-all cursor-pointer"
+              >
+                {isEditing ? 'Update Family Member' : 'Save Family Member'}
+              </button>
+            </>
+          )}
         </div>
       }
     >
-      <div className="space-y-4 max-h-[72vh] overflow-y-auto pr-1 custom-scrollbar pb-3">
+      <div className="max-h-[72vh] overflow-y-auto pr-1 custom-scrollbar pb-3">
+        <fieldset disabled={isViewMode} className="space-y-4 min-w-0 border-0 p-0 m-0 w-full disabled:cursor-not-allowed">
 
         {/* Step 0: Relation Selection Card (Always at the top) */}
         <div className="border-2 border-blue-200 rounded-2xl bg-gradient-to-br from-blue-50/70 via-indigo-50/30 to-white p-4 shadow-sm">
@@ -547,6 +579,7 @@ export default function FamilyMemberModal({
               className="input w-full font-bold text-xs sm:text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all bg-white py-2 px-3 border border-slate-200 shadow-xs"
               value={formData.relation || ''}
               onChange={e => handleRelationChange(e.target.value)}
+              disabled={isViewMode}
             >
               <option value="">-- Choose Relation --</option>
               {RELATION_OPTIONS.map(r => (
@@ -653,6 +686,7 @@ export default function FamilyMemberModal({
                       </label>
                       <CountryPhoneInput
                         value={formData.guardianWhatsapp || ''}
+                        disabled={isViewMode}
                         onChange={(value: string) => setFormData(p => ({
                           ...p,
                           guardianWhatsapp: value,
@@ -715,6 +749,7 @@ export default function FamilyMemberModal({
                         className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
                         value={formData.weddingAnniversary || formData.weddingAnniversaryDate || ''}
                         onDateChange={(val) => setFormData(p => ({ ...p, weddingAnniversary: val, weddingAnniversaryDate: val }))}
+                      disabled={isViewMode}
                       />
                     </div>
                   )}
@@ -726,6 +761,7 @@ export default function FamilyMemberModal({
                       className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
                       value={formData.dob || formData.dateOfBirth || ''}
                       onDateChange={handleDOBChange}
+                      disabled={isViewMode}
                     />
                   </div>
                   <div>
@@ -885,6 +921,7 @@ export default function FamilyMemberModal({
                     </label>
                     <CountryPhoneInput
                       value={formData.whatsappNumber || formData.whatsapp || ''}
+                      disabled={isViewMode}
                       onChange={(value: string) =>
                         setFormData((p) => ({
                           ...p,
@@ -918,7 +955,7 @@ export default function FamilyMemberModal({
                       </label>
                     </div>
                     <CountryPhoneInput
-                      disabled={formData.sameAsWhatsapp}
+                      disabled={isViewMode || formData.sameAsWhatsapp}
                       value={formData.callingNumber || ''}
                       onChange={(value: string) =>
                         setFormData((p) => ({
@@ -973,6 +1010,7 @@ export default function FamilyMemberModal({
                       className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
                       placeholder="Select or enter Education"
                       value={formData.education || ''}
+                      disabled={isViewMode}
                       options={EDUCATION_OPTIONS}
                       onChange={val => setFormData(p => ({ ...p, education: val }))}
                     />
@@ -1002,6 +1040,7 @@ export default function FamilyMemberModal({
                       className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
                       placeholder="Select or enter Occupation Type"
                       value={formData.occupationType || formData.occupation || ''}
+                      disabled={isViewMode}
                       options={OCCUPATION_TYPE_OPTIONS}
                       onChange={val => setFormData(p => ({ ...p, occupationType: val, occupation: val }))}
                     />
@@ -1039,7 +1078,8 @@ export default function FamilyMemberModal({
                       e.stopPropagation();
                       copyPrimaryAddress();
                     }}
-                    className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold bg-blue-100/80 hover:bg-blue-200/80 text-blue-700 transition-colors shadow-2xs cursor-pointer"
+                    disabled={isViewMode}
+                    className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold transition-colors shadow-2xs ${isViewMode ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-blue-100/80 hover:bg-blue-200/80 text-blue-700 cursor-pointer'}`}
                     title="Click to copy State, City, Pincode and Street Address from Primary Contact"
                   >
                     <Copy size={11} />
@@ -1064,6 +1104,7 @@ export default function FamilyMemberModal({
                       className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
                       placeholder="Select or search State"
                       value={formData.state || ''}
+                      disabled={isViewMode}
                       options={INDIAN_STATES_AND_UTS}
                       onChange={val => setFormData(p => ({ ...p, state: val, district: '' }))}
                     />
@@ -1076,6 +1117,7 @@ export default function FamilyMemberModal({
                       className="input w-full focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
                       placeholder={formData.state ? "Select or search District" : "Select State first"}
                       value={formData.district || ''}
+                      disabled={isViewMode}
                       options={formData.state ? (INDIAN_DISTRICTS_BY_STATE[formData.state] || []) : []}
                       onChange={val => setFormData(p => ({ ...p, district: val }))}
                     />
@@ -1270,6 +1312,7 @@ export default function FamilyMemberModal({
                     onChange={(vals) => setFormData(p => ({ ...p, declaredMedicalHistory: vals, medicalHistory: vals }))}
                     badgeColor="blue"
                     placeholder="Click to select medical conditions..."
+                    disabled={isViewMode}
                   />
 
                   {/* NOT Declared Medical History Multi-Select */}
@@ -1279,6 +1322,7 @@ export default function FamilyMemberModal({
                     onChange={(vals) => setFormData(p => ({ ...p, notDeclaredMedicalHistory: vals }))}
                     badgeColor="orange"
                     placeholder="Click to select NOT declared conditions..."
+                    disabled={isViewMode}
                   />
 
                   {/* Details of Medical History */}
@@ -1366,7 +1410,8 @@ export default function FamilyMemberModal({
               )}
             </div>
           </div>
-        </div>
+        </fieldset>
+      </div>
       </Modal>
   );
 }

@@ -21,10 +21,28 @@ function FontSizeApplier() {
   return null;
 }
 
+/** Keep page scrolling from changing a focused numeric field's value. */
+function NumberInputWheelGuard() {
+  useEffect(() => {
+    const preventWheelChange = (event: WheelEvent) => {
+      const activeElement = document.activeElement;
+      if (activeElement instanceof HTMLInputElement && activeElement.type === 'number') {
+        event.preventDefault();
+      }
+    };
+
+    document.addEventListener('wheel', preventWheelChange, { capture: true, passive: false });
+    return () => document.removeEventListener('wheel', preventWheelChange, true);
+  }, []);
+
+  return null;
+}
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: 1,
+      retry: 3,
+      retryDelay: (attempt) => Math.min(2000 * (attempt + 1), 8000),
       staleTime: 60_000,
       gcTime: 10 * 60_000,
       refetchOnWindowFocus: false,
@@ -37,6 +55,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <QueryClientProvider client={queryClient}>
         <FontSizeApplier />
+        <NumberInputWheelGuard />
         <App />
         <Toaster position="top-right" toastOptions={{ duration: 4000 }} />
         <ReactQueryDevtools initialIsOpen={false} />

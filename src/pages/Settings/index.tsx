@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@store/auth.store';
 import { authService } from '@api/auth.service';
-import { tenantService, subscriptionsService } from '@api/index';
+import { tenantService } from '@api/index';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -32,19 +32,10 @@ export default function Settings() {
   const navigate = useNavigate();
   const { register, handleSubmit, reset, formState: { errors } } = useForm<PwForm>({ resolver: zodResolver(pwSchema) });
 
-  // Subscription checking
-  const { data: subRes } = useQuery({
-    queryKey: ['subscription', 'current'],
-    queryFn: () => subscriptionsService.current(),
-    staleTime: 5 * 60_000,
-  });
-  const planName = subRes?.data?.plan?.name || 'Free';
-  const isFirmProfileEnabled = user?.role === 'SUPERADMIN' || planName === 'Growth' || planName === 'Business' || planName === 'Enterprise';
-
   const { data: tenantData } = useQuery({
     queryKey: ['tenant-current'],
     queryFn: () => tenantService.getCurrent(),
-    enabled: isOwner && isFirmProfileEnabled,
+    enabled: isOwner,
   });
   const tenant = tenantData?.data ?? tenantData;
 
@@ -112,13 +103,6 @@ export default function Settings() {
                   {user?.tenantId}
                 </code>
               </div>
-              <div>
-                <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block mb-0.5">Current Plan</span>
-                <span className="inline-flex flex-wrap items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50/50 text-blue-600 border border-blue-100/30 text-xs font-bold">
-                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-                  {planName} Plan
-                </span>
-              </div>
             </div>
           </div>
         </div>
@@ -164,24 +148,6 @@ export default function Settings() {
           {/* Tenant Profile (OWNER only) */}
           {isOwner && (
             <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm relative overflow-hidden">
-              {!isFirmProfileEnabled && (
-                <div className="absolute inset-0 bg-slate-900/75 backdrop-blur-[3px] z-10 flex flex-col items-center justify-center text-center p-6">
-                  <div className="w-12 h-12 rounded-2xl bg-pink-500/10 border border-pink-500/20 flex items-center justify-center mb-3">
-                    <svg className="w-6 h-6 text-pink-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.25} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                    </svg>
-                  </div>
-                  <h4 className="text-xs font-extrabold text-white uppercase tracking-wider mb-1.5">Firm Profile Locked</h4>
-                  <p className="text-[10.5px] text-slate-300 max-w-sm leading-relaxed mb-4">Upgrade to the Growth plan or above to customize your agency branding, GSTIN, PAN, and license details.</p>
-                  <button
-                    type="button"
-                    onClick={() => navigate('/subscription')}
-                    className="pointer-events-auto px-5 py-2 bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 text-white text-[10px] font-extrabold rounded-xl shadow-lg shadow-pink-500/20 transition-transform active:scale-95 uppercase tracking-wider"
-                  >
-                    Upgrade Now
-                  </button>
-                </div>
-              )}
               <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-400 mb-4">Tenant / Agency Profile</h3>
               <form onSubmit={tenantForm.handleSubmit(d => updateTenant.mutate(d))} className="space-y-4">
                 <div>

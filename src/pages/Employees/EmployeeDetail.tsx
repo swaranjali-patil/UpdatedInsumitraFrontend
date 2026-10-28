@@ -100,8 +100,6 @@ const MODULES = [
   { key: 'commissions',       label: 'Commissions' },
   { key: 'employees',         label: 'Employees Directory' },
   { key: 'deletion_requests', label: 'Delete Requests' },
-  { key: 'subscription',      label: 'Subscription' },
-  { key: 'firm_profile',      label: 'Firm Profile' },
 ];
 
 export default function EmployeeDetail() {

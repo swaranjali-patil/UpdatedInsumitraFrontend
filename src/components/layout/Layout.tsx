@@ -16,7 +16,6 @@ const TITLES: Record<string, string> = {
   whatsapp:     'WhatsApp',
   calendar:     'Calendar',
   settings:     'Settings',
-  subscription: 'Subscription',
   operations:   'Operations',
 };
 
@@ -32,7 +31,6 @@ const SCALED_SECTIONS = [
   'operations',
   'commissions',
   'employees',
-  'firm-profile',
   'settings',
 ];
 
