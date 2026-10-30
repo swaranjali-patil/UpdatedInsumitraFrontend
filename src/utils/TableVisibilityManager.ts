@@ -18,7 +18,13 @@ class TableVisibilityManager {
       if (stored) {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          this.setRules(parsed);
+          const sanitized = parsed.map((item: any) => {
+            if (item.pageId === 'contacts' && (item.colName?.toLowerCase() === 'name' || item.colName?.toLowerCase() === 'contact name')) {
+              return { ...item, isHidden: false };
+            }
+            return item;
+          });
+          this.setRules(sanitized);
         }
       }
     } catch {}
@@ -49,7 +55,11 @@ class TableVisibilityManager {
       if (!this.rules[r.pageId]) this.rules[r.pageId] = {};
       const normKey = this.normalize(r.colName);
       if (normKey) {
-        this.rules[r.pageId][normKey] = r.isHidden;
+        if (r.pageId === 'contacts' && (normKey === 'name' || normKey === 'contactname')) {
+          this.rules[r.pageId][normKey] = false;
+        } else {
+          this.rules[r.pageId][normKey] = r.isHidden;
+        }
       }
     });
 
@@ -125,6 +135,21 @@ class TableVisibilityManager {
       ths.forEach((th, index) => {
         const normHeader = this.normalize(th.innerText);
         if (!normHeader) return;
+
+        // Never hide Name column on contacts page
+        if (pageId === 'contacts' && (normHeader === 'name' || normHeader === 'contactname')) {
+          th.style.display = '';
+          th.removeAttribute('data-col-hidden');
+          rows.forEach(tr => {
+            if (tr.children.length === 1 && tr.children[0]?.getAttribute('colspan')) return;
+            const td = tr.children[index] as HTMLElement;
+            if (td) {
+              td.style.display = '';
+              td.removeAttribute('data-col-hidden');
+            }
+          });
+          return;
+        }
 
         // Exact match against normalized rules
         const isHidden = pageRules[normHeader] === true;

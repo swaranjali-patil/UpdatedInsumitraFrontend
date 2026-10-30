@@ -80,8 +80,11 @@ export function calculateLastInstallmentDate(
   let stepMonths = 1;
   const freqUpper = String(frequency || '').toUpperCase();
   if (freqUpper === 'QUARTERLY') stepMonths = 3;
-  else if (freqUpper === 'HALF_YEARLY') stepMonths = 6;
-  else if (freqUpper === 'YEARLY') stepMonths = 12;
+  else if (freqUpper === 'HALF_YEARLY' || freqUpper === 'HALFYEARLY') stepMonths = 6;
+  else if (freqUpper === 'YEARLY') {
+    // For installment plans with multiple installments (e.g. 4 EMIs), installments are monthly
+    stepMonths = num > 1 ? 1 : 12;
+  }
   else if (freqUpper === 'SINGLE' || freqUpper.includes('ONE')) {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -113,4 +116,3 @@ export function calculateLastInstallmentDate(
   const dd = String(finalDay).padStart(2, '0');
   return `${targetYear}-${mm}-${dd}`;
 }
-

@@ -25,6 +25,7 @@ import { DatePicker } from '@comps/common/DatePicker';
 import toast from 'react-hot-toast';
 
 import { useAuthStore } from '@store/auth.store';
+import { useTableColumnVisibility } from '@hooks/useTableColumnVisibility';
 import { sortData } from '../../utils/sortUtils';
 import ContactDetailModal from './ContactDetailModal';
 import FamilyMemberModal from './FamilyMemberModal';
@@ -640,27 +641,8 @@ export default function Contacts() {
   // Sorting & Column customisation states
   const [sortKey, setSortKey] = useState('');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
-  const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>({
-    role: true,
-    contactStatus: true,
-    name: true,
-    phone: true,
-    leadStage: true,
-    leadStatus: true,
-    assignedTo: true,
-    source: true,
-    actions: true,
-    interests: true,
-    stage: true,
-    waCampaign: true,
-    product: true,
-    renewStatus: true,
-    renewAssigned: true,
-    claimStatus: true,
-    claimAssigned: true,
-    dateOfBirth: true,
-    daysUntil: true,
-  });
+  const { isVisible: isColVisibleInSettings, toggleColumn: toggleColInSettings } = useTableColumnVisibility('contacts');
+  const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>({});
   const [showColPicker, setShowColPicker] = useState(false);
   const [showProductDropdown, setShowProductDropdown] = useState(false);
   const [filterProducts, setFilterProducts] = useState<string[]>([]);
@@ -1288,10 +1270,11 @@ export default function Contacts() {
         lastName: famLast,
         phone: validFamPhone || '',
         alternatePhone: validFamCall || undefined,
+        email: fam.email ? fam.email.trim() : undefined,
         dateOfBirth: famIsoDob,
         gender: fam.gender || undefined,
-        birthPlace: fam.birthPlace || undefined,
-        motherName: fam.motherName || undefined,
+        birthPlace: fam.birthPlace ? fam.birthPlace.trim() : undefined,
+        motherName: fam.motherName ? fam.motherName.trim() : undefined,
         isDependent: !!fam.isDependent,
         dependentNo: fam.guardianWhatsapp || fam.dependentNo || undefined,
         panNumber: fam.pan || fam.panNumber || undefined,
@@ -1312,16 +1295,41 @@ export default function Contacts() {
         medicalHistoryDetails: fam.medicalHistoryDetails || '',
         surgeryDetails: fam.surgeryDetails || '',
         prescriptionDetails: fam.prescriptionDetails || '',
-        bankName: fam.bankName || '',
-        bankAccountNumber: fam.bankAccountNumber || '',
-        bankIfsc: (fam.bankIfsc || '').toUpperCase(),
-        bankBranch: fam.bankBranch || '',
+        bankName: fam.bankName ? fam.bankName.trim() : '',
+        bankAccountNumber: fam.bankAccountNumber ? fam.bankAccountNumber.trim() : '',
+        bankIfsc: (fam.bankIfsc || '').trim().toUpperCase(),
+        bankBranch: fam.bankBranch ? fam.bankBranch.trim() : '',
+        streetAddress: fam.streetAddress || undefined,
+        line1: fam.streetAddress || undefined,
+        city: fam.city || undefined,
+        district: fam.district || undefined,
+        state: fam.state || undefined,
+        pincode: fam.pincode || undefined,
       };
 
       try {
         let targetFamContactId = fam.contactId;
         if (targetFamContactId && targetFamContactId !== editContactId) {
           await contactsService.update(targetFamContactId, famPayload);
+          const hasFamAddr = Boolean(
+            (fam.streetAddress && fam.streetAddress.trim() && fam.streetAddress.trim() !== 'N/A') ||
+            (fam.city && fam.city.trim() && fam.city.trim() !== 'N/A') ||
+            (fam.state && fam.state.trim() && fam.state.trim() !== 'N/A') ||
+            (fam.district && fam.district.trim()) ||
+            (fam.pincode && fam.pincode.trim() && fam.pincode.trim() !== 'N/A')
+          );
+          if (hasFamAddr) {
+            await contactsService.addAddress(targetFamContactId, {
+              type: 'HOME',
+              line1: fam.streetAddress?.trim() || 'N/A',
+              city: fam.city?.trim() || 'N/A',
+              district: fam.district?.trim() || undefined,
+              state: fam.state?.trim() || 'N/A',
+              pincode: fam.pincode?.trim() || 'N/A',
+              country: 'India',
+              isPrimary: true,
+            }).catch(err => console.error('Failed to update family member address:', err));
+          }
           if (fam.id) {
             await contactsService.updateRelationship(editContactId, fam.id, {
               relatedContactId: targetFamContactId,
@@ -2357,6 +2365,24 @@ export default function Contacts() {
               whatsapp: (c.whatsappNumber || c.phone || ''),
               email: c.email || '',
               isDependent: !!(c.isDependent ?? r.isDependent),
+              motherName: c.motherName || '',
+              bankName: c.bankName || '',
+              bankAccountNumber: c.bankAccountNumber || '',
+              bankIfsc: c.bankIfsc || '',
+              bankBranch: c.bankBranch || '',
+              pan: c.panNumber || c.pan || '',
+              panNumber: c.panNumber || c.pan || '',
+              aadhaarNumber: c.aadhaarNumber || '',
+              birthPlace: c.birthPlace || '',
+              education: c.education || '',
+              maritalStatus: c.maritalStatus || '',
+              weddingAnniversary: c.weddingAnniversaryDate || '',
+              weddingAnniversaryDate: c.weddingAnniversaryDate || '',
+              height: c.height == null ? '' : String(c.height),
+              weight: c.weight == null ? '' : String(c.weight),
+              chewTobacco: !!c.chewTobacco,
+              smoke: !!c.smoke,
+              consumeAlcohol: !!c.consumeAlcohol,
               occupation: firstOcc.title || firstOcc.type || '',
               occupationType: firstOcc.type || '',
               companyName: firstOcc.companyName || '',
@@ -3044,10 +3070,11 @@ export default function Contacts() {
               lastName: famLast,
               phone: validFamPhone || '',
               alternatePhone: validFamCall || undefined,
+              email: fam.email ? fam.email.trim() : undefined,
               dateOfBirth: famIsoDob,
               gender: fam.gender || undefined,
-              birthPlace: fam.birthPlace || undefined,
-              motherName: fam.motherName || undefined,
+              birthPlace: fam.birthPlace ? fam.birthPlace.trim() : undefined,
+              motherName: fam.motherName ? fam.motherName.trim() : undefined,
               isDependent: !!fam.isDependent,
               dependentNo: fam.guardianWhatsapp || fam.dependentNo || undefined,
               panNumber: fam.pan || fam.panNumber || undefined,
@@ -3068,16 +3095,55 @@ export default function Contacts() {
               medicalHistoryDetails: fam.medicalHistoryDetails || '',
               surgeryDetails: fam.surgeryDetails || '',
               prescriptionDetails: fam.prescriptionDetails || '',
+              bankName: fam.bankName ? fam.bankName.trim() : '',
+              bankAccountNumber: fam.bankAccountNumber ? fam.bankAccountNumber.trim() : '',
+              bankIfsc: (fam.bankIfsc || '').trim().toUpperCase(),
+              bankBranch: fam.bankBranch ? fam.bankBranch.trim() : '',
+              streetAddress: fam.streetAddress || undefined,
+              line1: fam.streetAddress || undefined,
+              city: fam.city || undefined,
+              district: fam.district || undefined,
+              state: fam.state || undefined,
+              pincode: fam.pincode || undefined,
             };
 
             if (targetFamContactId && targetFamContactId !== contactId) {
               await contactsService.update(targetFamContactId, famPayload);
-              const relationshipResponse = await contactsService.addRelationship(contactId!, {
-                relatedContactId: targetFamContactId,
-                relationshipType: relType,
-                relationship: relType,
-                ...famPayload,
-              });
+              const hasFamAddr = Boolean(
+                (fam.streetAddress && fam.streetAddress.trim() && fam.streetAddress.trim() !== 'N/A') ||
+                (fam.city && fam.city.trim() && fam.city.trim() !== 'N/A') ||
+                (fam.state && fam.state.trim() && fam.state.trim() !== 'N/A') ||
+                (fam.district && fam.district.trim()) ||
+                (fam.pincode && fam.pincode.trim() && fam.pincode.trim() !== 'N/A')
+              );
+              if (hasFamAddr) {
+                await contactsService.addAddress(targetFamContactId, {
+                  type: 'HOME',
+                  line1: fam.streetAddress?.trim() || 'N/A',
+                  city: fam.city?.trim() || 'N/A',
+                  district: fam.district?.trim() || undefined,
+                  state: fam.state?.trim() || 'N/A',
+                  pincode: fam.pincode?.trim() || 'N/A',
+                  country: 'India',
+                  isPrimary: true,
+                }).catch(err => console.error('Failed to update family member address:', err));
+              }
+              let relationshipResponse: any;
+              if (fam.id) {
+                relationshipResponse = await contactsService.updateRelationship(contactId!, fam.id, {
+                  relatedContactId: targetFamContactId,
+                  relationshipType: relType,
+                  relationship: relType,
+                  ...famPayload,
+                });
+              } else {
+                relationshipResponse = await contactsService.addRelationship(contactId!, {
+                  relatedContactId: targetFamContactId,
+                  relationshipType: relType,
+                  relationship: relType,
+                  ...famPayload,
+                });
+              }
               const savedRelationship = relationshipResponse?.data?.relationship || relationshipResponse?.data || relationshipResponse;
               const savedContact = savedRelationship?.relatedContact || relationshipResponse?.data?.relatedContact;
               setFamilyMembers(prev => prev.map((member, index) => index === i ? {
@@ -4552,7 +4618,16 @@ export default function Contacts() {
         : CONTACT_COLS;
     return cols.filter(c => {
       if (c.key === 'actions') return true;
-      return visibleColumns[String(c.key)] !== false;
+      if (c.key === 'name') {
+        if (visibleColumns['name'] !== undefined) {
+          return visibleColumns['name'];
+        }
+        return true;
+      }
+      if (visibleColumns[String(c.key)] !== undefined) {
+        return visibleColumns[String(c.key)];
+      }
+      return isColVisibleInSettings(c.label || String(c.key));
     });
   }, [activeTab, visibleColumns, CUSTOMER_COLS, CONTACT_COLS, BIRTHDAY_COLS]);
 
@@ -4814,7 +4889,9 @@ export default function Contacts() {
               </button>
               {showColPicker && (
                 <div className="absolute right-0 mt-2 w-56 max-h-80 overflow-y-auto bg-white border border-slate-200/90 rounded-2xl shadow-2xl p-3 z-50 text-xs space-y-2 animate-fadeIn">
-                  <p className="font-extrabold text-slate-400 uppercase tracking-wider mb-1 text-[10px]">Show Columns</p>
+                  <div className="pb-1.5 border-b border-slate-100">
+                    <p className="font-extrabold text-slate-400 uppercase tracking-wider text-[10px]">Show Columns</p>
+                  </div>
                   {(activeTab === 'birthdays'
                     ? BIRTHDAY_COLS
                     : activeTab === 'customers'
@@ -4822,13 +4899,19 @@ export default function Contacts() {
                       : CONTACT_COLS
                   ).map(c => {
                     if (c.key === 'actions') return null;
-                    const isVisible = visibleColumns[String(c.key)] !== false;
+                    const isVisible = visibleColumns[String(c.key)] !== undefined
+                      ? visibleColumns[String(c.key)]
+                      : (c.key === 'name' ? true : isColVisibleInSettings(c.label || String(c.key)));
                     return (
                       <label key={String(c.key)} className="flex items-center gap-2 cursor-pointer font-bold text-slate-700 hover:text-blue-600 transition-colors">
                         <input
                           type="checkbox"
                           checked={isVisible}
-                          onChange={() => setVisibleColumns(prev => ({ ...prev, [String(c.key)]: !isVisible }))}
+                          onChange={() => {
+                            const next = !isVisible;
+                            setVisibleColumns(prev => ({ ...prev, [String(c.key)]: next }));
+                            toggleColInSettings(c.label || String(c.key));
+                          }}
                           className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
                         />
                         <span>{c.label}</span>

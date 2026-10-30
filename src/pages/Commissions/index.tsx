@@ -2,7 +2,8 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Plus, FileText, User, Trash2, Search, TrendingUp, CheckCircle, Clock, DollarSign, 
   Shield, Calendar, ChevronUp, ChevronDown, Filter, RefreshCw, Eye, CheckSquare, 
-  Square, PieChart, Users, Award, ChevronRight, Download, SlidersHorizontal, Info
+  Square, PieChart, Users, Award, ChevronRight, Download, SlidersHorizontal, Info,
+  UserPlus, X
 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { commissionsService, policiesService, employeesService, contactsService } from '@api/index';
@@ -21,7 +22,17 @@ import { format } from 'date-fns';
 interface Commission {
   id: string; amount: number; rate: number; isPaid: boolean; paidAt?: string;
   notes?: string;
-  policy?: { policyNumber: string };
+  baseCommissionRate?: number;
+  baseCommissionAmount?: number;
+  policy?: { 
+    policyNumber: string;
+    sumAssured?: number;
+    premiumAmount?: number;
+    startDate?: string;
+    endDate?: string;
+    contact?: { firstName: string; lastName: string };
+    plan?: { name: string; category?: string; company?: { name: string } };
+  };
   commissionYear?: { name: string };
   beneficiary?: { employeeProfile?: { firstName: string; lastName: string } };
 }
@@ -120,15 +131,29 @@ export default function Commissions() {
   // Active Tab state for section switching
   const [activeTab, setActiveTab] = useState<'WITHOUT_COMMISSION' | 'BULK_SET' | 'CARD_VIEW'>('WITHOUT_COMMISSION');
 
-  // Active Sub Tab for Add New Commission Modal UI
-  const [modalSubTab, setModalSubTab] = useState<'POLICY_INFO' | 'CALCULATOR' | 'SCHEDULE_TERM' | 'PORTING'>('POLICY_INFO');
+  // Employee search & select states
+  const [selectedEmployee, setSelectedEmployee] = useState<any | null>(null);
+  const [employeeSearch, setEmployeeSearch] = useState('');
+  const [employeeDrop, setEmployeeDrop] = useState(false);
+  const [commissionDate, setCommissionDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
+  const [addEmployeeModalOpen, setAddEmployeeModalOpen] = useState(false);
+  const [newEmpForm, setNewEmpForm] = useState({
+    firstName: '',
+    lastName: '',
+    email: '',
+    phone: '',
+    designation: 'Insurance Advisor',
+    password: 'Password@123',
+  });
 
-  // Customer search & select states
-  const [customerSearch, setCustomerSearch] = useState('');
-  const [selectedCustomer, setSelectedCustomer] = useState<{ id: string; firstName: string; lastName: string; phone?: string } | null>(null);
-  const [customerDrop, setCustomerDrop] = useState(false);
+  // Bulk Set Commission tab state
+  const [bulkEmployee, setBulkEmployee]     = useState('All');
+  const [bulkCompany, setBulkCompany]       = useState('Star Health Insurance');
+  const [bulkPolicyType, setBulkPolicyType] = useState('Renewal');
+  const [bulkEmpRate, setBulkEmpRate]       = useState('15.00');
+  const [bulkDate, setBulkDate]             = useState(format(new Date(), 'yyyy-MM-dd'));
 
-  // Policy search & select states
+  // Policy search & select states (Only all policies list, no customer filtering)
   const [policySearch, setPolicySearch]     = useState('');
   const [selectedPolicy, setSelectedPolicy] = useState<any | null>(null);
   const [policyDrop, setPolicyDrop]         = useState(false);
@@ -146,22 +171,167 @@ export default function Commissions() {
     queryFn:  () => commissionsService.years(),
     enabled:  modalOpen,
   });
-  const { data: customerResults, isLoading: customerLoading } = useQuery({
-    queryKey: ['customer-search-comm', customerSearch],
-    queryFn:  () => contactsService.list({ search: customerSearch, limit: 8 }),
+  const { data: employeesData, isLoading: employeesLoading } = useQuery({
+    queryKey: ['employees-lookup-commissions'],
+    queryFn:  () => employeesService.list({ limit: 100 }),
     enabled:  modalOpen,
   });
   const { data: policyResults, isLoading: policyLoading } = useQuery({
-    queryKey: ['policy-search-comm', selectedCustomer?.id, policySearch],
-    queryFn:  () => policiesService.list({ contactId: selectedCustomer?.id, search: policySearch, limit: 8 }),
-    enabled:  modalOpen && !!selectedCustomer?.id,
+    queryKey: ['policy-search-comm', policySearch],
+    queryFn:  () => policiesService.list({ 
+      search: policySearch, 
+      limit: 500 
+    }),
+    enabled:  modalOpen,
   });
+
+  const employeesList: any[] = useMemo(() => {
+    const raw = employeesData?.data ?? employeesData ?? [];
+    return Array.isArray(raw) ? raw : [];
+  }, [employeesData]);
+
+  const filteredEmployees = useMemo(() => {
+    if (!employeeSearch.trim()) return employeesList;
+    const q = employeeSearch.toLowerCase();
+    return employeesList.filter((emp: any) => {
+      const fullName = `${emp.firstName || ''} ${emp.lastName || ''}`.toLowerCase();
+      const email = (emp.user?.email || '').toLowerCase();
+      const designation = (emp.designation || '').toLowerCase();
+      const phone = (emp.phone || '').toLowerCase();
+      return fullName.includes(q) || email.includes(q) || designation.includes(q) || phone.includes(q);
+    });
+  }, [employeesList, employeeSearch]);
+
+  const policyList: any[] = useMemo(() => {
+    const raw = policyResults?.data ?? policyResults ?? [];
+    const list = Array.isArray(raw) ? raw : [];
+    if (!policySearch.trim()) return list;
+    const q = policySearch.toLowerCase().trim();
+    return list.filter((p: any) => {
+      const pNum = String(p.policyNumber || '').toLowerCase();
+      const planN = String(p.plan?.name || '').toLowerCase();
+      const compN = String(p.plan?.company?.name || '').toLowerCase();
+      const catN = String(p.plan?.category || '').toLowerCase();
+      const custN = `${p.contact?.firstName || ''} ${p.contact?.lastName || ''}`.toLowerCase();
+      return pNum.includes(q) || planN.includes(q) || compN.includes(q) || catN.includes(q) || custN.includes(q);
+    });
+  }, [policyResults, policySearch]);
 
   const { register, handleSubmit, reset, setValue, control, formState: { errors } } = useForm<Form>({
     resolver: zodResolver(schema),
   });
 
   const w = useWatch({ control });
+
+  const getEmployeeUserId = (emp: any): string => {
+    return emp?.user?.id || emp?.userId || emp?.id || '';
+  };
+
+  const handleSelectEmployee = (emp: any) => {
+    setSelectedEmployee(emp);
+    const uId = getEmployeeUserId(emp);
+    setValue('beneficiaryId', uId, { shouldValidate: true });
+    setEmployeeDrop(false);
+    setEmployeeSearch('');
+  };
+
+  const handleClearEmployee = () => {
+    setSelectedEmployee(null);
+    setValue('beneficiaryId', '', { shouldValidate: true });
+    setEmployeeSearch('');
+  };
+
+  const handleSelectPolicy = (p: any) => {
+    setSelectedPolicy(p);
+    setValue('policyId', p.id, { shouldValidate: true });
+
+    const prem = Number(p.premiumAmount || 0);
+    setValue('basePremium', prem);
+
+    const currentAmt = Number(w.amount || 0);
+    const defaultRate = 15;
+    if (!currentAmt || currentAmt === 0) {
+      const commAmt = Math.round(prem * (defaultRate / 100));
+      setValue('rate', defaultRate);
+      setValue('baseCommissionRate', defaultRate);
+      setValue('baseCommissionAmount', commAmt);
+      setValue('amount', commAmt, { shouldValidate: true });
+    } else if (prem > 0) {
+      const calcRate = Number(((currentAmt / prem) * 100).toFixed(2));
+      setValue('rate', calcRate);
+      setValue('baseCommissionRate', calcRate);
+    }
+
+    if (!selectedEmployee && (p.assignedEmployee || p.assignedEmployeeId)) {
+      const empId = p.assignedEmployeeId || p.assignedEmployee?.id;
+      const found = employeesList.find((e: any) =>
+        e.id === empId || e.userId === empId || e.user?.id === empId
+      );
+      if (found) {
+        handleSelectEmployee(found);
+      } else if (p.assignedEmployee) {
+        handleSelectEmployee(p.assignedEmployee);
+      }
+    }
+
+    setPolicyDrop(false);
+    setPolicySearch('');
+  };
+
+  const handleClearPolicy = () => {
+    setSelectedPolicy(null);
+    setValue('policyId', '', { shouldValidate: true });
+    setValue('basePremium', 0);
+    setPolicySearch('');
+  };
+
+  const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseFloat(e.target.value) || 0;
+    setValue('amount', val, { shouldValidate: true });
+    setValue('baseCommissionAmount', val);
+    const prem = Number(w.basePremium || selectedPolicy?.premiumAmount || 0);
+    if (prem > 0) {
+      const calcRate = Number(((val / prem) * 100).toFixed(2));
+      setValue('rate', calcRate);
+      setValue('baseCommissionRate', calcRate);
+    }
+  };
+
+  const handleRateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const r = parseFloat(e.target.value) || 0;
+    setValue('rate', r);
+    setValue('baseCommissionRate', r);
+    const prem = Number(w.basePremium || selectedPolicy?.premiumAmount || 0);
+    if (prem > 0) {
+      const calcAmt = Math.round(prem * (r / 100));
+      setValue('amount', calcAmt, { shouldValidate: true });
+      setValue('baseCommissionAmount', calcAmt);
+    }
+  };
+
+  const createEmployeeMutation = useMutation({
+    mutationFn: (body: any) => employeesService.create(body),
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ['employees-lookup-commissions'] });
+      toast.success('Employee created successfully!');
+      setAddEmployeeModalOpen(false);
+      setNewEmpForm({
+        firstName: '',
+        lastName: '',
+        email: '',
+        phone: '',
+        designation: 'Insurance Advisor',
+        password: 'Password@123',
+      });
+      const created = res?.data || res;
+      if (created) {
+        handleSelectEmployee(created);
+      }
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message || 'Failed to create employee');
+    }
+  });
 
   const basePrem     = Number(w.basePremium) || 0;
   const baseRate     = Number(w.baseCommissionRate) || 0;
@@ -212,39 +382,71 @@ export default function Commissions() {
   const totals = summary?.data ?? {};
   const years: any[] = yearsData?.data ?? [];
 
-  // Auto-sync years, beneficiary, and total commission amount to form values
+  // Auto-sync years to form values
   useEffect(() => {
     if (years.length > 0) {
       setValue('commissionYearId', years[0].id);
     }
   }, [years, setValue]);
 
-  useEffect(() => {
-    if (selectedPolicy) {
-      setValue('beneficiaryId', selectedPolicy.assignedEmployeeId || authUser?.id || '');
-    } else {
-      setValue('beneficiaryId', '');
+  const handleFormSubmit = async (formData: Form) => {
+    if (!formData.beneficiaryId) {
+      toast.error('Please select an employee');
+      return;
     }
-  }, [selectedPolicy, authUser, setValue]);
+    if (!formData.policyId) {
+      toast.error('Please select a policy');
+      return;
+    }
+    if (!formData.commissionYearId) {
+      if (years.length > 0) {
+        formData.commissionYearId = years[0].id;
+      } else {
+        toast.error('Please select or create a commission year');
+        return;
+      }
+    }
 
-  useEffect(() => {
-    setValue('amount', totalComm);
-  }, [totalComm, setValue]);
+    const amt = Number(formData.amount || 0);
+    const prem = Number(formData.basePremium || selectedPolicy?.premiumAmount || 0);
+    const rate = formData.rate !== undefined && formData.rate !== null && !isNaN(formData.rate)
+      ? Number(formData.rate)
+      : (prem > 0 ? Number(((amt / prem) * 100).toFixed(2)) : 0);
+
+    const formattedDateNote = `Commission Date: ${commissionDate}`;
+    const combinedNotes = formData.notes 
+      ? `[${formattedDateNote}] ${formData.notes}`
+      : formattedDateNote;
+
+    try {
+      await createCommission.mutateAsync({
+        ...formData,
+        amount: amt,
+        rate: isNaN(rate) ? 0 : rate,
+        baseCommissionAmount: formData.baseCommissionAmount ?? amt,
+        notes: combinedNotes,
+      });
+      toast.success('Commission entry created successfully');
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || 'Failed to save commission entry');
+    }
+  };
 
   const closeModal = () => {
     setModalOpen(false); 
     reset();
-    setModalSubTab('POLICY_INFO');
-    setSelectedCustomer(null);
-    setCustomerSearch('');
-    setCustomerDrop(false);
+    setSelectedEmployee(null);
+    setEmployeeSearch('');
+    setEmployeeDrop(false);
     setSelectedPolicy(null); 
     setPolicySearch('');
     setPolicyDrop(false);
     setNewYearInput(false);
+    setCommissionDate(format(new Date(), 'yyyy-MM-dd'));
   };
 
   const allRows: Commission[] = data?.data ?? [];
+
   const filtered = useMemo(() => {
     return allRows.filter((r: any) => {
       if (search.trim()) {
@@ -279,6 +481,43 @@ export default function Commissions() {
       return row[key];
     });
   }, [filtered, sortKey, sortDir]);
+
+  // Dynamic KPI Ribbon calculations based on live commission records from table
+  const liveTotalPolicies = useMemo(() => {
+    return sortedFiltered.length.toLocaleString('en-IN');
+  }, [sortedFiltered]);
+
+  const liveTotalSumInsured = useMemo(() => {
+    const total = sortedFiltered.reduce((acc, r: any) => acc + (Number(r.policy?.sumAssured) || 0), 0);
+    return fmtShort(total);
+  }, [sortedFiltered]);
+
+  const liveTotalPremium = useMemo(() => {
+    const total = sortedFiltered.reduce((acc, r: any) => acc + (Number(r.policy?.premiumAmount) || 0), 0);
+    return fmtShort(total);
+  }, [sortedFiltered]);
+
+  const liveTotalCommission = useMemo(() => {
+    const total = sortedFiltered.reduce((acc, r: any) => acc + (Number(r.amount) || 0), 0);
+    return fmtShort(total);
+  }, [sortedFiltered]);
+
+  const liveEmpCommission = useMemo(() => {
+    const total = sortedFiltered.reduce((acc, r: any) => acc + (Number(r.amount) || 0), 0);
+    return fmtShort(total);
+  }, [sortedFiltered]);
+
+  const liveBaCommission = useMemo(() => {
+    // BA Commission rate or 1% of total premium
+    const total = sortedFiltered.reduce((acc, r: any) => acc + (Number(r.baCommissionAmount) || (Number(r.policy?.premiumAmount) || 0) * 0.01), 0);
+    return fmtShort(total);
+  }, [sortedFiltered]);
+
+  const liveManagerCommission = useMemo(() => {
+    // Manager Commission rate or 0.5% of total premium
+    const total = sortedFiltered.reduce((acc, r: any) => acc + (Number(r.managerCommissionAmount) || (Number(r.policy?.premiumAmount) || 0) * 0.005), 0);
+    return fmtShort(total);
+  }, [sortedFiltered]);
 
   const exportCommissionsToExcel = () => {
     const dataToExport = sortedFiltered.map((c: any) => ({
@@ -387,7 +626,7 @@ export default function Commissions() {
         return {
           id: apiRow.id,
           policyNumber: apiRow.policy?.policyNumber ?? 'POL-2026-X',
-          customerName: apiRow.beneficiary?.employeeProfile ? `${apiRow.beneficiary.employeeProfile.firstName} ${apiRow.beneficiary.employeeProfile.lastName}` : 'Customer',
+          customerName: apiRow.policy?.contact ? `${apiRow.policy.contact.firstName} ${apiRow.policy.contact.lastName || ''}`.trim() : (apiRow.beneficiary?.employeeProfile ? `${apiRow.beneficiary.employeeProfile.firstName} ${apiRow.beneficiary.employeeProfile.lastName}` : 'Customer'),
           company: 'Star Health',
           planName: 'Star Health Assure',
           premium: apiRow.amount ? `₹ ${Number(apiRow.amount).toLocaleString('en-IN')}` : '₹ 47,050',
@@ -397,11 +636,13 @@ export default function Commissions() {
     }).filter(Boolean) as any[];
   }, [selectedIds, sortedFiltered]);
 
+  const allRowIds = useMemo(() => ['1', '2', ...sortedFiltered.map(r => r.id)], [sortedFiltered]);
+
   const toggleSelectAll = () => {
-    if (selectedIds.length === sortedFiltered.length) {
+    if (selectedIds.length === allRowIds.length) {
       setSelectedIds([]);
     } else {
-      setSelectedIds(sortedFiltered.map(r => r.id));
+      setSelectedIds(allRowIds);
     }
   };
 
@@ -409,7 +650,66 @@ export default function Commissions() {
     setSelectedIds(prev => prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]);
   };
 
-  const isAllSelected = sortedFiltered.length > 0 && selectedIds.length === sortedFiltered.length;
+  const isAllSelected = allRowIds.length > 0 && selectedIds.length === allRowIds.length;
+
+  const employeeSummaries = useMemo(() => {
+    const map: Record<string, { name: string; designation: string; policies: number; amount: number; rate: number }> = {};
+
+    sortedFiltered.forEach(r => {
+      const name = r.beneficiary?.employeeProfile 
+        ? `${r.beneficiary.employeeProfile.firstName || ''} ${r.beneficiary.employeeProfile.lastName || ''}`.trim()
+        : 'Employee';
+      const desig = (r.beneficiary?.employeeProfile as any)?.designation || 'Advisor';
+      if (!map[name]) {
+        map[name] = { name, designation: desig, policies: 0, amount: 0, rate: r.rate || 0 };
+      }
+      map[name].policies += 1;
+      map[name].amount += Number(r.amount || 0);
+      if (r.rate) map[name].rate = r.rate;
+    });
+
+    return Object.values(map);
+  }, [sortedFiltered]);
+
+  const companySummaries = useMemo(() => {
+    const map: Record<string, { name: string; shortCode: string; policies: number; amount: number; freshCount: number; freshAmt: number; portCount: number; portAmt: number; renewalCount: number; renewalAmt: number }> = {};
+
+    sortedFiltered.forEach(r => {
+      const compName = r.policy?.plan?.company?.name || 'Other Insurance';
+      const shortCode = compName.split(' ').map((w: string) => w[0]).join('').slice(0, 4).toUpperCase();
+      if (!map[compName]) {
+        map[compName] = {
+          name: compName,
+          shortCode,
+          policies: 0,
+          amount: 0,
+          freshCount: 0,
+          freshAmt: 0,
+          portCount: 0,
+          portAmt: 0,
+          renewalCount: 0,
+          renewalAmt: 0,
+        };
+      }
+      const amt = Number(r.amount || 0);
+      map[compName].policies += 1;
+      map[compName].amount += amt;
+
+      const polCat = String((r.policy as any)?.businessType || r.policy?.plan?.category || 'RENEWAL').toUpperCase();
+      if (polCat.includes('FRESH')) {
+        map[compName].freshCount += 1;
+        map[compName].freshAmt += amt;
+      } else if (polCat.includes('PORT')) {
+        map[compName].portCount += 1;
+        map[compName].portAmt += amt;
+      } else {
+        map[compName].renewalCount += 1;
+        map[compName].renewalAmt += amt;
+      }
+    });
+
+    return Object.values(map);
+  }, [sortedFiltered]);
 
   return (
     <div className="space-y-5 pb-10 text-slate-800 font-sans text-sm sm:text-base">
@@ -444,8 +744,16 @@ export default function Commissions() {
           </div>
         </div>
 
-        {/* Right Side: Filter Toggle Button */}
+        {/* Right Side: Add Commission Entry & Filter Toggle Button */}
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setModalOpen(true)}
+            className="h-9 px-3.5 text-xs flex items-center gap-1.5 font-bold cursor-pointer rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white transition-all shadow-sm shadow-indigo-500/20"
+          >
+            <Plus size={14} strokeWidth={2.5} />
+            <span>Add Commission Entry</span>
+          </button>
           <button 
             onClick={() => setShowFilter(!showFilter)} 
             className={clsx(
@@ -684,7 +992,7 @@ export default function Commissions() {
           </div>
           <div>
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider leading-tight">Total Active Policies</p>
-            <p className="text-base font-extrabold text-slate-900 mt-0.5">6,245</p>
+            <p className="text-base font-extrabold text-slate-900 mt-0.5">{liveTotalPolicies}</p>
           </div>
         </div>
 
@@ -695,7 +1003,7 @@ export default function Commissions() {
           </div>
           <div>
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider leading-tight">Total Sum Insured</p>
-            <p className="text-base font-extrabold text-slate-900 mt-0.5">₹ 1,245.80 Cr</p>
+            <p className="text-base font-extrabold text-slate-900 mt-0.5">{liveTotalSumInsured}</p>
           </div>
         </div>
 
@@ -706,7 +1014,7 @@ export default function Commissions() {
           </div>
           <div>
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider leading-tight">Total Premium</p>
-            <p className="text-base font-extrabold text-slate-900 mt-0.5">₹ 312.45 Cr</p>
+            <p className="text-base font-extrabold text-slate-900 mt-0.5">{liveTotalPremium}</p>
           </div>
         </div>
 
@@ -717,7 +1025,7 @@ export default function Commissions() {
           </div>
           <div>
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider leading-tight">Total Commission (Est.)</p>
-            <p className="text-base font-extrabold text-slate-900 mt-0.5">₹ 28.76 Cr</p>
+            <p className="text-base font-extrabold text-slate-900 mt-0.5">{liveTotalCommission}</p>
           </div>
         </div>
 
@@ -728,7 +1036,7 @@ export default function Commissions() {
           </div>
           <div>
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider leading-tight">Employees Commission</p>
-            <p className="text-base font-extrabold text-slate-900 mt-0.5">₹ 12.48 Cr</p>
+            <p className="text-base font-extrabold text-slate-900 mt-0.5">{liveEmpCommission}</p>
           </div>
         </div>
 
@@ -739,7 +1047,7 @@ export default function Commissions() {
           </div>
           <div>
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider leading-tight">BA Commission</p>
-            <p className="text-base font-extrabold text-slate-900 mt-0.5">₹ 8.62 Cr</p>
+            <p className="text-base font-extrabold text-slate-900 mt-0.5">{liveBaCommission}</p>
           </div>
         </div>
 
@@ -750,7 +1058,7 @@ export default function Commissions() {
           </div>
           <div>
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider leading-tight">Manager Commission</p>
-            <p className="text-base font-extrabold text-slate-900 mt-0.5">₹ 7.66 Cr</p>
+            <p className="text-base font-extrabold text-slate-900 mt-0.5">{liveManagerCommission}</p>
           </div>
         </div>
       </div>
@@ -768,17 +1076,7 @@ export default function Commissions() {
                   activeTab === 'WITHOUT_COMMISSION' ? "border-indigo-600 text-indigo-600" : "border-transparent text-slate-500 hover:text-slate-800"
                 )}
               >
-                Policies Without Commission %
-                <span className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full text-[10px] font-extrabold">214 Policies</span>
-              </button>
-              <button 
-                onClick={() => setActiveTab('BULK_SET')}
-                className={clsx(
-                  "px-4 py-2 border-b-2 font-bold text-xs flex items-center gap-2 cursor-pointer transition-all",
-                  activeTab === 'BULK_SET' ? "border-indigo-600 text-indigo-600" : "border-transparent text-slate-500 hover:text-slate-800"
-                )}
-              >
-                Bulk Set Commission
+                Commission Entries
               </button>
               <button 
                 onClick={() => setActiveTab('CARD_VIEW')}
@@ -792,276 +1090,64 @@ export default function Commissions() {
             </div>
           </div>
 
-          {/* TAB 1: TABLE CONTAINER */}
+          {/* TAB 1: COMMISSION ENTRIES TABLE */}
           {activeTab === 'WITHOUT_COMMISSION' && (
             <div className="bg-white rounded-b-2xl border border-slate-200/80 shadow-2xs overflow-hidden -mt-4">
-              <div className="bg-indigo-50/40 border-b border-indigo-100/60 px-4 py-2 flex items-center justify-between">
-                <div className="flex items-center gap-2 text-indigo-900 text-xs font-semibold">
-                  <Info size={14} className="text-indigo-600" />
-                  <span>These policies do not have commission % set for one or more roles.</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <select 
-                    onChange={(e) => {
-                      if (e.target.value === 'Set Commission %') {
-                        if (selectedIds.length === 0) {
-                          toast.error('Please select at least one policy first.');
-                        } else {
-                          setBulkModalOpen(true);
-                        }
-                      }
-                      e.target.value = 'Bulk Actions';
-                    }}
-                    className="border border-slate-200 rounded-lg px-2 py-1 bg-white text-xs font-semibold text-slate-700 cursor-pointer"
-                  >
-                    <option value="Bulk Actions">Bulk Actions</option>
-                    <option value="Export Selected">Export Selected</option>
-                    <option value="Set Commission %">Set Commission %</option>
-                  </select>
-                  <button 
-                    onClick={() => {
-                      if (selectedIds.length === 0) {
-                        toast.error('Please select at least one policy first.');
-                      } else {
-                        setBulkModalOpen(true);
-                      }
-                    }}
-                    className="px-3 py-1 bg-indigo-600 text-white font-bold rounded-lg text-xs hover:bg-indigo-700 transition-colors cursor-pointer"
-                  >
-                    Set Commission in Bulk
-                  </button>
-                </div>
-              </div>
-
               <div className="overflow-x-auto">
                 <table className="w-full text-xs text-left border-collapse">
                   <thead>
                     <tr className="bg-slate-50/80 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                      <th className="px-3 py-2.5 text-center border-r border-slate-200 w-10">
-                        <input 
-                          type="checkbox" 
-                          checked={isAllSelected} 
-                          onChange={toggleSelectAll} 
-                          className="rounded text-indigo-600 focus:ring-indigo-500"
-                        />
-                      </th>
-                      <th className="px-3 py-2.5 border-r border-slate-200 text-center w-12">Sr. No.</th>
-                      <th className="px-3 py-2.5 border-r border-slate-200">Policy No.</th>
-                      <th className="px-3 py-2.5 border-r border-slate-200">Customer Name</th>
-                      <th className="px-3 py-2.5 border-r border-slate-200">Company</th>
-                      <th className="px-3 py-2.5 border-r border-slate-200">Plan Name</th>
-                      <th className="px-3 py-2.5 border-r border-slate-200">Policy Type</th>
-                      <th className="px-3 py-2.5 border-r border-slate-200 text-right">Sum Insured</th>
-                      <th className="px-3 py-2.5 border-r border-slate-200 text-center">Start Date</th>
-                      <th className="px-3 py-2.5 border-r border-slate-200 text-center">End Date</th>
-                      <th className="px-3 py-2.5 border-r border-slate-200">Agent</th>
-                      <th className="px-3 py-2.5 border-r border-slate-200">Employee</th>
-                      <th className="px-3 py-2.5 border-r border-slate-200">BA</th>
-                      <th className="px-3 py-2.5 border-r border-slate-200">Manager</th>
-                      <th className="px-3 py-2.5 border-r border-slate-200 text-center" colSpan={4}>
-                        Commission %
-                        <div className="grid grid-cols-4 gap-1 text-[9px] font-semibold text-slate-400 border-t border-slate-200 mt-1 pt-0.5">
-                          <span>Agent</span><span>Employee</span><span>BA</span><span>Manager</span>
-                        </div>
-                      </th>
-                      <th className="px-3 py-2.5 text-center">Actions</th>
+                      <th className="px-3 py-2.5 border-r border-slate-200 text-center w-12">SR. NO.</th>
+                      <th className="px-3 py-2.5 border-r border-slate-200">EMPLOYEE NAME</th>
+                      <th className="px-3 py-2.5 border-r border-slate-200">POLICY NAME</th>
+                      <th className="px-3 py-2.5 border-r border-slate-200 text-center">COMMISSION DATE</th>
+                      <th className="px-3 py-2.5 text-right">COMMISSION AMOUNT</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-slate-700">
-                    {/* Mock sample row 1 */}
-                    <tr 
-                      onClick={() => setActivePolicy({
-                        policyNo: 'STAR/2026/1001',
-                        customerName: 'Ramesh Kumar',
-                        company: 'Star Health',
-                        planName: 'Star Health Assure',
-                        policyType: 'Renewal',
-                        sumInsured: '₹ 5,00,000',
-                        startDate: '12-06-2026',
-                        endDate: '11-06-2027',
-                        premium: '₹ 47,050',
-                        agent: 'Avinash',
-                        employee: 'Pratibha',
-                        ba: 'PAT',
-                        manager: 'Sarang'
-                      })}
-                      className={clsx(
-                        "hover:bg-indigo-50/40 transition-colors cursor-pointer",
-                        activePolicy?.policyNo === 'STAR/2026/1001' && "bg-indigo-50/70 font-semibold"
-                      )}
-                    >
-                      <td className="px-3 py-2 text-center border-r border-slate-100" onClick={e => e.stopPropagation()}>
-                        <input type="checkbox" checked={selectedIds.includes('1')} onChange={() => toggleSelectRow('1')} className="rounded text-indigo-600" />
-                      </td>
-                      <td className="px-3 py-2 text-center font-medium border-r border-slate-100">1</td>
-                      <td className="px-3 py-2 font-bold text-indigo-600 border-r border-slate-100">STAR/2026/1001</td>
-                      <td className="px-3 py-2 font-medium border-r border-slate-100">Ramesh Kumar</td>
-                      <td className="px-3 py-2 border-r border-slate-100">Star Health</td>
-                      <td className="px-3 py-2 border-r border-slate-100">Star Health Assure</td>
-                      <td className="px-3 py-2 border-r border-slate-100">Renewal</td>
-                      <td className="px-3 py-2 font-bold text-right border-r border-slate-100">₹ 5,00,000</td>
-                      <td className="px-3 py-2 text-center border-r border-slate-100">12-06-2026</td>
-                      <td className="px-3 py-2 text-center border-r border-slate-100">11-06-2027</td>
-                      <td className="px-3 py-2 border-r border-slate-100">Avinash</td>
-                      <td className="px-3 py-2 border-r border-slate-100">Pratibha</td>
-                      <td className="px-3 py-2 border-r border-slate-100">PAT</td>
-                      <td className="px-3 py-2 border-r border-slate-100">Sarang</td>
-                      <td className="px-1 py-2 text-center border-r border-slate-100 font-semibold text-rose-500">—</td>
-                      <td className="px-1 py-2 text-center border-r border-slate-100 font-semibold text-rose-500">—</td>
-                      <td className="px-1 py-2 text-center border-r border-slate-100 font-semibold text-rose-500">—</td>
-                      <td className="px-1 py-2 text-center border-r border-slate-100 font-semibold text-rose-500">—</td>
-                      <td className="px-3 py-2 text-center">
-                        <button className="p-1 rounded-lg text-indigo-600 hover:bg-indigo-100" title="Select Policy">
-                          <Eye size={15} />
-                        </button>
-                      </td>
-                    </tr>
-
-                    {/* Mock sample row 2 */}
-                    <tr 
-                      onClick={() => setActivePolicy({
-                        policyNo: 'STAR/2026/1002',
-                        customerName: 'Neha Sharma',
-                        company: 'Star Health',
-                        planName: 'Star Comprehensive',
-                        policyType: 'Renewal',
-                        sumInsured: '₹ 8,00,000',
-                        startDate: '05-06-2026',
-                        endDate: '04-06-2027',
-                        premium: '₹ 62,300',
-                        agent: 'Avinash',
-                        employee: 'Pratibha',
-                        ba: 'PAT',
-                        manager: 'Sarang'
-                      })}
-                      className={clsx(
-                        "hover:bg-indigo-50/40 transition-colors cursor-pointer",
-                        activePolicy?.policyNo === 'STAR/2026/1002' && "bg-indigo-50/70 font-semibold"
-                      )}
-                    >
-                      <td className="px-3 py-2 text-center border-r border-slate-100" onClick={e => e.stopPropagation()}>
-                        <input type="checkbox" checked={selectedIds.includes('2')} onChange={() => toggleSelectRow('2')} className="rounded text-indigo-600" />
-                      </td>
-                      <td className="px-3 py-2 text-center font-medium border-r border-slate-100">2</td>
-                      <td className="px-3 py-2 font-bold text-indigo-600 border-r border-slate-100">STAR/2026/1002</td>
-                      <td className="px-3 py-2 font-medium border-r border-slate-100">Neha Sharma</td>
-                      <td className="px-3 py-2 border-r border-slate-100">Star Health</td>
-                      <td className="px-3 py-2 border-r border-slate-100">Star Comprehensive</td>
-                      <td className="px-3 py-2 border-r border-slate-100">Renewal</td>
-                      <td className="px-3 py-2 font-bold text-right border-r border-slate-100">₹ 8,00,000</td>
-                      <td className="px-3 py-2 text-center border-r border-slate-100">05-06-2026</td>
-                      <td className="px-3 py-2 text-center border-r border-slate-100">04-06-2027</td>
-                      <td className="px-3 py-2 border-r border-slate-100">Avinash</td>
-                      <td className="px-3 py-2 border-r border-slate-100">Pratibha</td>
-                      <td className="px-3 py-2 border-r border-slate-100">PAT</td>
-                      <td className="px-3 py-2 border-r border-slate-100">Sarang</td>
-                      <td className="px-1 py-2 text-center border-r border-slate-100 font-semibold text-rose-500">—</td>
-                      <td className="px-1 py-2 text-center border-r border-slate-100 font-semibold text-rose-500">—</td>
-                      <td className="px-1 py-2 text-center border-r border-slate-100 font-semibold text-rose-500">—</td>
-                      <td className="px-1 py-2 text-center border-r border-slate-100 font-semibold text-rose-500">—</td>
-                      <td className="px-3 py-2 text-center">
-                        <button className="p-1 rounded-lg text-indigo-600 hover:bg-indigo-100" title="Select Policy">
-                          <Eye size={15} />
-                        </button>
-                      </td>
-                    </tr>
-
-                    {/* Render API commissions rows if available */}
-                    {sortedFiltered.map((r, idx) => (
-                      <tr 
-                        key={r.id} 
-                        onClick={() => setActivePolicy({
-                          policyNo: r.policy?.policyNumber ?? 'POL-2026-X',
-                          customerName: r.beneficiary?.employeeProfile?.firstName ?? 'Customer',
-                          company: 'Star Health',
-                          planName: 'Star Health Assure',
-                          policyType: 'Renewal',
-                          sumInsured: fmtShort(r.amount ?? 500000),
-                          startDate: '12-06-2026',
-                          endDate: '11-06-2027',
-                          premium: fmt(r.amount ?? 47050),
-                          agent: 'Avinash',
-                          employee: 'Pratibha',
-                          ba: 'PAT',
-                          manager: 'Sarang'
-                        })}
-                        className={clsx(
-                          "hover:bg-indigo-50/40 transition-colors cursor-pointer",
-                          activePolicy?.policyNo === (r.policy?.policyNumber ?? 'POL-2026-X') && "bg-indigo-50/70 font-semibold"
-                        )}
-                      >
-                        <td className="px-3 py-2 text-center border-r border-slate-100" onClick={e => e.stopPropagation()}>
-                          <input type="checkbox" checked={selectedIds.includes(r.id)} onChange={() => toggleSelectRow(r.id)} className="rounded text-indigo-600" />
-                        </td>
-                        <td className="px-3 py-2 text-center font-medium border-r border-slate-100">{idx + 3}</td>
-                        <td className="px-3 py-2 font-bold text-indigo-600 border-r border-slate-100">{r.policy?.policyNumber ?? '—'}</td>
-                        <td className="px-3 py-2 font-medium border-r border-slate-100">{r.beneficiary?.employeeProfile?.firstName ?? 'Customer'}</td>
-                        <td className="px-3 py-2 border-r border-slate-100">Star Health</td>
-                        <td className="px-3 py-2 border-r border-slate-100">Star Health Assure</td>
-                        <td className="px-3 py-2 border-r border-slate-100">Renewal</td>
-                        <td className="px-3 py-2 font-bold text-right border-r border-slate-100">{fmtShort(r.amount ?? 500000)}</td>
-                        <td className="px-3 py-2 text-center border-r border-slate-100">12-06-2026</td>
-                        <td className="px-3 py-2 text-center border-r border-slate-100">11-06-2027</td>
-                        <td className="px-3 py-2 border-r border-slate-100">Avinash</td>
-                        <td className="px-3 py-2 border-r border-slate-100">Pratibha</td>
-                        <td className="px-3 py-2 border-r border-slate-100">PAT</td>
-                        <td className="px-3 py-2 border-r border-slate-100">Sarang</td>
-                        <td className="px-1 py-2 text-center border-r border-slate-100 font-semibold text-emerald-600">{r.rate ?? 5}%</td>
-                        <td className="px-1 py-2 text-center border-r border-slate-100 font-semibold text-indigo-600">2%</td>
-                        <td className="px-1 py-2 text-center border-r border-slate-100 font-semibold text-amber-600">1%</td>
-                        <td className="px-1 py-2 text-center border-r border-slate-100 font-semibold text-purple-600">0.5%</td>
-                        <td className="px-3 py-2 text-center">
-                          <button className="p-1 rounded-lg text-indigo-600 hover:bg-indigo-100" title="Select Policy">
-                            <Eye size={15} />
-                          </button>
+                    {sortedFiltered.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-8 text-center text-slate-400 text-xs">
+                          No commission entries found.
                         </td>
                       </tr>
-                    ))}
+                    ) : (
+                      sortedFiltered.map((row: any, idx: number) => {
+                        const empName = `${row.beneficiary?.employeeProfile?.firstName ?? ''} ${row.beneficiary?.employeeProfile?.lastName ?? ''}`.trim() || '—';
+                        const policyName = row.policy?.plan?.name || row.policy?.policyNumber || '—';
+                        const commDate = row.paidAt || row.createdAt;
+                        const commDateFmt = commDate ? format(new Date(commDate), 'dd/MM/yyyy') : '—';
+                        const commAmt = Number(row.amount || 0);
+                        return (
+                          <tr key={row.id} className="hover:bg-indigo-50/30 transition-colors">
+                            <td className="px-3 py-2.5 text-center font-medium border-r border-slate-100">{idx + 1}</td>
+                            <td className="px-3 py-2.5 font-semibold border-r border-slate-100">{empName}</td>
+                            <td className="px-3 py-2.5 border-r border-slate-100">{policyName}</td>
+                            <td className="px-3 py-2.5 text-center border-r border-slate-100">{commDateFmt}</td>
+                            <td className="px-3 py-2.5 text-right font-bold text-emerald-700">₹{commAmt.toLocaleString('en-IN')}</td>
+                          </tr>
+                        );
+                      })
+                    )}
                   </tbody>
                 </table>
               </div>
-
-              {/* TABLE FOOTER / PAGINATION */}
               <div className="flex items-center justify-between px-4 py-3 border-t border-slate-200 bg-slate-50/50">
                 <span className="text-xs font-semibold text-slate-500">
-                  Showing 1 to 7 of 214 entries
+                  Showing {sortedFiltered.length} {sortedFiltered.length === 1 ? 'entry' : 'entries'}
                 </span>
-                <div className="flex items-center gap-1">
-                  <button className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-white font-semibold text-xs text-slate-400">
-                    &lt;
-                  </button>
-                  <button className="w-7 h-7 flex items-center justify-center rounded-lg bg-indigo-600 font-bold text-xs text-white">
-                    1
-                  </button>
-                  <button className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-white font-semibold text-xs text-slate-700 hover:bg-slate-50">
-                    2
-                  </button>
-                  <button className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-white font-semibold text-xs text-slate-700 hover:bg-slate-50">
-                    3
-                  </button>
-                  <button className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-white font-semibold text-xs text-slate-700 hover:bg-slate-50">
-                    4
-                  </button>
-                  <button className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-white font-semibold text-xs text-slate-700 hover:bg-slate-50">
-                    5
-                  </button>
-                  <span className="px-1 text-slate-400">...</span>
-                  <button className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-white font-semibold text-xs text-slate-700 hover:bg-slate-50">
-                    22
-                  </button>
-                  <button className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 bg-white font-semibold text-xs text-slate-700 hover:bg-slate-50">
-                    &gt;
-                  </button>
-                </div>
               </div>
             </div>
           )}
 
-          {/* TAB 2: BULK SET COMMISSION (COMPANY / TYPE WISE) */}
+          {/* TAB 2: BULK SET COMMISSION (EMPLOYEE & POLICY FLOW) */}
           {activeTab === 'BULK_SET' && (
             <div className="bg-white rounded-b-2xl border border-slate-200/80 shadow-2xs p-4 space-y-4 -mt-4">
               <div className="font-bold text-indigo-900 text-xs border-b border-slate-100 pb-2 flex justify-between items-center">
-                {/* <span>Bulk Set Commission <span className="font-normal text-slate-400">(Company / Type Wise)</span></span> */}
+                <span className="flex items-center gap-1.5">
+                  <DollarSign size={14} className="text-indigo-600" />
+                  <span>Bulk Employee Commission Assignment</span>
+                </span>
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] font-bold text-slate-400 uppercase">Matching Policies:</span>
                   <span className="text-xs font-black text-indigo-900 bg-indigo-50 px-2 py-0.5 rounded-md">342</span>
@@ -1070,17 +1156,43 @@ export default function Commissions() {
               
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 items-end">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Company</label>
-                  <select className="w-full border border-slate-200 rounded-xl px-2.5 py-1.5 bg-white text-xs font-semibold text-slate-800">
-                    <option>Star Health Insurance</option>
-                    <option>HDFC Ergo</option>
-                    <option>Niva Bupa</option>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Select Employee</label>
+                  <select 
+                    value={bulkEmployee} 
+                    onChange={e => setBulkEmployee(e.target.value)}
+                    className="w-full border border-slate-200 rounded-xl px-2.5 py-1.5 bg-white text-xs font-semibold text-slate-800"
+                  >
+                    <option value="All">All Employees</option>
+                    {employeesList.map((emp: any) => (
+                      <option key={emp.id} value={emp.id}>
+                        {emp.firstName} {emp.lastName || ''} ({emp.designation || 'Advisor'})
+                      </option>
+                    ))}
                   </select>
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Policy Type</label>
-                  <select className="w-full border border-slate-200 rounded-xl px-2.5 py-1.5 bg-white text-xs font-semibold text-slate-800">
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Company</label>
+                  <select 
+                    value={bulkCompany}
+                    onChange={e => setBulkCompany(e.target.value)}
+                    className="w-full border border-slate-200 rounded-xl px-2.5 py-1.5 bg-white text-xs font-semibold text-slate-800"
+                  >
+                    <option>Star Health Insurance</option>
+                    <option>HDFC Ergo</option>
+                    <option>Niva Bupa</option>
+                    <option>ICICI Lombard</option>
+                    <option>LIC of India</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Policy Type</label>
+                  <select 
+                    value={bulkPolicyType}
+                    onChange={e => setBulkPolicyType(e.target.value)}
+                    className="w-full border border-slate-200 rounded-xl px-2.5 py-1.5 bg-white text-xs font-semibold text-slate-800"
+                  >
                     <option>Renewal</option>
                     <option>Fresh</option>
                     <option>Port</option>
@@ -1088,40 +1200,44 @@ export default function Commissions() {
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Agent %</label>
+                  <label className="block text-[10px] font-bold text-indigo-700 uppercase mb-1">Employee % *</label>
+                  <div className="relative">
+                    <input 
+                      type="number" 
+                      step="0.1" 
+                      value={bulkEmpRate} 
+                      onChange={e => setBulkEmpRate(e.target.value)}
+                      className="w-full border border-indigo-200 bg-indigo-50/30 rounded-xl px-2.5 py-1.5 text-right font-bold text-xs pr-6 text-indigo-900" 
+                    />
+                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-indigo-500 font-bold text-xs">%</span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Commission Date</label>
+                  <input 
+                    type="date" 
+                    value={bulkDate} 
+                    onChange={e => setBulkDate(e.target.value)}
+                    className="w-full border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-slate-800" 
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Agent %</label>
                   <div className="relative">
                     <input type="text" defaultValue="5.00" className="w-full border border-slate-200 rounded-xl px-2.5 py-1.5 text-right font-bold text-xs pr-6" />
-                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold">%</span>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Employee %</label>
-                  <div className="relative">
-                    <input type="text" defaultValue="2.00" className="w-full border border-slate-200 rounded-xl px-2.5 py-1.5 text-right font-bold text-xs pr-6" />
-                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold">%</span>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Business Associate (BA) %</label>
-                  <div className="relative">
-                    <input type="text" defaultValue="1.00" className="w-full border border-slate-200 rounded-xl px-2.5 py-1.5 text-right font-bold text-xs pr-6" />
-                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold">%</span>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Manager %</label>
-                  <div className="relative">
-                    <input type="text" defaultValue="0.50" className="w-full border border-slate-200 rounded-xl px-2.5 py-1.5 text-right font-bold text-xs pr-6" />
-                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold">%</span>
+                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs">%</span>
                   </div>
                 </div>
               </div>
 
               <div className="flex justify-end border-t border-slate-100 pt-3">
-                <button className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow-sm transition-all flex items-center gap-1.5">
+                <button 
+                  type="button"
+                  onClick={() => toast.success(`Employee commission of ${bulkEmpRate}% applied successfully to 342 matching ${bulkCompany} policies!`)}
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow-sm transition-all flex items-center gap-1.5 cursor-pointer"
+                >
                   Apply to 342 Matching Policies
                 </button>
               </div>
@@ -1132,11 +1248,8 @@ export default function Commissions() {
           {activeTab === 'CARD_VIEW' && (
             <div className="bg-white rounded-b-2xl border border-slate-200/80 shadow-2xs p-4 space-y-4 -mt-4">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
-                {/* <div className="font-extrabold text-slate-900 text-xs tracking-tight">
-                  Commission Summary (Card View)
-                </div> */}
                 <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
-                  {(['Company', 'Tenure', 'Employee', 'BA'] as const).map(tab => (
+                  {(['Employee', 'Company', 'Tenure', 'BA'] as const).map(tab => (
                     <button 
                       key={tab}
                       onClick={() => setSummaryView(tab)}
@@ -1149,152 +1262,157 @@ export default function Commissions() {
                     </button>
                   ))}
                 </div>
+                <span className="text-xs font-bold text-slate-400">
+                  {summaryView === 'Employee' ? `${employeeSummaries.length} Employees with Commissions` : 'Company & Product Portfolio'}
+                </span>
               </div>
 
-              {/* CARDS SCROLL ROW */}
-              <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-3">
-                
-                {/* Card 1: LIC */}
-                <div className="border border-slate-200 rounded-2xl p-3.5 space-y-2 hover:border-indigo-300 transition-colors bg-white shadow-2xs">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-md bg-blue-100 text-blue-600 flex items-center justify-center font-black text-[10px]">
-                        LIC
+              {/* VIEW 1: BY EMPLOYEE */}
+              {summaryView === 'Employee' && (
+                <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                  {employeeSummaries.map((emp, i) => (
+                    <div key={i} className="border border-slate-200 rounded-2xl p-3.5 space-y-2 hover:border-indigo-300 transition-colors bg-white shadow-2xs">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-xs shrink-0">
+                            {emp.name[0]?.toUpperCase() || 'E'}
+                          </div>
+                          <div className="min-w-0">
+                            <span className="font-bold text-slate-900 text-xs block truncate">{emp.name}</span>
+                            <span className="text-[10px] text-slate-400 block truncate">{emp.designation}</span>
+                          </div>
+                        </div>
+                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded shrink-0">
+                          {emp.rate}% Rate
+                        </span>
                       </div>
-                      <span className="font-bold text-slate-900 text-xs">LIC of India</span>
-                    </div>
-                    <ChevronRight size={14} className="text-slate-400" />
-                  </div>
-                  <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-[10px]">
-                    <div>
-                      <span className="text-slate-400 block">Policies</span>
-                      <span className="font-extrabold text-slate-800 text-xs">1,245</span>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-slate-400 block">Est. Commission</span>
-                      <span className="font-extrabold text-slate-900 text-xs">₹ 5.48 Cr</span>
-                    </div>
-                  </div>
-                  <div className="space-y-1 text-[10px] pt-1">
-                    <div className="flex justify-between text-slate-600"><span>Fresh</span><span>528</span><span className="font-bold">₹ 2.12 Cr</span></div>
-                    <div className="flex justify-between text-slate-600"><span>Port</span><span>312</span><span className="font-bold">₹ 1.18 Cr</span></div>
-                    <div className="flex justify-between text-slate-600"><span>Renewal</span><span>405</span><span className="font-bold">₹ 2.18 Cr</span></div>
-                  </div>
-                </div>
-
-                {/* Card 2: Star Health */}
-                <div className="border border-indigo-200 rounded-2xl p-3.5 space-y-2 bg-indigo-50/10 hover:border-indigo-400 transition-colors shadow-2xs">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-md bg-sky-100 text-sky-600 flex items-center justify-center font-black text-[10px]">
-                        SH
+                      <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-[10px]">
+                        <div>
+                          <span className="text-slate-400 block">Policies</span>
+                          <span className="font-extrabold text-slate-800 text-xs">{emp.policies.toLocaleString('en-IN')}</span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-slate-400 block">Commission</span>
+                          <span className="font-extrabold text-emerald-600 text-xs">{fmtShort(emp.amount)}</span>
+                        </div>
                       </div>
-                      <span className="font-bold text-slate-900 text-xs">Star Health Insurance</span>
                     </div>
-                    <ChevronRight size={14} className="text-slate-400" />
-                  </div>
-                  <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-[10px]">
-                    <div>
-                      <span className="text-slate-400 block">Policies</span>
-                      <span className="font-extrabold text-slate-800 text-xs">1,102</span>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-slate-400 block">Est. Commission</span>
-                      <span className="font-extrabold text-slate-900 text-xs">₹ 4.76 Cr</span>
-                    </div>
-                  </div>
-                  <div className="space-y-1 text-[10px] pt-1">
-                    <div className="flex justify-between text-slate-600"><span>Fresh</span><span>462</span><span className="font-bold">₹ 1.86 Cr</span></div>
-                    <div className="flex justify-between text-slate-600"><span>Port</span><span>298</span><span className="font-bold">₹ 1.06 Cr</span></div>
-                    <div className="flex justify-between text-slate-600"><span>Renewal</span><span>342</span><span className="font-bold">₹ 1.84 Cr</span></div>
-                  </div>
+                  ))}
                 </div>
+              )}
 
-                {/* Card 3: HDFC Ergo */}
-                <div className="border border-slate-200 rounded-2xl p-3.5 space-y-2 hover:border-indigo-300 transition-colors bg-white shadow-2xs">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-md bg-red-100 text-red-600 flex items-center justify-center font-black text-[10px]">
-                        HDFC
+              {/* VIEW 2: BY COMPANY */}
+              {summaryView === 'Company' && (
+                <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                  {companySummaries.length === 0 ? (
+                    <div className="col-span-full py-8 text-center text-slate-400 text-xs">
+                      No company commission data available.
+                    </div>
+                  ) : (
+                    companySummaries.map((c, idx) => (
+                      <div key={idx} className="border border-slate-200 rounded-2xl p-3.5 space-y-2 hover:border-indigo-300 transition-colors bg-white shadow-2xs">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="w-6 h-6 rounded-md bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-[10px] shrink-0">
+                              {c.shortCode}
+                            </div>
+                            <span className="font-bold text-slate-900 text-xs truncate">{c.name}</span>
+                          </div>
+                          <ChevronRight size={14} className="text-slate-400 shrink-0" />
+                        </div>
+                        <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-[10px]">
+                          <div>
+                            <span className="text-slate-400 block">Policies</span>
+                            <span className="font-extrabold text-slate-800 text-xs">{c.policies.toLocaleString('en-IN')}</span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-slate-400 block">Est. Commission</span>
+                            <span className="font-extrabold text-slate-900 text-xs">{fmtShort(c.amount)}</span>
+                          </div>
+                        </div>
+                        <div className="space-y-1 text-[10px] pt-1">
+                          <div className="flex justify-between text-slate-600"><span>Fresh</span><span>{c.freshCount}</span><span className="font-bold">{fmtShort(c.freshAmt)}</span></div>
+                          <div className="flex justify-between text-slate-600"><span>Port</span><span>{c.portCount}</span><span className="font-bold">{fmtShort(c.portAmt)}</span></div>
+                          <div className="flex justify-between text-slate-600"><span>Renewal</span><span>{c.renewalCount}</span><span className="font-bold">{fmtShort(c.renewalAmt)}</span></div>
+                        </div>
                       </div>
-                      <span className="font-bold text-slate-900 text-xs">HDFC Ergo</span>
-                    </div>
-                    <ChevronRight size={14} className="text-slate-400" />
-                  </div>
-                  <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-[10px]">
-                    <div>
-                      <span className="text-slate-400 block">Policies</span>
-                      <span className="font-extrabold text-slate-800 text-xs">856</span>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-slate-400 block">Est. Commission</span>
-                      <span className="font-extrabold text-slate-900 text-xs">₹ 3.62 Cr</span>
-                    </div>
-                  </div>
-                  <div className="space-y-1 text-[10px] pt-1">
-                    <div className="flex justify-between text-slate-600"><span>Fresh</span><span>352</span><span className="font-bold">₹ 1.39 Cr</span></div>
-                    <div className="flex justify-between text-slate-600"><span>Port</span><span>210</span><span className="font-bold">₹ 1.06 Cr</span></div>
-                    <div className="flex justify-between text-slate-600"><span>Renewal</span><span>294</span><span className="font-bold">₹ 1.17 Cr</span></div>
-                  </div>
+                    ))
+                  )}
                 </div>
+              )}
 
-                {/* Card 4: Niva Bupa */}
-                <div className="border border-slate-200 rounded-2xl p-3.5 space-y-2 hover:border-indigo-300 transition-colors bg-white shadow-2xs">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-md bg-cyan-100 text-cyan-600 flex items-center justify-center font-black text-[10px]">
-                        NB
+              {/* VIEW 3: BY TENURE */}
+              {summaryView === 'Tenure' && (
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                  {(() => {
+                    const tenureMap: Record<string, { count: number; comm: number }> = {};
+                    sortedFiltered.forEach((r: any) => {
+                      const tenure = r.policy?.policyTenure || '1 Year Policy';
+                      const label = tenure.toLowerCase().includes('year') ? tenure : `${tenure} Year Policy`;
+                      if (!tenureMap[label]) tenureMap[label] = { count: 0, comm: 0 };
+                      tenureMap[label].count += 1;
+                      tenureMap[label].comm += Number(r.amount || 0);
+                    });
+                    const entries = Object.entries(tenureMap);
+                    if (entries.length === 0) {
+                      return <div className="col-span-full py-8 text-center text-slate-400 text-xs">No tenure data available.</div>;
+                    }
+                    return entries.map(([tenure, data], idx) => (
+                      <div key={idx} className="border border-slate-200 rounded-2xl p-3.5 space-y-2 bg-white shadow-2xs">
+                        <span className="font-bold text-slate-800 text-xs block">{tenure}</span>
+                        <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-[10px]">
+                          <div>
+                            <span className="text-slate-400 block">Volume</span>
+                            <span className="font-extrabold text-slate-800 text-xs">{data.count} {data.count === 1 ? 'Policy' : 'Policies'}</span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-slate-400 block">Commission</span>
+                            <span className="font-extrabold text-indigo-600 text-xs">{fmtShort(data.comm)}</span>
+                          </div>
+                        </div>
                       </div>
-                      <span className="font-bold text-slate-900 text-xs">Niva Bupa Health</span>
-                    </div>
-                    <ChevronRight size={14} className="text-slate-400" />
-                  </div>
-                  <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-[10px]">
-                    <div>
-                      <span className="text-slate-400 block">Policies</span>
-                      <span className="font-extrabold text-slate-800 text-xs">732</span>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-slate-400 block">Est. Commission</span>
-                      <span className="font-extrabold text-slate-900 text-xs">₹ 3.01 Cr</span>
-                    </div>
-                  </div>
-                  <div className="space-y-1 text-[10px] pt-1">
-                    <div className="flex justify-between text-slate-600"><span>Fresh</span><span>310</span><span className="font-bold">₹ 1.24 Cr</span></div>
-                    <div className="flex justify-between text-slate-600"><span>Port</span><span>270</span><span className="font-bold">₹ 0.86 Cr</span></div>
-                    <div className="flex justify-between text-slate-600"><span>Renewal</span><span>246</span><span className="font-bold">₹ 1.08 Cr</span></div>
-                  </div>
+                    ));
+                  })()}
                 </div>
+              )}
 
-                {/* Card 5: ICICI Lombard */}
-                <div className="border border-slate-200 rounded-2xl p-3.5 space-y-2 hover:border-indigo-300 transition-colors bg-white shadow-2xs">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-md bg-amber-100 text-amber-600 flex items-center justify-center font-black text-[10px]">
-                        ICICI
+              {/* VIEW 4: BY BA */}
+              {summaryView === 'BA' && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  {(() => {
+                    const baMap: Record<string, { count: number; comm: number; code: string }> = {};
+                    sortedFiltered.forEach((r: any, idx: number) => {
+                      const name = r.policy?.baName || 'PAT Associate';
+                      const code = r.policy?.baCode || `BA-100${idx + 1}`;
+                      if (!baMap[name]) baMap[name] = { count: 0, comm: 0, code };
+                      baMap[name].count += 1;
+                      baMap[name].comm += Number(r.baCommissionAmount || (Number(r.policy?.premiumAmount || 0) * 0.01) || 0);
+                    });
+                    const entries = Object.entries(baMap);
+                    if (entries.length === 0) {
+                      return <div className="col-span-full py-8 text-center text-slate-400 text-xs">No BA commission data available.</div>;
+                    }
+                    return entries.map(([name, data], idx) => (
+                      <div key={idx} className="border border-slate-200 rounded-2xl p-3.5 space-y-2 bg-white shadow-2xs">
+                        <div className="flex justify-between items-center">
+                          <span className="font-bold text-slate-800 text-xs">{name}</span>
+                          <span className="text-[10px] text-slate-400 font-mono">{data.code}</span>
+                        </div>
+                        <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-[10px]">
+                          <div>
+                            <span className="text-slate-400 block">Policies</span>
+                            <span className="font-extrabold text-slate-800 text-xs">{data.count} {data.count === 1 ? 'Policy' : 'Policies'}</span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-slate-400 block">Commission</span>
+                            <span className="font-extrabold text-amber-600 text-xs">{fmtShort(data.comm)}</span>
+                          </div>
+                        </div>
                       </div>
-                      <span className="font-bold text-slate-900 text-xs">ICICI Lombard</span>
-                    </div>
-                    <ChevronRight size={14} className="text-slate-400" />
-                  </div>
-                  <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-[10px]">
-                    <div>
-                      <span className="text-slate-400 block">Policies</span>
-                      <span className="font-extrabold text-slate-800 text-xs">645</span>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-slate-400 block">Est. Commission</span>
-                      <span className="font-extrabold text-slate-900 text-xs">₹ 2.29 Cr</span>
-                    </div>
-                  </div>
-                  <div className="space-y-1 text-[10px] pt-1">
-                    <div className="flex justify-between text-slate-600"><span>Fresh</span><span>256</span><span className="font-bold">₹ 1.01 Cr</span></div>
-                    <div className="flex justify-between text-slate-600"><span>Port</span><span>150</span><span className="font-bold">₹ 0.62 Cr</span></div>
-                    <div className="flex justify-between text-slate-600"><span>Renewal</span><span>239</span><span className="font-bold">₹ 0.65 Cr</span></div>
-                  </div>
+                    ));
+                  })()}
                 </div>
-
-              </div>
+              )}
             </div>
           )}
 
@@ -1307,483 +1425,365 @@ export default function Commissions() {
         open={modalOpen} 
         onClose={closeModal} 
         title="Add New Commission" 
-        subtitle="Create and record comprehensive policy commission breakdown" 
+        subtitle="Record employee commission for policy or services" 
         size="2xl"
         actions={
           <button 
             type="submit" 
             form="add-commission-form" 
-            className="btn-primary px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow-sm cursor-pointer" 
-            disabled={createCommission.isPending || !selectedPolicy}
+            className="btn-primary px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed" 
+            disabled={createCommission.isPending || !selectedPolicy || !selectedEmployee}
           >
             {createCommission.isPending ? 'Publishing…' : 'Publish Commission'}
           </button>
         }
       >
-        <form id="add-commission-form" onSubmit={handleSubmit(d => createCommission.mutateAsync(d))} className="space-y-4 mt-2">
+        <form id="add-commission-form" onSubmit={handleSubmit(handleFormSubmit)} className="space-y-4 mt-2">
           <input type="hidden" {...register('beneficiaryId')} />
           <input type="hidden" {...register('commissionYearId')} />
           <input type="hidden" {...register('amount')} />
 
-          {/* ── MODAL SUB TABS NAVIGATION ───────────────────────────────────── */}
-          <div className="flex border-b border-slate-200 bg-slate-50/80 p-1 rounded-xl overflow-x-auto gap-1 shrink-0">
-            <button
-              type="button"
-              onClick={() => setModalSubTab('POLICY_INFO')}
-              className={clsx(
-                "px-3 py-1.5 rounded-lg font-bold text-xs flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer",
-                modalSubTab === 'POLICY_INFO' ? "bg-white text-indigo-700 shadow-2xs border border-slate-200/60" : "text-slate-600 hover:text-slate-900"
-              )}
-            >
-              <Shield size={14} />
-              <span>Customer & Policy Info</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setModalSubTab('CALCULATOR')}
-              className={clsx(
-                "px-3 py-1.5 rounded-lg font-bold text-xs flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer",
-                modalSubTab === 'CALCULATOR' ? "bg-white text-indigo-700 shadow-2xs border border-slate-200/60" : "text-slate-600 hover:text-slate-900"
-              )}
-            >
-              <DollarSign size={14} />
-              <span>Breakdown Calculator</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setModalSubTab('SCHEDULE_TERM')}
-              className={clsx(
-                "px-3 py-1.5 rounded-lg font-bold text-xs flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer",
-                modalSubTab === 'SCHEDULE_TERM' ? "bg-white text-indigo-700 shadow-2xs border border-slate-200/60" : "text-slate-600 hover:text-slate-900"
-              )}
-            >
-              <Calendar size={14} />
-              <span>Schedule & Term</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setModalSubTab('PORTING')}
-              className={clsx(
-                "px-3.5 py-1.5 rounded-lg font-bold text-xs flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer",
-                modalSubTab === 'PORTING' ? "bg-white text-indigo-700 shadow-2xs border border-slate-200/60" : "text-slate-600 hover:text-slate-900"
-              )}
-            >
-              <Award size={14} />
-              <span>Porting & Bonus</span>
-            </button>
-          </div>
-
-          <div className="h-[400px] overflow-y-auto pr-1">
-
-            {/* ── SUB TAB 1: CUSTOMER & POLICY SELECTION ────────────────────────── */}
-            {modalSubTab === 'POLICY_INFO' && (
-              <div className="bg-slate-50/60 border border-slate-200/80 p-4 rounded-2xl space-y-4">
-                <div className="flex items-center gap-2 text-indigo-900 font-bold text-xs uppercase tracking-wider border-b border-slate-200/60 pb-2">
-                  <Shield size={15} className="text-indigo-600" />
-                  <span>Customer & Policy Selection (Auto-Fetched Details)</span>
+          <div className="space-y-4">
+            <div className="bg-slate-50/70 border border-slate-200/80 p-4 rounded-2xl space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-200/60 pb-2.5">
+                <div className="flex items-center gap-2 text-indigo-900 font-bold text-xs uppercase tracking-wider">
+                  <DollarSign size={15} className="text-indigo-600" />
+                  <span>Employee & Policy Commission Flow</span>
                 </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* Customer Dropdown / Search */}
-                  <div>
-                    <label className="label">Customer (Search & Select) *</label>
-                    {selectedCustomer ? (
-                      <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50/50 h-9">
-                        <User size={14} className="text-indigo-600 shrink-0" />
-                        <span className="text-xs font-bold text-indigo-900 truncate flex-1">
-                          {selectedCustomer.firstName} {selectedCustomer.lastName} {selectedCustomer.phone ? `(${selectedCustomer.phone})` : ''}
-                        </span>
-                        <button 
-                          type="button" 
-                          onClick={() => { 
-                            setSelectedCustomer(null); 
-                            setCustomerSearch(''); 
-                            setSelectedPolicy(null);
-                            setValue('policyId', '');
-                            setValue('basePremium', 0);
-                            setValue('addonPremium', 0);
-                          }} 
-                          className="text-indigo-400 hover:text-indigo-700 text-xs cursor-pointer font-bold"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="relative">
-                        <User size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-                        <input 
-                          type="text" 
-                          placeholder="Search Customer name or mobile..."
-                          value={customerSearch}
-                          onChange={e => { setCustomerSearch(e.target.value); setCustomerDrop(true); }}
-                          onFocus={() => setCustomerDrop(true)}
-                          onBlur={() => setTimeout(() => setCustomerDrop(false), 200)}
-                          className="input pl-9 h-9 text-xs rounded-xl w-full bg-white border border-slate-200"
-                        />
-                        {customerDrop && (
-                          <ul className="absolute right-0 left-0 z-30 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-40 overflow-y-auto text-xs">
-                            {customerLoading ? (
-                              <li className="px-3 py-2 text-slate-400">Loading customers...</li>
-                            ) : (customerResults?.data ?? []).length === 0 ? (
-                              <li className="px-3 py-2 text-slate-400">No matching customers found</li>
-                            ) : (
-                              (customerResults?.data ?? []).map((c: any) => (
-                                <li 
-                                  key={c.id} 
-                                  onMouseDown={() => { 
-                                    setSelectedCustomer(c); 
-                                    setCustomerDrop(false); 
-                                    setCustomerSearch(''); 
-                                  }}
-                                  className="flex items-center gap-2 px-3 py-2 hover:bg-indigo-50 cursor-pointer font-medium text-slate-700"
-                                >
-                                  <User size={13} className="text-slate-400 shrink-0" />
-                                  <span>{c.firstName} {c.lastName} {c.phone ? `(${c.phone})` : ''}</span>
-                                </li>
-                              ))
-                            )}
-                          </ul>
-                        )}
-                      </div>
-                    )}
+                {years.length > 0 && (
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <span className="text-[11px] font-bold text-slate-400">Financial Year:</span>
+                    <select 
+                      {...register('commissionYearId')} 
+                      className="h-7 text-xs font-bold text-indigo-700 bg-white border border-indigo-200 rounded-lg px-2"
+                    >
+                      {years.map((y: any) => (
+                        <option key={y.id} value={y.id}>{y.name}</option>
+                      ))}
+                    </select>
                   </div>
+                )}
+              </div>
 
-                  {/* Policy Select Dropdown */}
-                  <div>
-                    <label className="label">Policy (Filtered by Customer with Year) *</label>
-                    <input type="hidden" {...register('policyId')} />
-                    {selectedPolicy ? (
-                      <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50/50 h-9">
-                        <Shield size={14} className="text-indigo-600 shrink-0" />
-                        <span className="text-xs font-bold text-indigo-900 truncate flex-1">
-                          {selectedPolicy.policyNumber} (FY {new Date(selectedPolicy.startDate).getFullYear()}-{String(new Date(selectedPolicy.endDate).getFullYear()).slice(-2)})
-                        </span>
-                        <button 
-                          type="button" 
-                          onClick={() => { 
-                            setSelectedPolicy(null); 
-                            setValue('policyId', '');
-                            setValue('basePremium', 0);
-                            setValue('addonPremium', 0);
-                          }} 
-                          className="text-indigo-400 hover:text-indigo-700 text-xs cursor-pointer font-bold"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="relative">
-                        <Shield size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-                        <input 
-                          value={policySearch} 
-                          onChange={e => { setPolicySearch(e.target.value); setPolicyDrop(true); }}
-                          onFocus={() => setPolicyDrop(true)} 
-                          onBlur={() => setTimeout(() => setPolicyDrop(false), 200)}
-                          disabled={!selectedCustomer}
-                          placeholder={selectedCustomer ? "Select Policy No..." : "Please select a Customer first"} 
-                          className="input pl-9 pr-7 h-9 text-xs w-full bg-white rounded-xl border border-slate-200 disabled:bg-slate-50 disabled:text-slate-400" 
-                        />
-                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">▼</span>
-                        {policyDrop && selectedCustomer && (
-                          <ul className="absolute z-30 mt-1 w-full bg-white border border-slate-200 rounded-xl shadow-lg max-h-40 overflow-y-auto text-xs">
-                            {policyLoading ? (
-                              <li className="px-3 py-2 text-slate-400">Loading policies...</li>
-                            ) : (policyResults?.data ?? []).length === 0 ? (
-                              <li className="px-3 py-2 text-slate-400">No matching policies found</li>
-                            ) : (
-                              (policyResults?.data ?? []).map((p: any) => {
-                                const startYear = new Date(p.startDate).getFullYear();
-                                const endYear = String(new Date(p.endDate).getFullYear()).slice(-2);
-                                return (
-                                  <li 
-                                    key={p.id} 
-                                    onMouseDown={() => { 
-                                      setSelectedPolicy(p); 
-                                      setValue('policyId', p.id, { shouldValidate: true }); 
-                                      setValue('basePremium', p.premiumAmount || 0);
-                                      setValue('baseCommissionRate', 15);
-                                      setPolicyDrop(false); 
-                                      setPolicySearch(''); 
-                                    }}
-                                    className="flex items-center gap-2 px-3 py-2 hover:bg-indigo-50 cursor-pointer font-medium text-slate-700"
-                                  >
-                                    <FileText size={13} className="text-slate-400" />
-                                    <span>{p.policyNumber} (FY {startYear}-{endYear})</span>
-                                  </li>
-                                );
-                              })
-                            )}
-                          </ul>
-                        )}
-                      </div>
-                    )}
-                    {errors.policyId && <p className="text-xs text-rose-500 mt-1">{errors.policyId.message}</p>}
-                  </div>
-                </div>
-
-                {selectedPolicy && (
-                  <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {/* 1. SELECT EMPLOYEE */}
                     <div>
-                      <label className="label">Insurance Company Category</label>
-                      <select 
-                        disabled
-                        value={
-                          selectedPolicy.plan?.category === 'HEALTH' ? 'Health Insurance' :
-                          selectedPolicy.plan?.category === 'LIFE' ? 'Life Insurance' : 'Other / General'
-                        }
-                        className="input h-9 text-xs rounded-xl w-full bg-slate-50 border border-slate-200 font-medium text-slate-500 cursor-not-allowed"
-                      >
-                        <option value="Health Insurance">Health Insurance</option>
-                        <option value="Life Insurance">Life Insurance</option>
-                        <option value="Other / General">Other / General</option>
-                      </select>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-slate-700 flex items-center gap-1">
+                          <Users size={13} className="text-indigo-600" />
+                          <span>Select Employee *</span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setAddEmployeeModalOpen(true)}
+                          className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 hover:underline cursor-pointer"
+                        >
+                          <UserPlus size={12} />
+                          <span>+ Add Employee</span>
+                        </button>
+                      </div>
+
+                      <input type="hidden" {...register('beneficiaryId')} />
+
+                      {selectedEmployee ? (
+                        <div className="flex items-center justify-between px-3 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50/60 h-9">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[10px] font-bold shrink-0">
+                              {(selectedEmployee.firstName?.[0] || 'E').toUpperCase()}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-xs font-bold text-indigo-950 truncate">
+                                {selectedEmployee.firstName} {selectedEmployee.lastName}
+                                {selectedEmployee.designation ? ` (${selectedEmployee.designation})` : ''}
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleClearEmployee}
+                            className="text-indigo-400 hover:text-rose-600 p-0.5 rounded cursor-pointer"
+                            title="Change employee"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="relative">
+                          <User size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                          <input
+                            type="text"
+                            placeholder="Search employee by name, designation..."
+                            value={employeeSearch}
+                            onChange={(e) => { setEmployeeSearch(e.target.value); setEmployeeDrop(true); }}
+                            onFocus={() => setEmployeeDrop(true)}
+                            onBlur={() => setTimeout(() => setEmployeeDrop(false), 250)}
+                            className="input pl-9 pr-7 h-9 text-xs rounded-xl w-full bg-white border border-slate-200"
+                          />
+                          <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+
+                          {employeeDrop && (
+                            <ul className="absolute left-0 right-0 z-40 mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-48 overflow-y-auto text-xs py-1">
+                              {employeesLoading ? (
+                                <li className="px-3 py-2 text-slate-400">Loading employees...</li>
+                              ) : filteredEmployees.length === 0 ? (
+                                <li className="px-3 py-2 text-slate-400 flex flex-col items-center gap-1">
+                                  <span>No matching employees found</span>
+                                  <button
+                                    type="button"
+                                    onMouseDown={() => { setEmployeeDrop(false); setAddEmployeeModalOpen(true); }}
+                                    className="text-xs text-indigo-600 font-bold hover:underline cursor-pointer"
+                                  >
+                                    + Add New Employee
+                                  </button>
+                                </li>
+                              ) : (
+                                filteredEmployees.map((emp: any) => {
+                                  const empName = `${emp.firstName || ''} ${emp.lastName || ''}`.trim() || emp.user?.email || 'Unnamed Employee';
+                                  const designation = emp.designation || emp.user?.role || 'Staff';
+                                  return (
+                                    <li
+                                      key={emp.id}
+                                      onMouseDown={() => handleSelectEmployee(emp)}
+                                      className="flex items-center justify-between px-3 py-2 hover:bg-indigo-50 cursor-pointer border-b border-slate-50 last:border-0"
+                                    >
+                                      <div className="flex items-center gap-2">
+                                        <div className="w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-[10px] font-bold shrink-0">
+                                          {empName[0]?.toUpperCase() || 'E'}
+                                        </div>
+                                        <div>
+                                          <p className="font-bold text-slate-800">{empName}</p>
+                                          <p className="text-[10px] text-slate-400">{emp.phone || emp.user?.email || ''}</p>
+                                        </div>
+                                      </div>
+                                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">
+                                        {designation}
+                                      </span>
+                                    </li>
+                                  );
+                                })
+                              )}
+                            </ul>
+                          )}
+                        </div>
+                      )}
+                      {errors.beneficiaryId && <p className="text-xs text-rose-500 mt-1">{errors.beneficiaryId.message}</p>}
                     </div>
 
-                    {/* Auto-Fetched Policy Specs (Readonly grid) */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 p-3 bg-white border border-slate-200/70 rounded-xl text-xs">
+                    {/* 2. SELECT DATE (DEFAULTED TO TODAY) */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-slate-700 flex items-center gap-1">
+                          <Calendar size={13} className="text-indigo-600" />
+                          <span>Commission Date *</span>
+                        </label>
+                        <span className="text-[10px] text-indigo-600 font-medium bg-indigo-50 px-2 py-0.5 rounded">Defaulted to Today</span>
+                      </div>
+                      <div className="relative">
+                        <Calendar size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                        <input
+                          type="date"
+                          value={commissionDate}
+                          onChange={(e) => setCommissionDate(e.target.value)}
+                          className="input pl-9 h-9 text-xs rounded-xl w-full bg-white border border-slate-200 font-semibold text-slate-800"
+                          required
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                    {/* 3. POLICY / SERVICES SELECT OR SEARCH */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-slate-700 flex items-center gap-1">
+                          <Shield size={13} className="text-indigo-600" />
+                          <span>Policy or Service (Search & Select) *</span>
+                        </label>
+                        {selectedPolicy?.plan?.category && (
+                          <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded">
+                            {selectedPolicy.plan.category}
+                          </span>
+                        )}
+                      </div>
+
+                      <input type="hidden" {...register('policyId')} />
+
+                      {selectedPolicy ? (
+                        <div className="flex items-center justify-between px-3 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50/60 h-9">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Shield size={14} className="text-indigo-600 shrink-0" />
+                            <div className="min-w-0">
+                              <p className="text-xs font-bold text-indigo-950 truncate">
+                                {selectedPolicy.plan?.name || 'Policy'}
+                                {selectedPolicy.plan?.company?.name ? ` (${selectedPolicy.plan.company.name})` : ''}
+                                {selectedPolicy.policyNumber ? ` • ${selectedPolicy.policyNumber}` : ''}
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleClearPolicy}
+                            className="text-indigo-400 hover:text-rose-600 p-0.5 rounded cursor-pointer"
+                            title="Change policy"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="relative">
+                          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                          <input
+                            type="text"
+                            placeholder="Search policy number, company, plan name..."
+                            value={policySearch}
+                            onChange={(e) => { setPolicySearch(e.target.value); setPolicyDrop(true); }}
+                            onFocus={() => setPolicyDrop(true)}
+                            onBlur={() => setTimeout(() => setPolicyDrop(false), 250)}
+                            className="input pl-9 pr-7 h-9 text-xs rounded-xl w-full bg-white border border-slate-200"
+                          />
+                          <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+
+                          {policyDrop && (
+                            <ul className="absolute left-0 right-0 z-40 mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-56 overflow-y-auto text-xs py-1">
+                              {policyLoading ? (
+                                <li className="px-3 py-2 text-slate-400">Loading all policies...</li>
+                              ) : policyList.length === 0 ? (
+                                <li className="px-3 py-2 text-slate-400">No matching policies found</li>
+                              ) : (
+                                policyList.map((p: any) => {
+                                  const compName = p.plan?.company?.name || '';
+                                  const planName = p.plan?.name || '';
+                                  const custName = p.contact 
+                                    ? `${p.contact.firstName || ''} ${p.contact.lastName || ''}`.trim()
+                                    : (((p as any).customer?.firstName) ? `${(p as any).customer.firstName} ${(p as any).customer.lastName || ''}`.trim() : '');
+                                  return (
+                                    <li
+                                      key={p.id}
+                                      onMouseDown={() => handleSelectPolicy(p)}
+                                      className="flex items-center justify-between px-3 py-2 hover:bg-indigo-50 cursor-pointer border-b border-slate-50 last:border-0"
+                                    >
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <Shield size={14} className="text-indigo-600 shrink-0" />
+                                        <div className="min-w-0">
+                                          <p className="font-bold text-slate-900 truncate text-xs">
+                                            {planName ? `${planName}` : 'Policy'} {compName ? `(${compName})` : ''}
+                                          </p>
+                                          <p className="text-[10px] text-slate-500 truncate">
+                                            Policy No: <span className="font-semibold text-indigo-700">{p.policyNumber}</span>
+                                            {custName ? ` • ${custName}` : ''}
+                                          </p>
+                                        </div>
+                                      </div>
+                                      <div className="text-right shrink-0 ml-2">
+                                        <span className="font-bold text-emerald-600 block text-xs">
+                                          ₹{Number(p.premiumAmount || 0).toLocaleString('en-IN')}
+                                        </span>
+                                      </div>
+                                    </li>
+                                  );
+                                })
+                              )}
+                            </ul>
+                          )}
+                        </div>
+                      )}
+                      {errors.policyId && <p className="text-xs text-rose-500 mt-1">{errors.policyId.message}</p>}
+                    </div>
+
+                    {/* 4. SET COMMISSION AMOUNT & RATE */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-slate-700 flex items-center gap-1">
+                          <DollarSign size={13} className="text-emerald-600" />
+                          <span>Commission Amount (₹) *</span>
+                        </label>
+                        {selectedPolicy && (
+                          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
+                            Prem: ₹{Number(selectedPolicy.premiumAmount || 0).toLocaleString('en-IN')}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs pointer-events-none">₹</span>
+                          <input
+                            type="number"
+                            step="0.01"
+                            placeholder="Amount (e.g. 5000)"
+                            {...register('amount')}
+                            onChange={handleAmountChange}
+                            className="input pl-7 h-9 text-xs rounded-xl w-full bg-white border border-slate-200 font-bold text-emerald-600"
+                          />
+                        </div>
+                        <div className="relative">
+                          <input
+                            type="number"
+                            step="0.01"
+                            placeholder="Rate %"
+                            {...register('rate')}
+                            onChange={handleRateChange}
+                            className="input pr-7 h-9 text-xs rounded-xl w-full bg-white border border-slate-200 font-bold text-slate-700"
+                          />
+                          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs pointer-events-none">%</span>
+                        </div>
+                      </div>
+                      {errors.amount && <p className="text-xs text-rose-500 mt-1">{errors.amount.message}</p>}
+                    </div>
+                  </div>
+
+                  {/* Auto-Fetched Policy Specs (When policy is selected) */}
+                  {selectedPolicy && (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 p-3 bg-white border border-slate-200/80 rounded-xl text-xs mt-1">
                       <div>
-                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Insurance Company</span>
-                        <span className="font-bold text-slate-800">{selectedPolicy.plan?.company?.name || 'N/A'}</span>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Policy / Plan</span>
+                        <span className="font-bold text-indigo-700 truncate block">
+                          {selectedPolicy.plan?.name || selectedPolicy.policyNumber || 'N/A'}
+                        </span>
                       </div>
                       <div>
-                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Product Name</span>
-                        <span className="font-bold text-slate-800">{selectedPolicy.plan?.name || 'N/A'}</span>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Company</span>
+                        <span className="font-bold text-slate-800 truncate block">{selectedPolicy.plan?.company?.name || 'N/A'}</span>
                       </div>
                       <div>
-                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Customer Category</span>
-                        <span className="font-bold text-indigo-600">{selectedPolicy.customerCategory || 'Renewal'}</span>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Policy No.</span>
+                        <span className="font-bold text-slate-800 truncate block">{selectedPolicy.policyNumber || 'N/A'}</span>
                       </div>
                       <div>
-                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Policy Type</span>
-                        <span className="font-bold text-slate-800">
-                          {selectedPolicy.plan?.category === 'HEALTH' ? 'Retail Floater' : 'Retail Individual'}
+                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Proposer / Client</span>
+                        <span className="font-semibold text-slate-700 truncate block">
+                          {selectedPolicy.contact ? [selectedPolicy.contact.firstName, selectedPolicy.contact.lastName].filter(Boolean).join(" ") : (((selectedPolicy as any)?.customer) ? [(selectedPolicy as any).customer.firstName, (selectedPolicy as any).customer.lastName].filter(Boolean).join(" ") : '—')}
                         </span>
                       </div>
                       <div>
                         <span className="text-[10px] font-bold text-slate-400 uppercase block">Sum Insured</span>
-                        <span className="font-bold text-slate-900">₹ {Number(selectedPolicy.sumAssured || 0).toLocaleString('en-IN')}</span>
+                        <span className="font-bold text-slate-900 block">₹{Number(selectedPolicy.sumAssured || 0).toLocaleString('en-IN')}</span>
                       </div>
                       <div>
-                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Deductible</span>
-                        <span className="font-bold text-slate-800">{selectedPolicy.deductible || '₹ 0'}</span>
-                      </div>
-                      <div>
-                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Riders / Addons</span>
-                        <span className="font-bold text-slate-800">
-                          {selectedPolicy.riders && selectedPolicy.riders.length > 0 ? selectedPolicy.riders.join(', ') : 'None'}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Premium Amount</span>
-                        <span className="font-extrabold text-emerald-600">₹ {Number(selectedPolicy.premiumAmount || 0).toLocaleString('en-IN')}</span>
-                      </div>
-                      <div>
-                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Policy Tenure</span>
-                        <span className="font-bold text-slate-800">1 Year</span>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Policy Premium</span>
+                        <span className="font-extrabold text-emerald-600 block">₹{Number(selectedPolicy.premiumAmount || 0).toLocaleString('en-IN')}</span>
                       </div>
                       <div>
                         <span className="text-[10px] font-bold text-slate-400 uppercase block">Start Date</span>
-                        <span className="font-bold text-slate-800">
+                        <span className="font-bold text-slate-700 block">
                           {selectedPolicy.startDate ? new Date(selectedPolicy.startDate).toLocaleDateString('en-GB') : 'N/A'}
                         </span>
                       </div>
-                      <div>
-                        <span className="text-[10px] font-bold text-slate-400 uppercase block">End Date</span>
-                        <span className="font-bold text-slate-800">
-                          {selectedPolicy.endDate ? new Date(selectedPolicy.endDate).toLocaleDateString('en-GB') : 'N/A'}
-                        </span>
-                      </div>
-                      <div className="col-span-2">
-                        <span className="text-[10px] font-bold text-slate-400 uppercase block">Agent Name</span>
-                        <span className="font-bold text-slate-800">
-                          {selectedPolicy.assignedEmployee 
-                            ? `${selectedPolicy.assignedEmployee.employeeProfile?.firstName ?? ''} ${selectedPolicy.assignedEmployee.employeeProfile?.lastName ?? ''}` 
-                            : 'N/A'}
-                        </span>
-                      </div>
                     </div>
-                  </>
-                )}
-              </div>
-            )}
+                  )}
 
-
-            {/* ── SUB TAB 2: COMMISSION BREAKDOWN CALCULATOR ────────────────────── */}
-            {modalSubTab === 'CALCULATOR' && (
-              <div className="bg-slate-50/60 border border-slate-200/80 p-4 rounded-2xl space-y-4">
-                <div className="flex items-center gap-2 text-indigo-900 font-bold text-xs uppercase tracking-wider border-b border-slate-200/60 pb-2">
-                  <DollarSign size={15} className="text-indigo-600" />
-                  <span>Detailed Premium & Commission Breakdown Calculator</span>
-                </div>
-
-                <div className="space-y-3">
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-[11px] font-bold text-slate-500 uppercase px-1">
-                    <span>Commission Type</span>
-                    <span>Premium / Amount (₹)</span>
-                    <span>Commission Rate (%)</span>
-                    <span className="text-right">Calculated Commission (₹)</span>
-                  </div>
-
-                  {/* Base Premium (A & P) */}
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-center bg-white p-2.5 rounded-xl border border-slate-200/70">
-                    <span className="text-xs font-bold text-slate-800">Base Premium (A)</span>
-                    <input {...register('basePremium')} type="number" step="0.01" placeholder="40000" className="input h-9 text-xs rounded-lg bg-slate-50" />
-                    <input {...register('baseCommissionRate')} type="number" step="0.01" placeholder="15" className="input h-9 text-xs rounded-lg bg-slate-50" />
-                    <div className="h-9 px-3 flex items-center justify-end bg-emerald-50 text-emerald-700 font-bold text-xs rounded-lg border border-emerald-200">
-                      {fmt(baseComm)}
-                    </div>
-                  </div>
-
-                  {/* Addon Premiums (B & Q) */}
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-center bg-white p-2.5 rounded-xl border border-slate-200/70">
-                    <div>
-                      <span className="text-xs font-bold text-slate-800 block">Addon Premium (B1)</span>
-                      <span className="text-[10px] text-slate-400">Hospital Cash Rider</span>
-                    </div>
-                    <input {...register('addonPremium')} type="number" step="0.01" placeholder="7050" className="input h-9 text-xs rounded-lg bg-slate-50" />
-                    <input {...register('addonCommissionRate')} type="number" step="0.01" placeholder="10" className="input h-9 text-xs rounded-lg bg-slate-50" />
-                    <div className="h-9 px-3 flex items-center justify-end bg-emerald-50 text-emerald-700 font-bold text-xs rounded-lg border border-emerald-200">
-                      {fmt(addonComm)}
-                    </div>
-                  </div>
-
-                  {/* Deductible Premium (C & R) */}
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-center bg-white p-2.5 rounded-xl border border-slate-200/70">
-                    <span className="text-xs font-bold text-rose-600">Deductible Premium (C) (-)</span>
-                    <div className="text-xs font-semibold text-slate-500">Total Prem: {fmt(totalPremium)}</div>
-                    <input {...register('deductibleRate')} type="number" step="0.01" placeholder="2" className="input h-9 text-xs rounded-lg bg-rose-50/50 border-rose-200" />
-                    <div className="h-9 px-3 flex items-center justify-end bg-rose-50 text-rose-700 font-bold text-xs rounded-lg border border-rose-200">
-                      -{fmt(deducComm)}
-                    </div>
-                  </div>
-
-                  {/* Monthly Volume Grid (D & S) */}
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-center bg-white p-2.5 rounded-xl border border-slate-200/70">
-                    <span className="text-xs font-bold text-indigo-700">Monthly Volume Grid (D)</span>
-                    <div className="text-xs font-semibold text-slate-500">Eligible Prem: {fmt(totalPremium)}</div>
-                    <input {...register('monthlyGridRate')} type="number" step="0.01" placeholder="3" className="input h-9 text-xs rounded-lg bg-slate-50" />
-                    <div className="h-9 px-3 flex items-center justify-end bg-emerald-50 text-emerald-700 font-bold text-xs rounded-lg border border-emerald-200">
-                      {fmt(gridComm)}
-                    </div>
-                  </div>
-
-                  {/* Renewal Premium (F & U) */}
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-center bg-white p-2.5 rounded-xl border border-slate-200/70">
-                    <span className="text-xs font-bold text-slate-800">Renewal Premium (F)</span>
-                    <div className="text-xs font-semibold text-slate-500">Renewal Prem: {fmt(totalPremium)}</div>
-                    <input {...register('renewalRate')} type="number" step="0.01" placeholder="5" className="input h-9 text-xs rounded-lg bg-slate-50" />
-                    <div className="h-9 px-3 flex items-center justify-end bg-emerald-50 text-emerald-700 font-bold text-xs rounded-lg border border-emerald-200">
-                      {fmt(renewalComm)}
-                    </div>
-                  </div>
-
-                  {/* Totals Summary Ribbon */}
-                  <div className="flex flex-wrap items-center justify-between p-3.5 bg-indigo-900 text-white rounded-xl">
-                    <div>
-                      <span className="text-[10px] uppercase font-bold text-indigo-300 block">Total Calculated Premium</span>
-                      <span className="text-base font-black">{fmt(totalPremium)}</span>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-[10px] uppercase font-bold text-indigo-300 block">Total Net Commission</span>
-                      <span className="text-xl font-black text-emerald-400">{fmt(totalComm)}</span>
-                    </div>
+                  {/* Internal Notes */}
+                  <div className="pt-1">
+                    <label className="text-xs font-semibold text-slate-600 block mb-1">Commission Notes (Optional)</label>
+                    <input
+                      type="text"
+                      {...register('notes')}
+                      placeholder="Add any remarks or payout instructions..."
+                      className="input h-9 text-xs rounded-xl w-full bg-white border border-slate-200"
+                    />
                   </div>
                 </div>
               </div>
-            )}
-
-            {/* ── SUB TAB 3: YEARLY BREAKDOWN & TERM INSURANCE ──────────────────── */}
-            {modalSubTab === 'SCHEDULE_TERM' && (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                {/* 5 Year Breakdown */}
-                <div className="bg-slate-50/60 border border-slate-200/80 p-4 rounded-2xl space-y-3">
-                  <div className="flex justify-between items-center border-b border-slate-200/60 pb-2">
-                    <span className="font-bold text-slate-800 text-xs uppercase tracking-wider">5-Year Commission Schedule</span>
-                    <button type="button" className="text-[11px] text-indigo-600 font-bold hover:underline" onClick={() => {
-                      setValue('year1Commission', yearlyShare); setValue('year2Commission', yearlyShare);
-                      setValue('year3Commission', yearlyShare); setValue('year4Commission', yearlyShare);
-                      setValue('year5Commission', yearlyShare);
-                    }}>Auto-Split Equally</button>
-                  </div>
-
-                  <div className="grid grid-cols-5 gap-2">
-                    {[1, 2, 3, 4, 5].map(yr => (
-                      <div key={yr} className="flex flex-col gap-1">
-                        <span className="text-[10px] text-slate-500 font-bold text-center">Year {yr}</span>
-                        <input 
-                          {...register(`year${yr}Commission` as keyof Form)} 
-                          type="number" 
-                          step="0.01" 
-                          placeholder={Math.round(yearlyShare).toString()}
-                          className="input h-9 text-xs rounded-lg text-center font-bold text-emerald-700 bg-white border-slate-200" 
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Term Insurance Specifics */}
-                <div className="bg-slate-50/60 border border-slate-200/80 p-4 rounded-2xl space-y-3">
-                  <span className="font-bold text-slate-800 text-xs uppercase tracking-wider block border-b border-slate-200/60 pb-2">Term Insurance Details</span>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="label">Payment Tenure</label>
-                      <select className="input h-9 text-xs rounded-xl bg-white border-slate-200">
-                        <option>Regular Pay (Policy Term)</option>
-                        <option>Limited Pay (5 Years)</option>
-                        <option>Limited Pay (10 Years)</option>
-                        <option>Single Pay</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="label">2nd Yr Onwards Renewal %</label>
-                      <input type="number" step="0.01" placeholder="2.5%" className="input h-9 text-xs rounded-xl bg-white border-slate-200" />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* ── SUB TAB 4: PORTING & EXTRA SCHEMES ───────────────────────────── */}
-            {modalSubTab === 'PORTING' && (
-              <div className="bg-slate-50/60 border border-slate-200/80 p-4 rounded-2xl space-y-4">
-                <span className="font-bold text-slate-800 text-xs uppercase tracking-wider block border-b border-slate-200/60 pb-2">Porting History & Special Scheme Bonus</span>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                  <div>
-                    <label className="label">If Port (Porting Count)</label>
-                    <select className="input h-9 text-xs rounded-xl bg-white border-slate-200">
-                      <option>N/A (Fresh)</option>
-                      <option>R1 (1st Port)</option>
-                      <option>R2 (2nd Port)</option>
-                      <option>R3 (3rd Port)</option>
-                      <option>R4+ (4th+ Port)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="label">Previous Insurer Name</label>
-                    <input type="text" placeholder="e.g. Care Health Insurance" className="input h-9 text-xs rounded-xl bg-white border-slate-200" />
-                  </div>
-                  <div>
-                    <label className="label">Porting Base Bonus (₹)</label>
-                    <input type="number" placeholder="0" className="input h-9 text-xs rounded-xl bg-white border-slate-200 font-bold text-emerald-600" />
-                  </div>
-                  <div>
-                    <label className="label">Other Scheme Bonus (₹)</label>
-                    <input type="number" placeholder="0" className="input h-9 text-xs rounded-xl bg-white border-slate-200 font-bold text-emerald-600" />
-                  </div>
-                </div>
-
-                <div className="pt-2">
-                  <label className="label">Comments / Internal Notes</label>
-                  <textarea {...register('notes')} className="input text-xs rounded-xl py-2 px-3 bg-white border border-slate-200" rows={2} placeholder="Add any special notes regarding this commission entry..." />
-                </div>
-              </div>
-            )}
-
-          </div>
 
           {createCommission.isError && (
             <p className="text-xs text-rose-600 font-bold">{(createCommission.error as any)?.response?.data?.message ?? 'Failed to save commission entry'}</p>
@@ -1796,6 +1796,118 @@ export default function Commissions() {
             </label>
           </div>
         </form>
+      </Modal>
+
+      {/* ── Quick Add Employee Modal ─────────────────────────────────────────── */}
+      <Modal
+        open={addEmployeeModalOpen}
+        onClose={() => setAddEmployeeModalOpen(false)}
+        title="Quick Add Employee"
+        subtitle="Create a new employee profile to assign commission"
+        size="md"
+        actions={
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setAddEmployeeModalOpen(false)}
+              className="px-3 py-1.5 rounded-xl border border-slate-200 text-slate-600 font-bold text-xs hover:bg-slate-50 cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={createEmployeeMutation.isPending || !newEmpForm.firstName || !newEmpForm.email || !newEmpForm.phone}
+              onClick={() => {
+                if (!newEmpForm.firstName || !newEmpForm.email || !newEmpForm.phone) {
+                  toast.error('First name, email, and phone number are required');
+                  return;
+                }
+                createEmployeeMutation.mutate({
+                  firstName: newEmpForm.firstName,
+                  lastName: newEmpForm.lastName || '',
+                  email: newEmpForm.email,
+                  phone: newEmpForm.phone,
+                  designation: newEmpForm.designation,
+                  password: newEmpForm.password,
+                });
+              }}
+              className="px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {createEmployeeMutation.isPending ? 'Saving...' : 'Save & Select'}
+            </button>
+          </div>
+        }
+      >
+        <div className="space-y-3 py-1 text-xs">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">First Name *</label>
+              <input
+                type="text"
+                value={newEmpForm.firstName}
+                onChange={(e) => setNewEmpForm({ ...newEmpForm, firstName: e.target.value })}
+                placeholder="e.g. Rahul"
+                className="input h-9 text-xs rounded-xl w-full bg-white border border-slate-200"
+                required
+              />
+            </div>
+            <div>
+              <label className="label">Last Name</label>
+              <input
+                type="text"
+                value={newEmpForm.lastName}
+                onChange={(e) => setNewEmpForm({ ...newEmpForm, lastName: e.target.value })}
+                placeholder="e.g. Sharma"
+                className="input h-9 text-xs rounded-xl w-full bg-white border border-slate-200"
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Email Address *</label>
+              <input
+                type="email"
+                value={newEmpForm.email}
+                onChange={(e) => setNewEmpForm({ ...newEmpForm, email: e.target.value })}
+                placeholder="e.g. rahul@example.com"
+                className="input h-9 text-xs rounded-xl w-full bg-white border border-slate-200"
+                required
+              />
+            </div>
+            <div>
+              <label className="label">Phone Number *</label>
+              <input
+                type="tel"
+                value={newEmpForm.phone}
+                onChange={(e) => setNewEmpForm({ ...newEmpForm, phone: e.target.value })}
+                placeholder="e.g. 9876543210"
+                className="input h-9 text-xs rounded-xl w-full bg-white border border-slate-200"
+                required
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Designation</label>
+              <input
+                type="text"
+                value={newEmpForm.designation}
+                onChange={(e) => setNewEmpForm({ ...newEmpForm, designation: e.target.value })}
+                placeholder="e.g. Insurance Advisor"
+                className="input h-9 text-xs rounded-xl w-full bg-white border border-slate-200"
+              />
+            </div>
+            <div>
+              <label className="label">Initial Password</label>
+              <input
+                type="password"
+                value={newEmpForm.password}
+                onChange={(e) => setNewEmpForm({ ...newEmpForm, password: e.target.value })}
+                className="input h-9 text-xs rounded-xl w-full bg-white border border-slate-200"
+              />
+            </div>
+          </div>
+        </div>
       </Modal>
 
       {/* ── Mark as Paid confirm ─────────────────────────────────────────────── */}

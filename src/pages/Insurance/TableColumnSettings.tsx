@@ -7,12 +7,25 @@ import { TABLE_COLUMNS_CONFIG } from '../../constants/tableColumns';
 import { tableVisibilityManager } from '../../utils/TableVisibilityManager';
 
 interface TableColumnSettingsProps {
-  onBack: () => void;
+  onBack?: () => void;
+  defaultPageId?: string;
+  hideHeader?: boolean;
 }
 
-export default function TableColumnSettings({ onBack }: TableColumnSettingsProps) {
+export default function TableColumnSettings({ onBack, defaultPageId, hideHeader = false }: TableColumnSettingsProps) {
   const qc = useQueryClient();
-  const [selectedPageId, setSelectedPageId] = useState<string>(TABLE_COLUMNS_CONFIG[0].pageId);
+  const [selectedPageId, setSelectedPageId] = useState<string>(() => {
+    if (defaultPageId && TABLE_COLUMNS_CONFIG.some(p => p.pageId === defaultPageId)) {
+      return defaultPageId;
+    }
+    return TABLE_COLUMNS_CONFIG[0].pageId;
+  });
+
+  useEffect(() => {
+    if (defaultPageId && TABLE_COLUMNS_CONFIG.some(p => p.pageId === defaultPageId)) {
+      setSelectedPageId(defaultPageId);
+    }
+  }, [defaultPageId]);
   const [tableSearch, setTableSearch] = useState<string>('');
   const [columnSearch, setColumnSearch] = useState<string>('');
 
@@ -280,17 +293,21 @@ export default function TableColumnSettings({ onBack }: TableColumnSettingsProps
   return (
     <div className="p-6 space-y-6">
       {/* Breadcrumb Header */}
-      <div className="flex flex-col gap-1">
-        <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
-          <button onClick={onBack} className="hover:text-primary-600 transition-colors flex items-center gap-1 cursor-pointer">
-            <ArrowLeft size={13} /> Master Settings & Backups
-          </button>
-          <span>&gt;</span>
-          <span className="text-slate-800">Table Column Visibility</span>
+      {!hideHeader && (
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
+            {onBack ? (
+              <button onClick={onBack} className="hover:text-primary-600 transition-colors flex items-center gap-1 cursor-pointer">
+                <ArrowLeft size={13} /> Master Settings & Backups
+              </button>
+            ) : null}
+            {onBack && <span>&gt;</span>}
+            <span className="text-slate-800">Table Column Visibility</span>
+          </div>
+          <h2 className="text-xl font-black text-slate-900 tracking-tight mt-2">Column Visibility Configuration</h2>
+          <p className="text-xs text-slate-500 font-semibold leading-tight mt-0.5">Control which table columns to show or hide globally across different modules, or add new custom fields.</p>
         </div>
-        <h2 className="text-xl font-black text-slate-900 tracking-tight mt-2">Column Visibility Configuration</h2>
-        <p className="text-xs text-slate-500 font-semibold leading-tight mt-0.5">Control which table columns to show or hide globally across different modules, or add new custom fields.</p>
-      </div>
+      )}
 
       <div className="flex flex-col md:flex-row gap-6">
         {/* Sidebar Navigation for Tables */}

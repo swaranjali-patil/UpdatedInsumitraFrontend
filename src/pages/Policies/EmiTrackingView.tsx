@@ -461,13 +461,15 @@ export default function EmiTrackingView({ selectedMonth }: { selectedMonth: stri
         // netInstallmentBalance = totalPremium - downpayment
         const netInstallmentBalance = Math.max(0, totalPremiumAmount - downpaymentAmount);
 
-        const freq = String((extra as any).paymentFrequency || p.paymentFrequency || 'YEARLY').toUpperCase().replace(/[-_\s]/g, '');
+        let expectedCount = extra.noOfInstallments || 0;
+        const isEmi = Boolean(extra.emiCase || (p as any).emiCase || (p as any).installmentCase || expectedCount > 1);
+        const rawInstFreq = String((extra as any).installmentFrequency || (extra as any).emiFrequency || '').toUpperCase().replace(/[-_\s]/g, '');
+        const freq = rawInstFreq || (isEmi ? 'MONTHLY' : String((extra as any).paymentFrequency || p.paymentFrequency || 'YEARLY').toUpperCase().replace(/[-_\s]/g, ''));
 
         const rawStart = parseDateSafe(p.startDate) || parseDateSafe(extra.firstPremiumDate) || parseDateSafe(extra.firstInstallmentDate) || parseDateSafe(extra.paymentDate) || new Date();
         const rawEnd = parseDateSafe(p.endDate) || parseDateSafe(p.maturityDate) || parseDateSafe(extra.lastInstallmentDate) || new Date(rawStart.getTime() + 365 * 24 * 3600 * 1000);
         const tenureYears = Math.max(1, Math.round((rawEnd.getTime() - rawStart.getTime()) / (365.25 * 24 * 3600 * 1000)));
 
-        let expectedCount = extra.noOfInstallments || 0;
         if (!expectedCount) {
           if (extra.installmentAmount && extra.installmentAmount > 0 && netInstallmentBalance > 0) {
             expectedCount = Math.round(netInstallmentBalance / extra.installmentAmount);
@@ -511,7 +513,14 @@ export default function EmiTrackingView({ selectedMonth }: { selectedMonth: stri
             const d = parseDateSafe(pmt.dueDate);
             if (!d) return false;
             return true;
-          });
+          }) &&
+          (expectedCount <= 1 || (() => {
+            const d0 = parseDateSafe(dbPayments[0]?.dueDate);
+            const d1 = parseDateSafe(dbPayments[1]?.dueDate);
+            if (!d0 || !d1) return true;
+            const diffDays = Math.abs((d1.getTime() - d0.getTime()) / (1000 * 3600 * 24));
+            return diffDays < 180; // Valid installment schedule shouldn't be 1-year apart
+          })());
 
         let payments: any[] = [];
         if (isDbPaymentsValid) {
@@ -542,7 +551,7 @@ export default function EmiTrackingView({ selectedMonth }: { selectedMonth: stri
           for (let i = 0; i < expectedCount; i++) {
             let curDate = new Date(firstDate);
             if (i > 0) {
-              if (freq === 'MONTHLY' || (extra.emiCase && expectedCount > 1 && freq !== 'QUARTERLY' && freq !== 'HALFYEARLY' && freq !== 'YEARLY')) {
+              if (freq === 'MONTHLY' || (!['QUARTERLY', 'HALFYEARLY', 'SEMIANNUAL', 'YEARLY'].includes(freq))) {
                 curDate.setMonth(curDate.getMonth() + i);
               } else if (freq === 'QUARTERLY') {
                 curDate.setMonth(curDate.getMonth() + i * 3);
@@ -559,7 +568,12 @@ export default function EmiTrackingView({ selectedMonth }: { selectedMonth: stri
 
               if (i === expectedCount - 1 && extra.lastInstallmentDate) {
                 const parsedLast = parseDateSafe(extra.lastInstallmentDate);
-                if (parsedLast) curDate = parsedLast;
+                if (parsedLast) {
+                  const diffMonths = Math.abs((parsedLast.getFullYear() - firstDate.getFullYear()) * 12 + (parsedLast.getMonth() - firstDate.getMonth()));
+                  if (Math.abs(diffMonths - (expectedCount - 1)) <= 1) {
+                    curDate = parsedLast;
+                  }
+                }
               }
             } else if (preferredDay && preferredDay >= 1 && preferredDay <= 31) {
               const maxDays = new Date(curDate.getFullYear(), curDate.getMonth() + 1, 0).getDate();
@@ -666,7 +680,7 @@ export default function EmiTrackingView({ selectedMonth }: { selectedMonth: stri
         const remainingAmountTotal = pendingAmount;
 
         const tenureDisplay = extra.policyTenure || extra.policyTerm || p.tenure || '1 Year';
-        const paymentModeDisplay = extra.paymentMode || p.paymentFrequency || 'ONLINE';
+        const paymentModeDisplay = extra.paymentMode || extra.emiGateway || (p.paymentFrequency && !String(p.paymentFrequency).toUpperCase().includes('YEAR') ? p.paymentFrequency : 'Direct');
 
         return {
           id: p.id,
@@ -687,7 +701,7 @@ export default function EmiTrackingView({ selectedMonth }: { selectedMonth: stri
           processingFee: Number(extra.processingFee || 0),
           loanAmount: Number(extra.loanAmount || 0),
           premiumAmount: totalPolicyAmount,
-          installmentFrequency: p.paymentFrequency || 'Monthly',
+          installmentFrequency: isEmi ? 'Monthly' : (p.paymentFrequency ? (String(p.paymentFrequency).toUpperCase() === 'YEARLY' ? 'Yearly' : p.paymentFrequency) : 'Monthly'),
           tenure: tenureDisplay,
           paymentMode: paymentModeDisplay,
           totalEmis,
@@ -2066,7 +2080,7 @@ export default function EmiTrackingView({ selectedMonth }: { selectedMonth: stri
               {drawerTab === 'schedule' && (
                 <div className="space-y-2.5 text-xs animate-fadeIn">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                    Installment Payment Schedule ({drawerRecord.totalEmis} {drawerRecord.installmentFrequency || 'Installments'})
+                    Installment Payment Schedule ({drawerRecord.totalEmis} {drawerRecord.installmentFrequency?.toLowerCase().includes('month') ? 'Months' : (drawerRecord.installmentFrequency || 'Months')})
                   </span>
                   <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg overflow-hidden">
                     {Boolean(drawerRecord.downpaymentAmount && drawerRecord.downpaymentAmount > 0) && (

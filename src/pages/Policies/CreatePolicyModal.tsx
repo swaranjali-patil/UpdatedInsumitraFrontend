@@ -15,7 +15,7 @@ import { useLookupStore } from '@store/lookup.store';
 import { getPolicyStatusDisplay, calculateLastInstallmentDate } from '../../utils/policyStatusUtils';
 import { formatIndianNumber } from '../../utils/numberUtils';
 import ActivityTimeline from '@comps/common/ActivityTimeline';
-import { INSTALLMENT_DATE_OPTIONS, PHC_STAGE_OPTIONS, POLICY_DOCUMENT_TYPE_OPTIONS, SUM_INSURED_OPTIONS, cleanConnectedPhone, parseExtraNotes } from './index';
+import { INSTALLMENT_DATE_OPTIONS, PHC_STAGE_OPTIONS, POLICY_DOCUMENT_TYPE_OPTIONS, SUM_INSURED_OPTIONS, cleanConnectedPhone, parseExtraNotes, normalizeInstallmentDay } from './index';
 
 const formatBytes = (bytes?: number | null) => {
   if (bytes == null) return '';
@@ -167,8 +167,10 @@ export default function CreatePolicyModal({
         setAgeAtMaturity(extra.ageAtMaturity || '');
 
         setEmiCase(!!extra.emiCase || (policyToEdit as any).emiCase === true);
-        setEmiGateway(extra.emiGateway || (policyToEdit as any).emiGateway || '');
-        setEmiDate(extra.emiDate || '');
+        const gwVal = extra.emiGateway ? extra.emiGateway.trim() : ((policyToEdit as any).emiGateway || '');
+        setEmiGateway(gwVal && gwVal.toUpperCase() !== 'N/A' ? gwVal : '');
+        const cleanEmiDate = normalizeInstallmentDay(extra.emiDate || (policyToEdit as any).emiDate);
+        setEmiDate(cleanEmiDate);
         setEmiPremium(extra.emiPremium ? String(extra.emiPremium) : '');
         setInstallmentAmount(extra.installmentAmount ? String(extra.installmentAmount) : (extra.emiPremium ? String(extra.emiPremium) : ''));
         setDownpaymentAmount(extra.downpaymentAmount ? String(extra.downpaymentAmount) : '');
@@ -542,8 +544,13 @@ export default function CreatePolicyModal({
           if (matchNoOfInst) setNoOfInstallments(matchNoOfInst[1].trim());
           const matchLastInst = (data.notes || '').match(/Last Installment Date:\s*(.*)/i);
           if (matchLastInst) setLastInstallmentDate(matchLastInst[1].trim());
-          const matchInstDate = (data.notes || '').match(/Installment Date:\s*(.*)/i);
-          if (matchInstDate) setEmiDate(matchInstDate[1].trim());
+          const matchInstGw = (data.notes || '').match(/(?:Installment\s*Gateway|Payment\s*Gateway|EMI\s*Gateway|Gateway):\s*([^,)\n]+)/i);
+          if (matchInstGw && matchInstGw[1].trim().toUpperCase() !== 'N/A') setEmiGateway(matchInstGw[1].trim());
+          const matchInstDate = (data.notes || '').match(/(?:Installment\s*Date|EMI\s*Date|Date):\s*([^,)\n]+)/i);
+          if (matchInstDate) {
+            const norm = normalizeInstallmentDay(matchInstDate[1].trim());
+            if (norm) setEmiDate(norm);
+          }
           const matchInsured = (data.notes || '').match(/Insured Person:\s*(.*)/i);
           if (matchInsured) setInsuredPerson(matchInsured[1].trim());
         }
@@ -716,7 +723,8 @@ export default function CreatePolicyModal({
   }) => {
     const baseDate = overrides?.baseDate !== undefined ? overrides.baseDate : (firstInstallmentDate || firstPremiumDate || startDate);
     const noOfInst = overrides?.noOfInst !== undefined ? overrides.noOfInst : noOfInstallments;
-    const freq = overrides?.freq !== undefined ? overrides.freq : (paymentFrequency || 'MONTHLY');
+    const isEmi = Boolean(emiCase || (noOfInst && Number(noOfInst) > 1));
+    const freq = overrides?.freq !== undefined ? overrides.freq : (isEmi ? 'MONTHLY' : (paymentFrequency || 'MONTHLY'));
     const day = overrides?.day !== undefined ? overrides.day : emiDate;
 
     if (baseDate && noOfInst) {
@@ -726,7 +734,7 @@ export default function CreatePolicyModal({
         setLastInstallmentDate(calculated);
       }
     }
-  }, [firstInstallmentDate, firstPremiumDate, startDate, noOfInstallments, paymentFrequency, emiDate]);
+  }, [firstInstallmentDate, firstPremiumDate, startDate, noOfInstallments, paymentFrequency, emiDate, emiCase]);
 
   // Auto-calculate Last Installment Date based on First Premium / Start Date, No. of Installments, Frequency, and Day
   useEffect(() => {
@@ -769,6 +777,7 @@ export default function CreatePolicyModal({
   const [isPaymentModeLoanCollapsed, setIsPaymentModeLoanCollapsed] = useState(false);
   const [isPaymentAccountCollapsed, setIsPaymentAccountCollapsed] = useState(false);
   const [isGstDetailsCollapsed, setIsGstDetailsCollapsed] = useState(false);
+  const [isPhcCollapsed, setIsPhcCollapsed] = useState(false);
 
   // Tab 3: Connected Persons State
   interface ConnectedPersonItem {
@@ -836,59 +845,79 @@ export default function CreatePolicyModal({
       .trim()
       .toLowerCase();
 
-    const combinedRels = [
-      ...(contact?.relationships || []).map((relationship: any) => ({
-        member: relationship.relatedContact,
-        relType: relationship.relationshipType,
-        createdAt: relationship.createdAt,
-      })),
-      ...(contact?.relatedTo || []).map((relationship: any) => ({
-        member: relationship.primaryContact,
-        relType: relationship.relationshipType,
-        createdAt: relationship.createdAt,
-      })),
-    ];
+    const relationshipTypes: Record<string, string> = {
+      SPOUSE: 'Spouse',
+      HUSBAND: 'Husband',
+      WIFE: 'Wife',
+      SON: 'Son',
+      DAUGHTER: 'Daughter',
+      FATHER: 'Father',
+      MOTHER: 'Mother',
+      BROTHER: 'Brother',
+      SISTER: 'Sister',
+      GRANDFATHER: 'Grandfather',
+      GRANDMOTHER: 'Grandmother',
+      GRANDSON: 'Grandson',
+      GRANDDAUGHTER: 'Granddaughter',
+      GRANDPARENT: 'Grandparent',
+      GRANDCHILD: 'Grandchild',
+      UNCLE: 'Uncle',
+      AUNT: 'Aunt / Unty',
+      NEPHEW: 'Nephew',
+      NIECE: 'Niece',
+      CHILD: 'Child',
+      IN_LAW: 'In-Law',
+      DEPENDENT: 'Dependent',
+      OTHER: 'Other',
+    };
+
+    const seenMemberIds = new Set<string>();
+    const seenNames = new Set<string>();
+
+    if (contact.id) seenMemberIds.add(String(contact.id));
+    if (contactFullName) seenNames.add(contactFullName);
 
     const familyMembers: ConnectedPersonItem[] = [];
-    combinedRels.forEach((rel: any) => {
-      const member = rel.member;
-      if (!member || member.id === contact.id) return;
+
+    const processRelationshipItem = (rel: any, isDirect: boolean) => {
+      const member = isDirect ? (rel.relatedContact || rel.contact) : (rel.primaryContact || rel.contact);
+      if (!member) return;
+
+      const memberId = String(member.id || member._id || '');
+      if (memberId && seenMemberIds.has(memberId)) return;
 
       const name = [member.firstName, member.middleName, member.lastName]
         .filter(Boolean)
         .join(' ')
-        .trim();
-      if (!name || name.toLowerCase() === contactFullName) return;
+        .trim() || (member.name || '').trim();
 
-      const relationshipTypes: Record<string, string> = {
-        SPOUSE: 'Spouse',
-        SON: 'Son',
-        DAUGHTER: 'Daughter',
-        FATHER: 'Father',
-        MOTHER: 'Mother',
-        BROTHER: 'Brother',
-        SISTER: 'Sister',
-        GRANDFATHER: 'Grandfather',
-        GRANDMOTHER: 'Grandmother',
-        GRANDSON: 'Grandson',
-        GRANDDAUGHTER: 'Granddaughter',
-        GRANDPARENT: 'Grandparent',
-        GRANDCHILD: 'Grandchild',
-        UNCLE: 'Uncle',
-        AUNT: 'Aunt / Unty',
-        NEPHEW: 'Nephew',
-        NIECE: 'Niece',
-        OTHER: 'Other',
-      };
-      const relationType = String(rel.relType || '').toUpperCase();
+      if (!name) return;
+      const lowerName = name.toLowerCase();
+      if (seenNames.has(lowerName)) return;
+
+      if (memberId) seenMemberIds.add(memberId);
+      seenNames.add(lowerName);
+
+      const rawRelType = String(rel.relationshipType || rel.relation || rel.relType || '').toUpperCase();
+      let relationshipLabel = relationshipTypes[rawRelType] || 'Dependent';
+
+      if (!isDirect && rawRelType) {
+        if (rawRelType === 'CHILD' || rawRelType === 'SON' || rawRelType === 'DAUGHTER') {
+          relationshipLabel = String(member.gender).toUpperCase() === 'FEMALE' ? 'Mother' : 'Father';
+        } else if (rawRelType === 'PARENT' || rawRelType === 'FATHER' || rawRelType === 'MOTHER') {
+          relationshipLabel = String(member.gender).toUpperCase() === 'FEMALE' ? 'Daughter' : 'Son';
+        } else if (rawRelType === 'NEPHEW' || rawRelType === 'NIECE') {
+          relationshipLabel = String(member.gender).toUpperCase() === 'FEMALE' ? 'Aunt / Unty' : 'Uncle';
+        }
+      }
 
       familyMembers.push({
-        id: `contact-${member.id}`,
+        id: memberId ? `contact-${memberId}` : `member-${Math.random().toString(36).substring(2, 9)}`,
         addedAt: rel.createdAt || member.createdAt || new Date().toISOString(),
         name,
-        relationship: relationshipTypes[relationType] || 'Dependent',
-        contactNo: cleanConnectedPhone(member.phone || member.alternatePhone || member.mobile || member.whatsappNumber),
-        dob: member.dateOfBirth ? String(member.dateOfBirth).slice(0, 10) : '',
+        relationship: relationshipLabel,
+        contactNo: cleanConnectedPhone(member.phone || member.alternatePhone || member.mobile || member.whatsappNumber || member.whatsapp),
+        dob: member.dateOfBirth ? String(member.dateOfBirth).slice(0, 10) : (member.dob ? String(member.dob).slice(0, 10) : ''),
         gender: ['MALE', 'FEMALE', 'OTHER'].includes(String(member.gender).toUpperCase())
           ? String(member.gender).toUpperCase()
           : 'MALE',
@@ -900,7 +929,13 @@ export default function CreatePolicyModal({
         nomineeDob: '',
         nomineePercentage: '',
       });
-    });
+    };
+
+    // 1. Process direct relationships first
+    (contact?.relationships || []).forEach((rel: any) => processRelationshipItem(rel, true));
+
+    // 2. Process reverse relationships (relatedTo) only for members not already seen
+    (contact?.relatedTo || []).forEach((rel: any) => processRelationshipItem(rel, false));
 
     setMembers(previous => {
       // Remove any previously auto-populated contact members, self entries, or matching contact's name
@@ -919,8 +954,9 @@ export default function CreatePolicyModal({
   }, []);
 
   useEffect(() => {
-    const cId = selectedContactId || contactId;
-    if (!cId || policyToEdit) return;
+    if (!open || policyToEdit) return;
+    const cId = selectedContactId || contactId || initialData?.contactId || initialData?.contact?.id;
+    if (!cId) return;
     contactsService.get(cId)
       .then((res: any) => {
         const c = res?.data?.data || res?.data || res;
@@ -933,7 +969,7 @@ export default function CreatePolicyModal({
         }
       })
       .catch(() => {});
-  }, [selectedContactId, contactId, policyToEdit, syncContactFamilyMembers]);
+  }, [open, selectedContactId, contactId, initialData, policyToEdit, syncContactFamilyMembers]);
 
   // Tab 4: PHC Details
   const [phcRequired, setPhcRequired] = useState(false);
@@ -1353,17 +1389,27 @@ export default function CreatePolicyModal({
           cleanNotes += `\nInstallment Amount: ₹${installmentAmount || emiPremium}`;
         }
         if (noOfInstallments) cleanNotes += `\nNo. of Installments: ${noOfInstallments}`;
-        if (emiDate) cleanNotes += `\nInstallment Date: ${emiDate}`;
+        const finalEmiDt = normalizeInstallmentDay(emiDate);
+        if (finalEmiDt) cleanNotes += `\nInstallment Date: ${finalEmiDt}`;
         if (lastInstallmentDate || lastPremiumDate) {
           cleanNotes += `\nLast Installment Date: ${lastInstallmentDate || lastPremiumDate}`;
         }
-        cleanNotes += `\nEMI Case: Yes`;
+        const emiParts: string[] = [];
+        if (emiGateway && emiGateway.toUpperCase() !== 'N/A') emiParts.push(`Gateway: ${emiGateway.trim()}`);
+        if (finalEmiDt) emiParts.push(`Date: ${finalEmiDt}`);
+        if (installmentAmount || emiPremium) emiParts.push(`Premium: ₹${installmentAmount || emiPremium}`);
+        cleanNotes += `\nEMI Case: Yes${emiParts.length > 0 ? ` (${emiParts.join(', ')})` : ''}`;
+        if (emiGateway && emiGateway.toUpperCase() !== 'N/A') cleanNotes += `\nInstallment Gateway: ${emiGateway.trim()}`;
         if (paymentDate) cleanNotes += `\nPayment Date: ${paymentDate}`;
         if (firstInstallmentDate || firstPremiumDate) cleanNotes += `\n1st Installment Date: ${firstInstallmentDate || firstPremiumDate}`;
         if (loanAmount) cleanNotes += `\nLoan Amount: ₹${loanAmount}`;
         if (emiComment) cleanNotes += `\nInstallment Comment: ${emiComment}`;
       } else {
         cleanNotes += `\nEMI Case: No`;
+      }
+      const finalEmiDtOutside = normalizeInstallmentDay(emiDate);
+      if (finalEmiDtOutside && !emiCase) {
+        cleanNotes += `\nInstallment Date: ${finalEmiDtOutside}`;
       }
       if (paymentMode) {
         let pStr = paymentMode;
@@ -1707,15 +1753,18 @@ export default function CreatePolicyModal({
                         setInsuredPerson('');
                         return;
                       }
-                      const c = contactsList.find((x: any) => x.id === val);
-                      if (c) {
-                        const fullName = `${c.firstName || c.name || ''} ${c.lastName || ''}`.trim();
-                        setInsuredPerson(fullName);
-                        const cCity = c.addresses?.find((a: any) => a.isPrimary)?.city || c.addresses?.[0]?.city || c.city || '';
-                        if (cCity && cCity !== 'N/A') {
-                          setPolicyZoneCity(cCity);
+                      contactsService.get(val).then((res: any) => {
+                        const fullC = res?.data?.data || res?.data || res;
+                        if (fullC) {
+                          syncContactFamilyMembers(fullC);
+                          const fullName = `${fullC.firstName || fullC.name || ''} ${fullC.lastName || ''}`.trim();
+                          setInsuredPerson(fullName);
+                          const cCity = fullC.addresses?.find((a: any) => a.isPrimary)?.city || fullC.addresses?.[0]?.city || fullC.city || '';
+                          if (cCity && cCity !== 'N/A') {
+                            setPolicyZoneCity(cCity);
+                          }
                         }
-                      }
+                      }).catch(() => {});
                     }}
                     placeholder="-- Select Target Contact / Client Name --"
                     searchable
@@ -2503,15 +2552,26 @@ export default function CreatePolicyModal({
                             Installment Gateway
                           </label>
                           <CustomSelect
-                            value={emiGateway || ''}
+                            value={(() => {
+                              if (!emiGateway || emiGateway.toUpperCase() === 'N/A') return '';
+                              const base = ['FIBE', 'Shopse', 'BimaPay'];
+                              const m = base.find(b => b.toLowerCase() === (emiGateway || '').toLowerCase());
+                              return m || emiGateway || '';
+                            })()}
                             onChange={val => setEmiGateway(val)}
                             placeholder="Select Gateway"
-                            options={[
-                              { value: '', label: 'Select Gateway' },
-                              { value: 'FIBE', label: 'FIBE' },
-                              { value: 'Shopse', label: 'Shopse' },
-                              { value: 'BimaPay', label: 'BimaPay' },
-                            ]}
+                            options={(() => {
+                              const base = [
+                                { value: '', label: 'Select Gateway' },
+                                { value: 'FIBE', label: 'FIBE' },
+                                { value: 'Shopse', label: 'Shopse' },
+                                { value: 'BimaPay', label: 'BimaPay' },
+                              ];
+                              if (emiGateway && emiGateway.toUpperCase() !== 'N/A' && !['fibe', 'shopse', 'bimapay'].includes(emiGateway.toLowerCase())) {
+                                base.push({ value: emiGateway, label: emiGateway });
+                              }
+                              return base;
+                            })()}
                           />
                         </div>
 
@@ -2571,7 +2631,7 @@ export default function CreatePolicyModal({
                             Installment Date (01 to 31st)
                           </label>
                           <CustomSelect
-                            value={emiDate ? String(emiDate).padStart(2, '0') : ''}
+                            value={normalizeInstallmentDay(emiDate)}
                             onChange={val => {
                               setEmiDate(val);
                               recalculateLastInstallment({ day: val });
@@ -3012,6 +3072,51 @@ export default function CreatePolicyModal({
                   </div>
                 )}
               </div>
+
+              {/* Section 7: Preventive Health Checkup Option */}
+              <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-visible">
+                <div
+                  className="bg-gradient-to-r from-teal-50/80 via-slate-50 to-emerald-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none rounded-t-2xl"
+                  onClick={() => setIsPhcCollapsed(prev => !prev)}
+                >
+                  <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider flex flex-wrap items-center gap-2">
+                    <span className="w-5 h-5 rounded-full bg-gradient-to-br from-teal-600 to-emerald-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">7</span>
+                    Preventive Health Checkup
+                  </h4>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[10px] text-slate-700 font-bold">Health Benefit Option</span>
+                    <ChevronDown
+                      size={16}
+                      className={`text-slate-500 transition-transform duration-200 ${isPhcCollapsed ? 'rotate-180' : ''}`}
+                    />
+                  </div>
+                </div>
+
+                {!isPhcCollapsed && (
+                  <div className="p-4 space-y-3 animate-fadeIn">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                          Preventive Health Checkup?
+                        </label>
+                        <CustomSelect
+                          value={phcRequired ? 'yes' : 'no'}
+                          onChange={val => {
+                            const isYes = val === 'yes';
+                            setPhcRequired(isYes);
+                            if (!isYes) setPhcAmountError('');
+                          }}
+                          placeholder="Select Option"
+                          options={[
+                            { value: 'yes', label: 'Yes' },
+                            { value: 'no', label: 'No' },
+                          ]}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -3149,12 +3254,24 @@ export default function CreatePolicyModal({
                             placeholder="Select Relationship"
                             options={[
                               { value: 'Spouse', label: 'Spouse' },
+                              { value: 'Husband', label: 'Husband' },
+                              { value: 'Wife', label: 'Wife' },
                               { value: 'Son', label: 'Son' },
                               { value: 'Daughter', label: 'Daughter' },
                               { value: 'Father', label: 'Father' },
                               { value: 'Mother', label: 'Mother' },
                               { value: 'Brother', label: 'Brother' },
                               { value: 'Sister', label: 'Sister' },
+                              { value: 'Uncle', label: 'Uncle' },
+                              { value: 'Aunt / Unty', label: 'Aunt / Unty' },
+                              { value: 'Nephew', label: 'Nephew' },
+                              { value: 'Niece', label: 'Niece' },
+                              { value: 'Child', label: 'Child' },
+                              { value: 'Grandfather', label: 'Grandfather' },
+                              { value: 'Grandmother', label: 'Grandmother' },
+                              { value: 'Grandson', label: 'Grandson' },
+                              { value: 'Granddaughter', label: 'Granddaughter' },
+                              { value: 'In-Law', label: 'In-Law' },
                               { value: 'Dependent', label: 'Dependent' },
                               { value: 'Other', label: 'Other' },
                             ]}

@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useClaims, useCreateClaim, useUpdateClaimStatus, useDeleteClaim } from '@hooks/useClaims';
 import { usePolicies } from '@hooks/usePolicies';
+import { useTableColumnVisibility } from '@hooks/useTableColumnVisibility';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { contactsService, policiesService, claimsService, documentsService } from '@api/index';
 import DataTable, { Column } from '@comps/common/DataTable';
@@ -504,19 +505,49 @@ export function extractConnectedPersonsAndNominees(policy?: any, contact?: any):
   }) => {
     const cleanName = (person.name || '').trim();
     if (!cleanName || cleanName.toLowerCase() === 'n/a') return;
-    const lowerKey = `${cleanName.toLowerCase()}_${(person.relationship || '').toLowerCase()}`;
-    if (seenNames.has(lowerKey)) return;
-    seenNames.add(lowerKey);
+    const nameKey = cleanName.toLowerCase();
 
+    const cleanPhone = cleanConnectedPhone(person.phone);
     let cleanDob = '';
     if (person.dob) {
       cleanDob = formatDateForInput(person.dob);
     }
 
+    const existing = result.find(p => p.name.trim().toLowerCase() === nameKey);
+    if (existing) {
+      if (!existing.phone && cleanPhone) {
+        existing.phone = cleanPhone;
+      }
+      if (!existing.dob && cleanDob) {
+        existing.dob = cleanDob;
+      }
+      if ((existing.percentage === '' || existing.percentage === undefined || existing.percentage === null) &&
+          person.percentage !== undefined && person.percentage !== null && person.percentage !== '') {
+        existing.percentage = person.percentage;
+      }
+      if (!existing.comment && person.comment) {
+        existing.comment = person.comment;
+      }
+      const genericRels = ['dependent', 'nominee', 'member', 'other', 'in_law', 'in law', 'in-law', ''];
+      const existingRelLower = (existing.relationship || '').trim().toLowerCase();
+      const newRel = (person.relationship || '').trim();
+      const newRelLower = newRel.toLowerCase();
+
+      if (genericRels.includes(existingRelLower) && newRel && !genericRels.includes(newRelLower)) {
+        existing.relationship = newRel;
+      } else if (!existing.relationship && newRel) {
+        existing.relationship = newRel;
+      }
+      if (person.source === 'policy_nominee') {
+        existing.source = 'policy_nominee';
+      }
+      return;
+    }
+
     result.push({
       name: cleanName,
       relationship: (person.relationship || '').trim(),
-      phone: cleanConnectedPhone(person.phone),
+      phone: cleanPhone,
       dob: cleanDob,
       percentage: person.percentage !== undefined && person.percentage !== null && person.percentage !== '' ? person.percentage : '',
       comment: person.comment || '',
@@ -2718,6 +2749,7 @@ export default function Claims() {
   const [page, setPage] = useState(1);
   const [modalOpen, setModalOpen] = useState(false);
   const [showColPicker, setShowColPicker] = useState(false);
+  const { isVisible: isColVisibleInSettings, toggleColumn: toggleColInSettings } = useTableColumnVisibility('claims');
   const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
@@ -4094,8 +4126,14 @@ export default function Claims() {
   ];
  
   const activeCols = useMemo(() => {
-    return COLS.filter(c => c.key === 'actions' || visibleColumns[String(c.key)] !== false);
-  }, [COLS, visibleColumns]);
+    return COLS.filter(c => {
+      if (c.key === 'actions') return true;
+      if (visibleColumns[String(c.key)] !== undefined) {
+        return visibleColumns[String(c.key)];
+      }
+      return isColVisibleInSettings(c.label || String(c.key));
+    });
+  }, [COLS, visibleColumns, isColVisibleInSettings]);
 
   const genClaimNumber = () => `CLM-${Date.now().toString().slice(-8)}`;
 
@@ -4223,16 +4261,24 @@ export default function Claims() {
               <Settings size={14} />
             </button>
             {showColPicker && (
-              <div className="absolute right-0 mt-2 w-52 bg-white border border-slate-200/90 rounded-2xl shadow-2xl p-3 z-50 text-xs space-y-2 animate-fadeIn">
-                <p className="font-extrabold text-slate-400 uppercase tracking-wider mb-1 text-[10px]">Show Columns</p>
+              <div className="absolute right-0 mt-2 w-56 bg-white border border-slate-200/90 rounded-2xl shadow-2xl p-3 z-50 text-xs space-y-2 animate-fadeIn">
+                <div className="pb-1.5 border-b border-slate-100">
+                  <p className="font-extrabold text-slate-400 uppercase tracking-wider text-[10px]">Show Columns</p>
+                </div>
                 {COLS.filter(c => c.key !== 'actions').map(col => {
-                  const isVisible = visibleColumns[String(col.key)] !== false;
+                  const isVisible = visibleColumns[String(col.key)] !== undefined
+                    ? visibleColumns[String(col.key)]
+                    : isColVisibleInSettings(col.label || String(col.key));
                   return (
                     <label key={String(col.key)} className="flex items-center gap-2 cursor-pointer font-bold text-slate-700 hover:text-blue-600 transition-colors">
                       <input
                         type="checkbox"
                         checked={isVisible}
-                        onChange={() => setVisibleColumns(prev => ({ ...prev, [String(col.key)]: !isVisible }))}
+                        onChange={() => {
+                          const next = !isVisible;
+                          setVisibleColumns(prev => ({ ...prev, [String(col.key)]: next }));
+                          toggleColInSettings(col.label || String(col.key));
+                        }}
                         className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
                       />
                       <span>{col.label}</span>

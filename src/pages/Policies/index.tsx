@@ -1,5 +1,5 @@
 import { isFieldRequired as isFieldRequiredHelper, COMPULSORY_RULES_UPDATED_EVENT } from '../../utils/compulsoryFieldRules';
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { Plus, X, User, Shield, Pencil, Trash2, Upload, Filter, Search, Info, Save, ChevronDown, Settings, CreditCard, Building, CheckCircle2, AlertTriangle, Users, Activity, FileText, FileCheck2, Clock, Download, MessageCircle, History, Eye } from 'lucide-react';
 import EmiTrackingView, { MonthPickerDropdown } from './EmiTrackingView';
@@ -39,6 +39,7 @@ const formatPreview = (dateStr?: string) => {
 };
 import toast from 'react-hot-toast';
 import { useAuthStore } from '@store/auth.store';
+import { useTableColumnVisibility } from '@hooks/useTableColumnVisibility';
 import clsx from 'clsx';
 import { getPolicyStatusDisplay, calculateLastInstallmentDate } from '../../utils/policyStatusUtils';
 
@@ -294,6 +295,28 @@ export const INSTALLMENT_DATE_OPTIONS = Array.from({ length: 31 }, (_, i) => {
     label: `${padDay}${suffix}`,
   };
 });
+
+export const normalizeInstallmentDay = (val?: any): string => {
+  if (!val) return '';
+  const s = String(val).trim();
+  if (!s || s.toUpperCase() === 'N/A') return '';
+  const isoMatch = s.match(/^\d{4}-\d{2}-(\d{2})/);
+  if (isoMatch) return isoMatch[1];
+  const dmyMatch = s.match(/^(\d{1,2})[\/-]\d{1,2}[\/-]\d{4}/);
+  if (dmyMatch) return dmyMatch[1].padStart(2, '0');
+  const digits = s.replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.length <= 2) {
+    const num = parseInt(digits, 10);
+    if (num >= 1 && num <= 31) return String(num).padStart(2, '0');
+  }
+  if (digits.length === 8) {
+    const day = digits.slice(6, 8);
+    const num = parseInt(day, 10);
+    if (num >= 1 && num <= 31) return day;
+  }
+  return '';
+};
 
 export const PHC_STAGE_OPTIONS = [
   { value: 'TO_CONTACT', label: 'To Contact' },
@@ -559,20 +582,29 @@ export function parseExtraNotes(notesText?: string | null): Record<string, any> 
       res.premiumPaymentPeriod = Number(line.replace('Premium Payment Period: ', '').replace(' Years', '').trim()) || undefined;
     } else if (line.startsWith('Last Premium Date: ')) {
       res.lastPremiumDate = line.replace('Last Premium Date: ', '').trim();
-    } else if (line.startsWith('EMI Case: ')) {
-      const emiVal = line.replace('EMI Case: ', '').trim();
+    } else if (line.match(/^(?:Installment\s*Gateway|Payment\s*Gateway|EMI\s*Gateway|Gateway):\s*/i)) {
+      const gw = line.replace(/^(?:Installment\s*Gateway|Payment\s*Gateway|EMI\s*Gateway|Gateway):\s*/i, '').trim();
+      if (gw && gw.toUpperCase() !== 'N/A') res.emiGateway = gw;
+    } else if (line.match(/^(?:EMI\s*Case|Installment\s*Case):\s*/i)) {
+      const emiVal = line.replace(/^(?:EMI\s*Case|Installment\s*Case):\s*/i, '').trim();
       res.emiCase = !emiVal.toLowerCase().startsWith('no') && !emiVal.toLowerCase().startsWith('false');
-      const gatewayMatch = line.match(/Gateway:\s*([^,)]+)/);
-      const dateMatch = line.match(/Date:\s*([^,)]+)/);
-      const premiumMatch = line.match(/Premium:\s*₹([0-9.]+)/);
-      if (gatewayMatch) res.emiGateway = gatewayMatch[1].trim();
-      if (dateMatch) res.emiDate = dateMatch[1].trim();
+      const gatewayMatch = line.match(/(?:Installment\s*Gateway|Payment\s*Gateway|EMI\s*Gateway|Gateway):\s*([^,)]+)/i);
+      const dateMatch = line.match(/(?:Installment\s*Date|EMI\s*Date|Date):\s*([^,)]+)/i);
+      const premiumMatch = line.match(/Premium:\s*₹?([0-9.]+)/i);
+      if (gatewayMatch && !res.emiGateway) {
+        const gw = gatewayMatch[1].trim();
+        if (gw && gw.toUpperCase() !== 'N/A') res.emiGateway = gw;
+      }
+      if (dateMatch && !res.emiDate) {
+        const norm = normalizeInstallmentDay(dateMatch[1].trim());
+        if (norm) res.emiDate = norm;
+      }
       if (premiumMatch) {
         res.emiPremium = Number(premiumMatch[1]) || undefined;
         if (!res.installmentAmount) res.installmentAmount = Number(premiumMatch[1]) || undefined;
       }
-      const downpaymentMatch = line.match(/Downpayment:\s*₹?([0-9.]+)/);
-      const processingMatch = line.match(/Processing Fee:\s*₹?([0-9.]+)/);
+      const downpaymentMatch = line.match(/Downpayment:\s*₹?([0-9.]+)/i);
+      const processingMatch = line.match(/Processing Fee:\s*₹?([0-9.]+)/i);
       if (downpaymentMatch) res.downpaymentAmount = Number(downpaymentMatch[1]) || undefined;
       if (processingMatch) res.processingFee = Number(processingMatch[1]) || undefined;
     } else if (line.startsWith('Downpayment Amount: ')) {
@@ -585,8 +617,10 @@ export function parseExtraNotes(notesText?: string | null): Record<string, any> 
       res.installmentAmount = Number(line.replace('Installment Amount: ', '').replace('₹', '').replace(/,/g, '').trim()) || undefined;
     } else if (line.startsWith('No. of Installments: ')) {
       res.noOfInstallments = Number(line.replace('No. of Installments: ', '').trim()) || undefined;
-    } else if (line.startsWith('Installment Date: ')) {
-      res.emiDate = line.replace('Installment Date: ', '').trim();
+    } else if (line.match(/^(?:Installment\s*Date(?:\s*\([^)]*\))?|EMI\s*Date):\s*/i)) {
+      const rawDate = line.replace(/^(?:Installment\s*Date(?:\s*\([^)]*\))?|EMI\s*Date):\s*/i, '').trim();
+      const norm = normalizeInstallmentDay(rawDate);
+      if (norm) res.emiDate = norm;
     } else if (line.startsWith('Last Installment Date: ')) {
       res.lastInstallmentDate = line.replace('Last Installment Date: ', '').trim();
       if (!res.lastPremiumDate) res.lastPremiumDate = res.lastInstallmentDate;
@@ -1078,31 +1112,6 @@ export default function Policies() {
       .reduce((sum, p) => sum + (Number(p.nomineePercentage) || 0), 0);
   }, [connectedPersons]);
 
-  useEffect(() => {
-    if (searchParams.get('action') === 'add') {
-      const contactId = searchParams.get('contactId');
-      const keepOpen = searchParams.get('keepOpen') === '1';
-      setKeepCreateOpen(keepOpen);
-      setModalOpen(true);
-
-      if (contactId) {
-        contactsService.get(contactId)
-          .then((res: any) => {
-            const contact = res?.data ?? res;
-            if (!contact?.id) return;
-            setSelectedContact({
-              id: contact.id,
-              firstName: contact.firstName || '',
-              lastName: contact.lastName || '',
-              phone: contact.phone || '',
-            });
-            setValue('contactId', contact.id, { shouldValidate: true });
-            setContactSearch('');
-          })
-          .catch((err: any) => console.error('Failed to preload contact for policy create', err));
-      }
-    }
-  }, [searchParams]);
   const [editTarget, setEditTarget] = useState<Policy | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Policy | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1188,31 +1197,8 @@ export default function Policies() {
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   // Column Visibility Selection
-  const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>({
-    companyCategory: true,
-    'plan.company.name': true,
-    'plan.category': true,
-    'plan.name': true,
-    customerCategory: true,
-    policyType: true,
-    policyNumber: true,
-    status: true,
-    sumAssured: true,
-    policyTenure: true,
-    policyTerm: true,
-    assignedTo: true,
-    comment: true,
-    firstYearPremium: true,
-    secondYearPremium: true,
-    premiumAmount: true,
-    installmentCase: true,
-    downpaymentAmount: true,
-    processingFee: true,
-    installmentAmount: true,
-    noOfInstallments: true,
-    lastInstallmentDate: true,
-    insuredPerson: true,
-  });
+  const { isVisible: isColVisibleInSettings, toggleColumn: toggleColInSettings } = useTableColumnVisibility('policies');
+  const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>({});
   const [colPickerOpen, setColPickerOpen] = useState(false);
   const colPickerRef = useRef<HTMLDivElement>(null);
 
@@ -1352,18 +1338,6 @@ export default function Policies() {
     }
   };
 
-  useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    if (params.get('action') === 'add') {
-      reset();
-      setSelectedContact(null);
-      setContactSearch('');
-      setSelectedPlan(null);
-      setKeepCreateOpen(params.get('keepOpen') === '1');
-      setModalOpen(true);
-      navigate('/policies', { replace: true });
-    }
-  }, [location.search]);
 
   // Click outside handlers for filters
   useEffect(() => {
@@ -2067,9 +2041,16 @@ export default function Policies() {
     });
   }, [compulsoryRules]);
 
-  const { register, handleSubmit, reset, setValue, watch } = useForm<Form>({
+  const { register, handleSubmit, reset, setValue, watch, getValues } = useForm<Form>({
     resolver: zodResolver(activeSchema),
-    defaultValues: { paymentFrequency: 'YEARLY', status: 'INFORCE', riders: [] },
+    defaultValues: {
+      paymentFrequency: 'YEARLY',
+      status: 'INFORCE',
+      riders: [],
+      emiCase: false,
+      emiGateway: '',
+      emiDate: '',
+    },
   });
   const { register: regEdit, handleSubmit: handleEdit, reset: resetEdit, setValue: setEditValue, watch: watchEdit } = useForm<EditForm>({
     resolver: zodResolver(activeEditSchema),
@@ -2183,6 +2164,7 @@ export default function Policies() {
   const watchNoOfInstallments = watch('noOfInstallments');
   const watchFirstPremiumDate = watch('firstPremiumDate');
   const watchPaymentFrequency = watch('paymentFrequency');
+  const watchEmiGateway = watch('emiGateway');
   const watchEmiDate = watch('emiDate');
   const watchStartDate = watch('startDate');
   const watchEndDate = watch('endDate');
@@ -2218,7 +2200,8 @@ export default function Policies() {
     freq?: string;
     day?: string | number;
   }) => {
-    const freq = overrides?.freq ?? watchPaymentFrequency ?? 'YEARLY';
+    const isEmiActive = Boolean(watchEmiCase || (watchNoOfInstallments && Number(watchNoOfInstallments) > 1));
+    const freq = overrides?.freq ?? (isEmiActive ? 'MONTHLY' : (watchPaymentFrequency ?? 'YEARLY'));
     let numInst = overrides?.noOfInst !== undefined ? overrides.noOfInst : watchNoOfInstallments;
     const isSingle = freq === 'SINGLE' || String(freq).toUpperCase().includes('ONE');
 
@@ -2380,6 +2363,169 @@ export default function Policies() {
     return list;
   }, [insuredPerson, selectedContact, connectedPersons, phcExtraDetails.insuredPersonName]);
 
+  const syncContactFamilyMembers = useCallback((contact: any) => {
+    if (!contact) return;
+    const contactFullName = [contact.firstName, contact.middleName, contact.lastName]
+      .filter(Boolean)
+      .join(' ')
+      .trim()
+      .toLowerCase();
+
+    const relationshipTypes: Record<string, string> = {
+      SPOUSE: 'Spouse',
+      HUSBAND: 'Husband',
+      WIFE: 'Wife',
+      SON: 'Son',
+      DAUGHTER: 'Daughter',
+      FATHER: 'Father',
+      MOTHER: 'Mother',
+      BROTHER: 'Brother',
+      SISTER: 'Sister',
+      GRANDFATHER: 'Grandfather',
+      GRANDMOTHER: 'Grandmother',
+      GRANDSON: 'Grandson',
+      GRANDDAUGHTER: 'Granddaughter',
+      GRANDPARENT: 'Grandparent',
+      GRANDCHILD: 'Grandchild',
+      UNCLE: 'Uncle',
+      AUNT: 'Aunt / Unty',
+      NEPHEW: 'Nephew',
+      NIECE: 'Niece',
+      CHILD: 'Child',
+      IN_LAW: 'In-Law',
+      DEPENDENT: 'Dependent',
+      OTHER: 'Other',
+    };
+
+    const seenMemberIds = new Set<string>();
+    const seenNames = new Set<string>();
+
+    if (contact.id) seenMemberIds.add(String(contact.id));
+    if (contactFullName) seenNames.add(contactFullName);
+
+    const familyMembers: ConnectedPersonItem[] = [];
+
+    const processRelationshipItem = (rel: any, isDirect: boolean) => {
+      const member = isDirect ? (rel.relatedContact || rel.contact) : (rel.primaryContact || rel.contact);
+      if (!member) return;
+
+      const memberId = String(member.id || member._id || '');
+      if (memberId && seenMemberIds.has(memberId)) return;
+
+      const name = [member.firstName, member.middleName, member.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim() || (member.name || '').trim();
+
+      if (!name) return;
+      const lowerName = name.toLowerCase();
+      if (seenNames.has(lowerName)) return;
+
+      if (memberId) seenMemberIds.add(memberId);
+      seenNames.add(lowerName);
+
+      const rawRelType = String(rel.relationshipType || rel.relation || rel.relType || '').toUpperCase();
+      let relationshipLabel = relationshipTypes[rawRelType] || 'Dependent';
+
+      if (!isDirect && rawRelType) {
+        if (rawRelType === 'CHILD' || rawRelType === 'SON' || rawRelType === 'DAUGHTER') {
+          relationshipLabel = String(member.gender).toUpperCase() === 'FEMALE' ? 'Mother' : 'Father';
+        } else if (rawRelType === 'PARENT' || rawRelType === 'FATHER' || rawRelType === 'MOTHER') {
+          relationshipLabel = String(member.gender).toUpperCase() === 'FEMALE' ? 'Daughter' : 'Son';
+        } else if (rawRelType === 'NEPHEW' || rawRelType === 'NIECE') {
+          relationshipLabel = String(member.gender).toUpperCase() === 'FEMALE' ? 'Aunt / Unty' : 'Uncle';
+        }
+      }
+
+      familyMembers.push({
+        id: memberId ? `contact-${memberId}` : `member-${Math.random().toString(36).substring(2, 9)}`,
+        addedAt: rel.createdAt || member.createdAt || new Date().toISOString(),
+        name,
+        relationship: relationshipLabel,
+        contactNo: cleanConnectedPhone(member.phone || member.alternatePhone || member.mobile || member.whatsappNumber || member.whatsapp),
+        dob: member.dateOfBirth ? String(member.dateOfBirth).slice(0, 10) : (member.dob ? String(member.dob).slice(0, 10) : ''),
+        gender: ['MALE', 'FEMALE', 'OTHER'].includes(String(member.gender).toUpperCase())
+          ? String(member.gender).toUpperCase()
+          : 'MALE',
+        isCovered: true,
+        isNominee: false,
+        nomineeName: '',
+        nomineeRelation: 'Spouse',
+        nomineeContact: '',
+        nomineeDob: '',
+        nomineePercentage: 100,
+      });
+    };
+
+    // 1. Process direct relationships first
+    (contact?.relationships || []).forEach((rel: any) => processRelationshipItem(rel, true));
+
+    // 2. Process reverse relationships (relatedTo) only for members not already seen
+    (contact?.relatedTo || []).forEach((rel: any) => processRelationshipItem(rel, false));
+
+    setConnectedPersons(prev => {
+      const manual = prev.filter(p =>
+        !p.id.startsWith('contact-') &&
+        p.name.trim().toLowerCase() !== contactFullName &&
+        p.relationship?.toLowerCase() !== 'self'
+      );
+      const manualNames = new Set(manual.map(p => p.name.trim().toLowerCase()));
+      const uniqueFamily = familyMembers.filter(p => !manualNames.has(p.name.trim().toLowerCase()));
+      return [...manual, ...uniqueFamily];
+    });
+
+    const cCity = contact.addresses?.find((a: any) => a.isPrimary)?.city || contact.addresses?.[0]?.city || contact.city || '';
+    if (cCity && cCity !== 'N/A') {
+      setPolicyZoneLocationCity(cCity);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (searchParams.get('action') === 'add') {
+      const contactId = searchParams.get('contactId');
+      const keepOpen = searchParams.get('keepOpen') === '1';
+      setKeepCreateOpen(keepOpen);
+      setModalOpen(true);
+
+      if (contactId) {
+        contactsService.get(contactId)
+          .then((res: any) => {
+            const contact = res?.data?.data || res?.data || res;
+            if (!contact?.id) return;
+            setSelectedContact({
+              id: contact.id,
+              firstName: contact.firstName || '',
+              lastName: contact.lastName || '',
+              phone: contact.phone || '',
+            });
+            setValue('contactId', contact.id, { shouldValidate: true });
+            const fullName = `${contact.firstName || ''} ${contact.lastName || ''}`.trim();
+            if (fullName) setInsuredPerson(fullName);
+            setContactSearch('');
+            syncContactFamilyMembers(contact);
+          })
+          .catch((err: any) => console.error('Failed to preload contact for policy create', err));
+      }
+      navigate('/policies', { replace: true });
+    }
+  }, [searchParams, syncContactFamilyMembers, navigate, setValue]);
+
+  useEffect(() => {
+    if (!modalOpen || editTarget || isViewMode) return;
+    const cId = selectedContact?.id || watch('contactId');
+    if (!cId) return;
+    if (connectedPersons.length === 0) {
+      contactsService.get(cId)
+        .then((res: any) => {
+          const contact = res?.data?.data || res?.data || res;
+          if (contact) {
+            syncContactFamilyMembers(contact);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [modalOpen, selectedContact?.id, editTarget, isViewMode, connectedPersons.length, syncContactFamilyMembers, watch]);
+
   const closeModal = () => {
     const returnState = location.state as any;
     const returnRoute = returnState?.returnRoute;
@@ -2536,9 +2682,10 @@ export default function Policies() {
     setValue('firstPremiumDate', extra.firstPremiumDate || '');
     setValue('premiumPaymentPeriod', extra.premiumPaymentPeriod || undefined);
     setValue('lastPremiumDate', extra.lastPremiumDate || '');
-    setValue('emiCase', extra.emiCase || false);
-    setValue('emiGateway', extra.emiGateway || '');
-    setValue('emiDate', extra.emiDate || '');
+    setValue('emiCase', extra.emiCase || false, { shouldValidate: true, shouldDirty: true });
+    setValue('emiGateway', extra.emiGateway ? extra.emiGateway.trim() : '', { shouldValidate: true, shouldDirty: true });
+    const cleanEmiDate = normalizeInstallmentDay(extra.emiDate);
+    setValue('emiDate', cleanEmiDate, { shouldValidate: true, shouldDirty: true });
     setValue('emiPremium', extra.emiPremium || undefined);
     setValue('phcRequired', extra.phcRequired || false);
     setValue('phcAmount', extra.phcAmount || undefined);
@@ -2550,7 +2697,6 @@ export default function Policies() {
     setValue('noOfInstallments', extra.noOfInstallments || (p as any).noOfInstallments || undefined);
     setValue('lastInstallmentDate', extra.lastInstallmentDate || extra.lastPremiumDate || p.lastPremiumDate || '');
     setValue('lastPremiumDate', extra.lastPremiumDate || extra.lastInstallmentDate || p.lastPremiumDate || '');
-    setValue('emiDate', extra.emiDate || '');
 
     if (extra.phcAmount || extra.phcStatus || extra.phcInsuredPerson || extra.phcStage) {
       setPhcExtraDetails(prev => ({
@@ -2706,6 +2852,9 @@ export default function Policies() {
       installmentAmount: 0,
       lastInstallmentDate: todayStr,
       lastPremiumDate: todayStr,
+      emiCase: false,
+      emiGateway: '',
+      emiDate: '',
       notes: '',
       policyNumber: '',
       sumAssured: undefined,
@@ -3073,7 +3222,10 @@ export default function Policies() {
     ];
 
     colConfigs.forEach(col => {
-      if (visibleColumns[col.key] !== false) {
+      const isVisible = visibleColumns[col.key] !== undefined
+        ? visibleColumns[col.key]
+        : isColVisibleInSettings((col as any).label || col.key);
+      if (isVisible) {
         cols.push(col as any);
       }
     });
@@ -3130,7 +3282,11 @@ export default function Policies() {
     if (body.premiumPaymentPeriod) extraNotes += `\nPremium Payment Period: ${body.premiumPaymentPeriod} Years`;
     if (body.lastPremiumDate) extraNotes += `\nLast Premium Date: ${body.lastPremiumDate}`;
     if (body.emiCase) {
-      extraNotes += `\nEMI Case: Yes (Gateway: ${body.emiGateway || 'N/A'}, Date: ${body.emiDate || 'N/A'}, Premium: ₹${body.emiPremium || '0'})`;
+      const emiGw = (body.emiGateway || '').trim();
+      const emiDt = (body.emiDate || '').trim();
+      extraNotes += `\nEMI Case: Yes (Gateway: ${emiGw || 'N/A'}, Date: ${emiDt || 'N/A'}, Premium: ₹${body.emiPremium || '0'})`;
+      if (emiGw) extraNotes += `\nInstallment Gateway: ${emiGw}`;
+      if (emiDt) extraNotes += `\nInstallment Date: ${emiDt}`;
     }
     if (body.phcRequired || watchPhcRequired) {
       extraNotes += `\nPreventive Health Checkup: Yes (Amount: ₹${body.phcAmount || '0'}, Status: ${body.phcStatus || 'N/A'}, Claim Settled: ${body.phcClaimSettled ? 'Yes' : 'No'}${phcExtraDetails.insuredPersonName ? `, Insured Person: ${phcExtraDetails.insuredPersonName}` : ''})`;
@@ -3325,18 +3481,45 @@ export default function Policies() {
       if (body.firstPremiumDate) extraNotes += `\nFirst Premium Date: ${body.firstPremiumDate}`;
       if (body.premiumPaymentPeriod) extraNotes += `\nPremium Payment Period: ${body.premiumPaymentPeriod} Years`;
       if (finalLastInstDate) extraNotes += `\nLast Premium Date: ${finalLastInstDate}`;
-      if (body.downpaymentAmount) extraNotes += `\nDownpayment Amount: ₹${body.downpaymentAmount}`;
-      if (body.processingFee) extraNotes += `\nProcessing Fee (incl. GST): ₹${body.processingFee}`;
-      if (body.installmentAmount || body.emiPremium) {
-        const amt = body.installmentAmount || body.emiPremium;
-        extraNotes += `\nInstallment Amount: ₹${amt}`;
+      const finalDownpayment = body.downpaymentAmount !== undefined && body.downpaymentAmount !== null && (body.downpaymentAmount as any) !== ''
+        ? body.downpaymentAmount
+        : watch('downpaymentAmount');
+      if (finalDownpayment !== undefined && finalDownpayment !== null && (finalDownpayment as any) !== '' && Number(finalDownpayment) > 0) {
+        extraNotes += `\nDownpayment Amount: ₹${finalDownpayment}`;
+      }
+      const finalProcessingFee = body.processingFee !== undefined && body.processingFee !== null && (body.processingFee as any) !== ''
+        ? body.processingFee
+        : watch('processingFee');
+      if (finalProcessingFee !== undefined && finalProcessingFee !== null && (finalProcessingFee as any) !== '' && Number(finalProcessingFee) > 0) {
+        extraNotes += `\nProcessing Fee (incl. GST): ₹${finalProcessingFee}`;
+      }
+      const finalInstAmt = body.installmentAmount || body.emiPremium || watch('installmentAmount') || watch('emiPremium');
+      if (finalInstAmt) {
+        extraNotes += `\nInstallment Amount: ₹${finalInstAmt}`;
       }
       if (finalNoOfInst) extraNotes += `\nNo. of Installments: ${finalNoOfInst}`;
       if (finalLastInstDate) {
         extraNotes += `\nLast Installment Date: ${finalLastInstDate}`;
       }
-      if (body.emiCase) {
-        extraNotes += `\nEMI Case: Yes`;
+      const formVals = getValues ? getValues() : ({} as any);
+      const finalEmiCase = body.emiCase !== undefined ? body.emiCase : (formVals.emiCase !== undefined ? formVals.emiCase : watchEmiCase);
+      const finalEmiGateway = (body.emiGateway || formVals.emiGateway || watchEmiGateway || '').trim();
+      const rawEmiDate = body.emiDate || formVals.emiDate || watchEmiDate || '';
+      const finalEmiDate = normalizeInstallmentDay(rawEmiDate);
+
+      if (finalEmiCase) {
+        const emiParts: string[] = [];
+        if (finalEmiGateway && finalEmiGateway.toUpperCase() !== 'N/A') emiParts.push(`Gateway: ${finalEmiGateway}`);
+        if (finalEmiDate) emiParts.push(`Date: ${finalEmiDate}`);
+        if (finalInstAmt) emiParts.push(`Premium: ₹${finalInstAmt}`);
+        extraNotes += `\nEMI Case: Yes${emiParts.length > 0 ? ` (${emiParts.join(', ')})` : ''}`;
+        if (finalEmiGateway && finalEmiGateway.toUpperCase() !== 'N/A') extraNotes += `\nInstallment Gateway: ${finalEmiGateway}`;
+        if (finalEmiDate) extraNotes += `\nInstallment Date: ${finalEmiDate}`;
+      } else if (finalEmiCase === false) {
+        extraNotes += `\nEMI Case: No`;
+      }
+      if (finalEmiDate && !finalEmiCase) {
+        extraNotes += `\nInstallment Date: ${finalEmiDate}`;
       }
       if (body.phcRequired || watchPhcRequired) {
         extraNotes += `\nPreventive Health Checkup: Yes (Amount: ₹${body.phcAmount || '0'}, Status: ${body.phcStatus || 'N/A'}, Claim Settled: ${body.phcClaimSettled ? 'Yes' : 'No'}${phcExtraDetails.insuredPersonName ? `, Insured Person: ${phcExtraDetails.insuredPersonName}` : ''})`;
@@ -3712,7 +3895,9 @@ export default function Policies() {
                   </button>
                   {colPickerOpen && (
                     <div className="absolute right-0 mt-2 w-64 max-h-80 overflow-y-auto bg-white border border-slate-200/90 rounded-2xl shadow-2xl p-3 z-50 text-xs space-y-2 animate-fadeIn">
-                      <p className="font-extrabold text-slate-400 uppercase tracking-wider mb-1 text-[10px]">Show Columns</p>
+                      <div className="pb-1.5 border-b border-slate-100">
+                        <p className="font-extrabold text-slate-400 uppercase tracking-wider text-[10px]">Show Columns</p>
+                      </div>
                       {[
                         { key: 'proposerName', label: 'Proposer Name' },
                         { key: 'proposerContact', label: 'Proposer Contact No.' },
@@ -3742,13 +3927,19 @@ export default function Policies() {
                         { key: 'lastInstallmentDate', label: 'Last Installment Date' },
                         { key: 'nomineeDetails', label: 'Nominee Details' },
                       ].map(col => {
-                        const isVisible = visibleColumns[col.key] !== false;
+                        const isVisible = visibleColumns[col.key] !== undefined
+                          ? visibleColumns[col.key]
+                          : isColVisibleInSettings(col.label || col.key);
                         return (
                           <label key={col.key} className="flex items-center gap-2 cursor-pointer font-bold text-slate-700 hover:text-blue-600 transition-colors">
                             <input
                               type="checkbox"
                               checked={isVisible}
-                              onChange={() => setVisibleColumns(prev => ({ ...prev, [col.key]: !isVisible }))}
+                              onChange={() => {
+                                const next = !isVisible;
+                                setVisibleColumns(prev => ({ ...prev, [col.key]: next }));
+                                toggleColInSettings(col.label || col.key);
+                              }}
                               className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
                             />
                             <span>{col.label}</span>
@@ -4461,6 +4652,9 @@ export default function Policies() {
 
           <div className="space-y-4">
             <fieldset disabled={isViewMode} className="min-w-0 border-0 p-0 m-0 w-full">
+              <input type="hidden" {...register('emiCase')} />
+              <input type="hidden" {...register('emiGateway')} />
+              <input type="hidden" {...register('emiDate')} />
               {/* ════════════════ TAB 1: Policy Details + Plan Details ════════════════ */}
               {activePolicyTab === 'policyPlan' && (
                 <div className="space-y-4 animate-fadeIn">
@@ -4528,70 +4722,7 @@ export default function Policies() {
                                   contactsService.get(c.id).then((res: any) => {
                                     const fullContact = res?.data?.data || res?.data || res;
                                     if (fullContact) {
-                                      const cFullName = [fullContact.firstName, fullContact.middleName, fullContact.lastName]
-                                        .filter(Boolean)
-                                        .join(' ')
-                                        .trim()
-                                        .toLowerCase();
-                                      const relTypes: Record<string, string> = {
-                                        SPOUSE: 'Spouse', SON: 'Son', DAUGHTER: 'Daughter',
-                                        FATHER: 'Father', MOTHER: 'Mother', BROTHER: 'Brother',
-                                        SISTER: 'Sister', GRANDFATHER: 'Grandfather', GRANDMOTHER: 'Grandmother',
-                                        GRANDSON: 'Grandson', GRANDDAUGHTER: 'Granddaughter',
-                                        GRANDPARENT: 'Grandparent', GRANDCHILD: 'Grandchild', UNCLE: 'Uncle', AUNT: 'Aunt / Unty', NEPHEW: 'Nephew', NIECE: 'Niece',
-                                        OTHER: 'Other',
-                                      };
-                                      const combinedRels = [
-                                        ...(fullContact.relationships || []).map((rel: any) => ({
-                                          member: rel.relatedContact,
-                                          relType: rel.relationshipType,
-                                          createdAt: rel.createdAt,
-                                        })),
-                                        ...(fullContact.relatedTo || []).map((rel: any) => ({
-                                          member: rel.primaryContact,
-                                          relType: rel.relationshipType,
-                                          createdAt: rel.createdAt,
-                                        })),
-                                      ];
-                                      const familyMembers: ConnectedPersonItem[] = [];
-                                      combinedRels.forEach((rel: any) => {
-                                        const member = rel.member;
-                                        if (!member || member.id === fullContact.id) return;
-                                        const memName = [member.firstName, member.middleName, member.lastName]
-                                          .filter(Boolean)
-                                          .join(' ')
-                                          .trim();
-                                        if (!memName || memName.toLowerCase() === cFullName) return;
-                                        const rType = String(rel.relType || '').toUpperCase();
-                                        familyMembers.push({
-                                          id: `contact-${member.id}`,
-                                          addedAt: rel.createdAt || member.createdAt || new Date().toISOString(),
-                                          name: memName,
-                                          relationship: relTypes[rType] || 'Dependent',
-                                          contactNo: cleanConnectedPhone(member.phone || member.alternatePhone || member.mobile || member.whatsappNumber || ''),
-                                          dob: member.dateOfBirth ? String(member.dateOfBirth).slice(0, 10) : '',
-                                          gender: ['MALE', 'FEMALE', 'OTHER'].includes(String(member.gender).toUpperCase()) ? String(member.gender).toUpperCase() : 'MALE',
-                                          isCovered: true,
-                                          isNominee: false,
-                                          nomineeName: '',
-                                          nomineeRelation: 'Spouse',
-                                          nomineeContact: '',
-                                          nomineeDob: '',
-                                          nomineePercentage: 100,
-                                        });
-                                      });
-
-                                      setConnectedPersons(prev => {
-                                        const manual = prev.filter(p => !p.id.startsWith('contact-') && p.name.trim().toLowerCase() !== cFullName && p.relationship?.toLowerCase() !== 'self');
-                                        const manualNames = new Set(manual.map(p => p.name.trim().toLowerCase()));
-                                        const uniqueFamily = familyMembers.filter(p => !manualNames.has(p.name.trim().toLowerCase()));
-                                        return [...manual, ...uniqueFamily];
-                                      });
-
-                                      const cCity = fullContact.addresses?.find((a: any) => a.isPrimary)?.city || fullContact.addresses?.[0]?.city || fullContact.city || '';
-                                      if (cCity && cCity !== 'N/A') {
-                                        setPolicyZoneLocationCity(cCity);
-                                      }
+                                      syncContactFamilyMembers(fullContact);
                                     }
                                   }).catch(() => {});
                                 }} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm hover:bg-blue-50 cursor-pointer">
@@ -5287,7 +5418,7 @@ export default function Policies() {
                               Installment Date (01 to 31st)
                             </label>
                             <CustomSelect
-                              value={watchEmiDate ? String(watchEmiDate).padStart(2, '0') : ''}
+                              value={normalizeInstallmentDay(watchEmiDate || (getValues ? getValues('emiDate') : ''))}
                               onChange={val => {
                                 setValue('emiDate', val, { shouldValidate: true, shouldDirty: true });
                                 recalculateLastInstallment({ day: val });
@@ -5473,7 +5604,7 @@ export default function Policies() {
                               Installment Date (01 to 31st)
                             </label>
                             <CustomSelect
-                              value={watchEmiDate ? String(watchEmiDate).padStart(2, '0') : ''}
+                              value={normalizeInstallmentDay(watchEmiDate || (getValues ? getValues('emiDate') : ''))}
                               onChange={val => {
                                 setValue('emiDate', val, { shouldValidate: true, shouldDirty: true });
                                 recalculateLastInstallment({ day: val });
@@ -5597,15 +5728,28 @@ export default function Policies() {
                                 Installment Gateway
                               </label>
                               <CustomSelect
-                                value={watch('emiGateway') || ''}
-                                onChange={val => setValue('emiGateway', val)}
+                                value={(() => {
+                                  const currentGw = watchEmiGateway || (getValues ? getValues('emiGateway') : '') || '';
+                                  if (!currentGw || currentGw.toUpperCase() === 'N/A') return '';
+                                  const base = ['FIBE', 'Shopse', 'BimaPay'];
+                                  const m = base.find(b => b.toLowerCase() === currentGw.toLowerCase());
+                                  return m || currentGw;
+                                })()}
+                                onChange={val => setValue('emiGateway', val, { shouldValidate: true, shouldDirty: true })}
                                 placeholder="Select Gateway"
-                                options={[
-                                  { value: '', label: 'Select Gateway' },
-                                  { value: 'FIBE', label: 'FIBE' },
-                                  { value: 'Shopse', label: 'Shopse' },
-                                  { value: 'BimaPay', label: 'BimaPay' },
-                                ]}
+                                options={(() => {
+                                  const gw = watchEmiGateway || (getValues ? getValues('emiGateway') : '') || '';
+                                  const base = [
+                                    { value: '', label: 'Select Gateway' },
+                                    { value: 'FIBE', label: 'FIBE' },
+                                    { value: 'Shopse', label: 'Shopse' },
+                                    { value: 'BimaPay', label: 'BimaPay' },
+                                  ];
+                                  if (gw && gw.toUpperCase() !== 'N/A' && !['fibe', 'shopse', 'bimapay'].includes(gw.toLowerCase())) {
+                                    base.push({ value: gw, label: gw });
+                                  }
+                                  return base;
+                                })()}
                               />
                             </div>
                             <div>
@@ -5613,8 +5757,11 @@ export default function Policies() {
                                 Installment Date (01 to 31st)
                               </label>
                               <CustomSelect
-                                value={watch('emiDate') ? String(watch('emiDate')).padStart(2, '0') : ''}
-                                onChange={val => setValue('emiDate', val)}
+                                value={normalizeInstallmentDay(watchEmiDate || (getValues ? getValues('emiDate') : ''))}
+                                onChange={val => {
+                                  setValue('emiDate', val, { shouldValidate: true, shouldDirty: true });
+                                  recalculateLastInstallment({ day: val });
+                                }}
                                 placeholder="Select Date"
                                 options={[
                                   { value: '', label: 'Select Date' },
@@ -5630,7 +5777,13 @@ export default function Policies() {
                                 type="number"
                                 min={1}
                                 max={120}
-                                {...register('noOfInstallments')}
+                                value={watchNoOfInstallments !== undefined && watchNoOfInstallments !== null ? watchNoOfInstallments : ''}
+                                onChange={e => {
+                                  const valStr = e.target.value;
+                                  const val = valStr === '' ? '' : parseInt(valStr, 10);
+                                  setValue('noOfInstallments', val as any, { shouldValidate: true, shouldDirty: true });
+                                  recalculateLastInstallment({ noOfInst: val || 1 });
+                                }}
                                 className="input w-full h-10 text-xs rounded-xl bg-white border border-blue-200 font-bold text-slate-800"
                                 placeholder="e.g. 12"
                               />
@@ -5640,7 +5793,7 @@ export default function Policies() {
                                 Last Installment Date
                               </label>
                               <DatePicker
-                                value={watch('lastPremiumDate')}
+                                value={watchLastInstallmentDate || watchLastPremiumDate || watch('lastPremiumDate') || ''}
                                 onDateChange={val => {
                                   setValue('lastPremiumDate', val, { shouldValidate: true, shouldDirty: true });
                                   setValue('lastInstallmentDate', val, { shouldValidate: true, shouldDirty: true });
@@ -6001,6 +6154,53 @@ export default function Policies() {
                       </div>
                     )}
                   </div>
+
+                  {/* Section 7: Preventive Health Checkup Option */}
+                  <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-visible">
+                    <div
+                      className="bg-gradient-to-r from-teal-50/80 via-slate-50 to-emerald-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none rounded-t-2xl"
+                      onClick={() => setIsPhcCollapsed(prev => !prev)}
+                    >
+                      <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider flex flex-wrap items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-gradient-to-br from-teal-600 to-emerald-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">7</span>
+                        Preventive Health Checkup
+                      </h4>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[10px] text-slate-700 font-bold">Health Benefit Option</span>
+                        <ChevronDown
+                          size={16}
+                          className={`text-slate-500 transition-transform duration-200 ${isPhcCollapsed ? 'rotate-180' : ''}`}
+                        />
+                      </div>
+                    </div>
+
+                    {!isPhcCollapsed && (
+                      <div className="p-4 space-y-3 animate-fadeIn">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                          <div>
+                            <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                              Preventive Health Checkup?
+                            </label>
+                            <CustomSelect
+                              value={(watchPhcRequired ?? true) ? 'yes' : 'no'}
+                              onChange={val => {
+                                const isYes = val === 'yes';
+                                setValue('phcRequired', isYes, { shouldValidate: true, shouldDirty: true });
+                                if (isYes && !selectedCompanyCategory) {
+                                  handleCompanyCategoryChange('Health');
+                                }
+                              }}
+                              placeholder="Select Option"
+                              options={[
+                                { value: 'yes', label: 'Yes' },
+                                { value: 'no', label: 'No' },
+                              ]}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -6144,6 +6344,16 @@ export default function Policies() {
                                   { value: 'Mother', label: 'Mother' },
                                   { value: 'Brother', label: 'Brother' },
                                   { value: 'Sister', label: 'Sister' },
+                                  { value: 'Uncle', label: 'Uncle' },
+                                  { value: 'Aunt / Unty', label: 'Aunt / Unty' },
+                                  { value: 'Nephew', label: 'Nephew' },
+                                  { value: 'Niece', label: 'Niece' },
+                                  { value: 'Child', label: 'Child' },
+                                  { value: 'Grandfather', label: 'Grandfather' },
+                                  { value: 'Grandmother', label: 'Grandmother' },
+                                  { value: 'Grandson', label: 'Grandson' },
+                                  { value: 'Granddaughter', label: 'Granddaughter' },
+                                  { value: 'In-Law', label: 'In-Law' },
                                   { value: 'Dependent', label: 'Dependent' },
                                   { value: 'Other', label: 'Other' },
                                 ]}
