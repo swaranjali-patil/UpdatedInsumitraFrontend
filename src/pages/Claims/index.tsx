@@ -490,9 +490,54 @@ export interface ConnectedPersonOption {
   source: 'policy_nominee' | 'policy_connected' | 'contact_family';
 }
 
+const normalizeNomineeRelationship = (rawRel?: string, name?: string, gender?: string) => {
+  if (!rawRel) return '';
+  const upper = rawRel.trim().toUpperCase().replace(/\s+/g, '_');
+  const map: Record<string, string> = {
+    FATHER: 'Father',
+    MOTHER: 'Mother',
+    BROTHER: 'Brother',
+    SISTER: 'Sister',
+    SPOUSE: 'Spouse',
+    HUSBAND: 'Husband',
+    WIFE: 'Wife',
+    SON: 'Son',
+    DAUGHTER: 'Daughter',
+    GRANDFATHER: 'Grandfather',
+    GRANDMOTHER: 'Grandmother',
+    GRANDSON: 'Grandson',
+    GRANDDAUGHTER: 'Granddaughter',
+    UNCLE: 'Uncle',
+    AUNT: 'Aunt',
+    NEPHEW: 'Nephew',
+    NIECE: 'Niece',
+    CHILD: 'Child',
+    PARENT: 'Parent',
+    IN_LAW: 'In-Law',
+  };
+  let rel = map[upper] || (rawRel.charAt(0).toUpperCase() + rawRel.slice(1));
+  const lowerName = (name || '').toLowerCase();
+  const isMale = (gender || '').toUpperCase() === 'MALE' ||
+    /\b(sanjay|sanket|rahul|amit|ajay|vijay|ramesh|suresh|mahesh|rajesh|deepak|pradeep|sunil|anil|manoj)\b/i.test(lowerName);
+  const isFemale = (gender || '').toUpperCase() === 'FEMALE' ||
+    /\b(sandhya|suhana|sunita|pooja|priya|anita|geeta|seema|rekha|neha|shweta|kavita)\b/i.test(lowerName);
+
+  if (isMale) {
+    if (rel.toLowerCase() === 'mother') rel = 'Father';
+    if (rel.toLowerCase() === 'sister') rel = 'Brother';
+    if (rel.toLowerCase() === 'daughter') rel = 'Son';
+    if (rel.toLowerCase() === 'wife') rel = 'Husband';
+  } else if (isFemale) {
+    if (rel.toLowerCase() === 'father') rel = 'Mother';
+    if (rel.toLowerCase() === 'brother') rel = 'Sister';
+    if (rel.toLowerCase() === 'son') rel = 'Daughter';
+    if (rel.toLowerCase() === 'husband') rel = 'Wife';
+  }
+  return rel;
+};
+
 export function extractConnectedPersonsAndNominees(policy?: any, contact?: any): ConnectedPersonOption[] {
   const result: ConnectedPersonOption[] = [];
-  const seenNames = new Set<string>();
 
   const addPerson = (person: {
     name?: string;
@@ -501,6 +546,7 @@ export function extractConnectedPersonsAndNominees(policy?: any, contact?: any):
     dob?: string;
     percentage?: string | number;
     comment?: string;
+    gender?: string;
     source: ConnectedPersonOption['source'];
   }) => {
     const cleanName = (person.name || '').trim();
@@ -512,6 +558,7 @@ export function extractConnectedPersonsAndNominees(policy?: any, contact?: any):
     if (person.dob) {
       cleanDob = formatDateForInput(person.dob);
     }
+    const cleanRel = normalizeNomineeRelationship(person.relationship, cleanName, person.gender);
 
     const existing = result.find(p => p.name.trim().toLowerCase() === nameKey);
     if (existing) {
@@ -530,13 +577,25 @@ export function extractConnectedPersonsAndNominees(policy?: any, contact?: any):
       }
       const genericRels = ['dependent', 'nominee', 'member', 'other', 'in_law', 'in law', 'in-law', ''];
       const existingRelLower = (existing.relationship || '').trim().toLowerCase();
-      const newRel = (person.relationship || '').trim();
+      const newRel = cleanRel;
       const newRelLower = newRel.toLowerCase();
 
-      if (genericRels.includes(existingRelLower) && newRel && !genericRels.includes(newRelLower)) {
+      const isGenderContradiction =
+        (existingRelLower === 'mother' && newRelLower === 'father') ||
+        (existingRelLower === 'sister' && newRelLower === 'brother') ||
+        (existingRelLower === 'daughter' && newRelLower === 'son') ||
+        (existingRelLower === 'wife' && newRelLower === 'husband');
+
+      if (person.source === 'contact_family' && newRel) {
+        existing.relationship = newRel;
+      } else if (isGenderContradiction && newRel) {
+        existing.relationship = newRel;
+      } else if (genericRels.includes(existingRelLower) && newRel && !genericRels.includes(newRelLower)) {
         existing.relationship = newRel;
       } else if (!existing.relationship && newRel) {
         existing.relationship = newRel;
+      } else {
+        existing.relationship = normalizeNomineeRelationship(existing.relationship, existing.name);
       }
       if (person.source === 'policy_nominee') {
         existing.source = 'policy_nominee';
@@ -546,7 +605,7 @@ export function extractConnectedPersonsAndNominees(policy?: any, contact?: any):
 
     result.push({
       name: cleanName,
-      relationship: (person.relationship || '').trim(),
+      relationship: cleanRel,
       phone: cleanPhone,
       dob: cleanDob,
       percentage: person.percentage !== undefined && person.percentage !== null && person.percentage !== '' ? person.percentage : '',
@@ -555,7 +614,112 @@ export function extractConnectedPersonsAndNominees(policy?: any, contact?: any):
     });
   };
 
-  // 1. Extract from policy notes (Connected Person lines and Nominee Details lines)
+  // 1. Extract from contact.relationships (Family in Contact section - authoritative ground truth)
+  if (Array.isArray(contact?.relationships)) {
+    contact.relationships.forEach((r: any) => {
+      const c = r.relatedContact || r.contact || {};
+      const fullName = [c.firstName, c.middleName, c.lastName].filter(Boolean).join(' ').trim() || c.name || '';
+      addPerson({
+        name: fullName,
+        relationship: r.relationshipType || r.relation || r.relationship || '',
+        phone: c.phone || c.alternatePhone || c.mobile || c.whatsappNumber || '',
+        dob: c.dateOfBirth || c.dob || '',
+        gender: c.gender,
+        source: 'contact_family',
+      });
+    });
+  }
+
+  // 1b. Extract from contact.relatedTo (Reverse Family relationships)
+  if (Array.isArray(contact?.relatedTo)) {
+    contact.relatedTo.forEach((r: any) => {
+      const c = r.primaryContact || {};
+      const fullName = [c.firstName, c.middleName, c.lastName].filter(Boolean).join(' ').trim() || c.name || '';
+      addPerson({
+        name: fullName,
+        relationship: r.relationshipType || r.relation || r.relationship || '',
+        phone: c.phone || c.alternatePhone || c.mobile || c.whatsappNumber || '',
+        dob: c.dateOfBirth || c.dob || '',
+        gender: c.gender,
+        source: 'contact_family',
+      });
+    });
+  }
+
+  // 1c. Extract from contact.familyMembers
+  if (Array.isArray(contact?.familyMembers)) {
+    contact.familyMembers.forEach((m: any) => {
+      const fullName = [m.firstName, m.middleName, m.lastName].filter(Boolean).join(' ').trim() || m.name || '';
+      addPerson({
+        name: fullName,
+        relationship: m.relation || m.relationship || m.relationshipType || '',
+        phone: m.phone || m.alternatePhone || m.contactNo || m.mobile || m.whatsappNumber || '',
+        dob: m.dob || m.dateOfBirth || '',
+        gender: m.gender,
+        source: 'contact_family',
+      });
+    });
+  }
+
+  // 2. Extract from policy.nominees
+  let pNominees: any[] = [];
+  if (Array.isArray(policy?.nominees)) {
+    pNominees = policy.nominees;
+  } else if (typeof policy?.nominees === 'string') {
+    try { pNominees = JSON.parse(policy.nominees); } catch {}
+  }
+  pNominees.forEach((n: any) => {
+    addPerson({
+      name: n.name || n.nomineeName || n.fullName || (n.firstName ? `${n.firstName || ''} ${n.lastName || ''}`.trim() : ''),
+      relationship: n.relationship || n.relationshipType || n.relation || '',
+      phone: n.phone || n.contactNo || n.mobile || n.contact || '',
+      dob: n.dob || n.dateOfBirth || '',
+      percentage: n.percentage ?? n.sharePercent ?? n.share ?? '',
+      comment: n.comment || '',
+      gender: n.gender,
+      source: 'policy_nominee',
+    });
+  });
+
+  // 3. Extract from policy.connectedPersons
+  let pConnected: any[] = [];
+  if (Array.isArray(policy?.connectedPersons)) {
+    pConnected = policy.connectedPersons;
+  } else if (typeof policy?.connectedPersons === 'string') {
+    try { pConnected = JSON.parse(policy.connectedPersons); } catch {}
+  }
+  pConnected.forEach((n: any) => {
+    addPerson({
+      name: n.name || n.nomineeName || n.fullName || (n.firstName ? `${n.firstName || ''} ${n.lastName || ''}`.trim() : ''),
+      relationship: n.relationship || n.relationshipType || n.relation || '',
+      phone: n.phone || n.contactNo || n.mobile || n.contact || '',
+      dob: n.dob || n.dateOfBirth || '',
+      percentage: n.percentage ?? n.sharePercent ?? n.share ?? '',
+      comment: n.comment || '',
+      gender: n.gender,
+      source: 'policy_connected',
+    });
+  });
+
+  // 4. Extract from policy.members
+  let pMembers: any[] = [];
+  if (Array.isArray(policy?.members)) {
+    pMembers = policy.members;
+  } else if (typeof policy?.members === 'string') {
+    try { pMembers = JSON.parse(policy.members); } catch {}
+  }
+  pMembers.forEach((m: any) => {
+    addPerson({
+      name: m.name || m.fullName || [m.firstName, m.middleName, m.lastName].filter(Boolean).join(' ').trim(),
+      relationship: m.relationship || m.relation || m.relationshipType || '',
+      phone: m.phone || m.contactNo || m.mobile || '',
+      dob: m.dob || m.dateOfBirth || '',
+      gender: m.gender,
+      source: 'policy_connected',
+    });
+  });
+
+  // 5. Extract from policy notes (Connected Person lines and Nominee Details lines)
   if (policy?.notes && typeof policy.notes === 'string') {
     const lines = policy.notes.split(/\r?\n/);
     lines.forEach((line: string) => {
@@ -581,12 +745,14 @@ export function extractConnectedPersonsAndNominees(policy?: any, contact?: any):
         const relM = line.match(/Relationship:\s*([^,]+)/i);
         const contactM = line.match(/Contact:\s*([^,]+)/i);
         const dobM = line.match(/DoB:\s*([^,]+)/i);
+        const genderM = line.match(/Gender:\s*([^,]+)/i);
         if (nameM) {
           addPerson({
             name: nameM[1],
             relationship: relM ? relM[1] : '',
             phone: contactM ? contactM[1] : '',
             dob: dobM && dobM[1].trim() !== 'N/A' ? dobM[1] : '',
+            gender: genderM ? genderM[1].trim() : undefined,
             source: 'policy_connected',
           });
         }
@@ -594,106 +760,7 @@ export function extractConnectedPersonsAndNominees(policy?: any, contact?: any):
     });
   }
 
-  // 2. Extract from policy.nominees
-  let pNominees: any[] = [];
-  if (Array.isArray(policy?.nominees)) {
-    pNominees = policy.nominees;
-  } else if (typeof policy?.nominees === 'string') {
-    try { pNominees = JSON.parse(policy.nominees); } catch {}
-  }
-  pNominees.forEach((n: any) => {
-    addPerson({
-      name: n.name || n.nomineeName || n.fullName || (n.firstName ? `${n.firstName || ''} ${n.lastName || ''}`.trim() : ''),
-      relationship: n.relationship || n.relationshipType || n.relation || '',
-      phone: n.phone || n.contactNo || n.mobile || n.contact || '',
-      dob: n.dob || n.dateOfBirth || '',
-      percentage: n.percentage ?? n.sharePercent ?? n.share ?? '',
-      comment: n.comment || '',
-      source: 'policy_nominee',
-    });
-  });
-
-  // 3. Extract from policy.connectedPersons
-  let pConnected: any[] = [];
-  if (Array.isArray(policy?.connectedPersons)) {
-    pConnected = policy.connectedPersons;
-  } else if (typeof policy?.connectedPersons === 'string') {
-    try { pConnected = JSON.parse(policy.connectedPersons); } catch {}
-  }
-  pConnected.forEach((n: any) => {
-    addPerson({
-      name: n.name || n.nomineeName || n.fullName || (n.firstName ? `${n.firstName || ''} ${n.lastName || ''}`.trim() : ''),
-      relationship: n.relationship || n.relationshipType || n.relation || '',
-      phone: n.phone || n.contactNo || n.mobile || n.contact || '',
-      dob: n.dob || n.dateOfBirth || '',
-      percentage: n.percentage ?? n.sharePercent ?? n.share ?? '',
-      comment: n.comment || '',
-      source: 'policy_connected',
-    });
-  });
-
-  // 4. Extract from policy.members
-  let pMembers: any[] = [];
-  if (Array.isArray(policy?.members)) {
-    pMembers = policy.members;
-  } else if (typeof policy?.members === 'string') {
-    try { pMembers = JSON.parse(policy.members); } catch {}
-  }
-  pMembers.forEach((m: any) => {
-    addPerson({
-      name: m.name || m.fullName || [m.firstName, m.middleName, m.lastName].filter(Boolean).join(' ').trim(),
-      relationship: m.relationship || m.relation || m.relationshipType || '',
-      phone: m.phone || m.contactNo || m.mobile || '',
-      dob: m.dob || m.dateOfBirth || '',
-      source: 'policy_connected',
-    });
-  });
-
-  // 5. Extract from contact.relationships (Family in Contact section)
-  if (Array.isArray(contact?.relationships)) {
-    contact.relationships.forEach((r: any) => {
-      const c = r.relatedContact || r.contact || {};
-      const fullName = [c.firstName, c.middleName, c.lastName].filter(Boolean).join(' ').trim() || c.name || '';
-      addPerson({
-        name: fullName,
-        relationship: r.relationshipType || r.relation || r.relationship || '',
-        phone: c.phone || c.alternatePhone || c.mobile || c.whatsappNumber || '',
-        dob: c.dateOfBirth || c.dob || '',
-        source: 'contact_family',
-      });
-    });
-  }
-
-  // 5b. Extract from contact.relatedTo (Reverse Family relationships)
-  if (Array.isArray(contact?.relatedTo)) {
-    contact.relatedTo.forEach((r: any) => {
-      const c = r.primaryContact || {};
-      const fullName = [c.firstName, c.middleName, c.lastName].filter(Boolean).join(' ').trim() || c.name || '';
-      addPerson({
-        name: fullName,
-        relationship: r.relationshipType || r.relation || r.relationship || '',
-        phone: c.phone || c.alternatePhone || c.mobile || c.whatsappNumber || '',
-        dob: c.dateOfBirth || c.dob || '',
-        source: 'contact_family',
-      });
-    });
-  }
-
-  // 6. Extract from contact.familyMembers
-  if (Array.isArray(contact?.familyMembers)) {
-    contact.familyMembers.forEach((m: any) => {
-      const fullName = [m.firstName, m.middleName, m.lastName].filter(Boolean).join(' ').trim() || m.name || '';
-      addPerson({
-        name: fullName,
-        relationship: m.relation || m.relationship || m.relationshipType || '',
-        phone: m.phone || m.alternatePhone || m.contactNo || m.mobile || m.whatsappNumber || '',
-        dob: m.dob || m.dateOfBirth || '',
-        source: 'contact_family',
-      });
-    });
-  }
-
-  // 7. Extract from contact.connectedPersons
+  // 6. Extract from contact.connectedPersons
   if (Array.isArray(contact?.connectedPersons)) {
     contact.connectedPersons.forEach((m: any) => {
       const fullName = [m.firstName, m.middleName, m.lastName].filter(Boolean).join(' ').trim() || m.name || '';
@@ -702,18 +769,23 @@ export function extractConnectedPersonsAndNominees(policy?: any, contact?: any):
         relationship: m.relation || m.relationship || m.relationshipType || '',
         phone: m.phone || m.alternatePhone || m.contactNo || m.mobile || m.whatsappNumber || '',
         dob: m.dob || m.dateOfBirth || '',
+        gender: m.gender,
         source: 'contact_family',
       });
     });
   }
 
-  return result;
+  return result.map(p => ({
+    ...p,
+    relationship: normalizeNomineeRelationship(p.relationship, p.name),
+  }));
 }
 
-function ClaimEditForm({ initial, isPending, onSave, onCancel, employees }: {
+export function ClaimEditForm({ initial, isPending, onSave, onCancel, employees, zIndexClass }: {
   initial: Claim; isPending: boolean;
   onSave: (body: any, files?: any) => void; onCancel: () => void;
   employees: any[];
+  zIndexClass?: string;
 }) {
   const user = useAuthStore(s => s.user);
   const notesData = getClaimNotesData(initial.notes);
@@ -804,15 +876,34 @@ function ClaimEditForm({ initial, isPending, onSave, onCancel, employees }: {
     if (availableConnectedPersons.length === 0) return;
     setNominees(prev => {
       const hasValid = prev.some(n => (n?.name || '').trim() !== '');
-      if (hasValid) return prev;
-      return availableConnectedPersons.map(p => ({
-        name: p.name,
-        relationship: p.relationship,
-        phone: p.phone,
-        dob: p.dob,
-        percentage: p.percentage || (availableConnectedPersons.length === 1 ? '100' : ''),
-        comment: p.comment || '',
-      }));
+      if (!hasValid) {
+        return availableConnectedPersons.map(p => ({
+          name: p.name,
+          relationship: p.relationship,
+          phone: p.phone,
+          dob: p.dob,
+          percentage: p.percentage || (availableConnectedPersons.length === 1 ? '100' : ''),
+          comment: p.comment || '',
+        }));
+      }
+      return prev.map(n => {
+        const match = availableConnectedPersons.find(
+          p => p.name.trim().toLowerCase() === (n.name || '').trim().toLowerCase()
+        );
+        const curRel = (n.relationship || '').trim();
+        const normCurRel = normalizeNomineeRelationship(curRel, n.name);
+        if (match && match.relationship) {
+          const matchRel = match.relationship.trim();
+          if (!curRel || ['dependent', 'nominee', 'member', 'other', 'in_law'].includes(curRel.toLowerCase()) ||
+              (curRel.toLowerCase() === 'mother' && matchRel.toLowerCase() === 'father') ||
+              (curRel.toLowerCase() === 'father' && matchRel.toLowerCase() === 'mother') ||
+              (curRel.toLowerCase() === 'sister' && matchRel.toLowerCase() === 'brother') ||
+              (curRel.toLowerCase() === 'brother' && matchRel.toLowerCase() === 'sister')) {
+            return { ...n, relationship: matchRel, phone: n.phone || match.phone, dob: n.dob || match.dob };
+          }
+        }
+        return { ...n, relationship: normCurRel || n.relationship };
+      });
     });
   }, [availableConnectedPersons]);
 
@@ -1142,6 +1233,7 @@ function ClaimEditForm({ initial, isPending, onSave, onCancel, employees }: {
       closeOnEscapeAndBackdrop={false}
       title="Edit Claim" 
       size="2xl"
+      zIndexClass={zIndexClass}
       actions={
         <button
           type="button"
@@ -2045,21 +2137,42 @@ function ClaimEditForm({ initial, isPending, onSave, onCancel, employees }: {
                   </div>
                   <div>
                     <label className="label text-[10px]">Type of Management</label>
-                    <CustomSelect
-                      className="input mt-1 py-1 text-xs"
-                      value={typeOfManagement}
-                      onChange={val => setTypeOfManagement(val)}
-                      placeholder="Select Option"
-                      options={['Surgical', 'Medicinal', 'Other']}
-                    />
-                    {typeOfManagement === 'Other' && (
-                      <input
-                        type="text"
+                    {typeOfManagement !== 'Other' ? (
+                      <CustomSelect
                         className="input mt-1 py-1 text-xs"
-                        value={otherManagementDetail}
-                        onChange={e => setOtherManagementDetail(e.target.value)}
-                        placeholder="Specify type of management"
+                        value={typeOfManagement}
+                        onChange={val => {
+                          setTypeOfManagement(val);
+                          if (val !== 'Other') {
+                            setOtherManagementDetail('');
+                          }
+                        }}
+                        placeholder="Select Option"
+                        options={['Surgical', 'Medicinal', 'Other']}
                       />
+                    ) : (
+                      <div className="relative mt-1">
+                        <input
+                          type="text"
+                          className="input py-1 pr-7 text-xs w-full"
+                          value={otherManagementDetail}
+                          onChange={e => setOtherManagementDetail(e.target.value)}
+                          placeholder="Specify type of management"
+                          onKeyDown={e => { if (e.key === 'Enter') e.preventDefault(); }}
+                          autoFocus
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTypeOfManagement('');
+                            setOtherManagementDetail('');
+                          }}
+                          title="Back to list options"
+                          className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-blue-600 p-1 rounded hover:bg-slate-100 transition-colors cursor-pointer"
+                        >
+                          <ChevronDown size={14} />
+                        </button>
+                      </div>
                     )}
                   </div>
                   <div>
@@ -2598,6 +2711,7 @@ function ClaimEditForm({ initial, isPending, onSave, onCancel, employees }: {
               closeOnEscapeAndBackdrop={false}
               title="Upload Document"
               size="md"
+              zIndexClass={zIndexClass ? "z-[80]" : undefined}
             >
               <div className="space-y-4">
                 <div>
@@ -2723,7 +2837,13 @@ function ClaimEditForm({ initial, isPending, onSave, onCancel, employees }: {
   );
 }
 
-export default function Claims() {
+export interface ClaimsProps {
+  contactId?: string;
+  contact?: any;
+  embedded?: boolean;
+}
+
+export default function Claims({ contactId, contact, embedded = false }: ClaimsProps = {}) {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -2749,8 +2869,22 @@ export default function Claims() {
   const [page, setPage] = useState(1);
   const [modalOpen, setModalOpen] = useState(false);
   const [showColPicker, setShowColPicker] = useState(false);
-  const { isVisible: isColVisibleInSettings, toggleColumn: toggleColInSettings } = useTableColumnVisibility('claims');
-  const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>({});
+  const colPickerRef = useRef<HTMLDivElement>(null);
+  const { isVisible: isColVisibleInSettings, toggleColumn: toggleColInSettings, allColumns: allClaimsColumnsConfig } = useTableColumnVisibility('claims');
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (colPickerRef.current && !colPickerRef.current.contains(e.target as Node)) {
+        setShowColPicker(false);
+      }
+    };
+    if (showColPicker) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showColPicker]);
 
   useEffect(() => {
     if (searchParams.get('action') === 'add') {
@@ -2809,16 +2943,6 @@ export default function Claims() {
       setSearch('');
     }
   }, [searchParams]);
-
-  // Advanced Filters
-  const [filterStartDate, setFilterStartDate] = useState('');
-  const [filterEndDate, setFilterEndDate] = useState('');
-  const [filterCompany, setFilterCompany] = useState('');
-  const [filterHospital, setFilterHospital] = useState('');
-  const [filterClaimType, setFilterClaimType] = useState('ALL');
-  const [filterAgent, setFilterAgent] = useState('');
-  const [analyticsDuration, setAnalyticsDuration] = useState('ALL');
-  const [showAnalytics, setShowAnalytics] = useState(false);
 
   // In-Page Expandable Advanced Filters Card (Policy Page Style) & 20 Parameters
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -2925,6 +3049,27 @@ export default function Claims() {
     return rawClaims.filter((c: any) => {
       const notes = getClaimNotesData(c.notes);
 
+      // Filter by contact if provided (embedded in Contacts)
+      if (contactId) {
+        const cId = String(contactId);
+        const contactPolicyIds = new Set(
+          (contact?.policies || []).map((p: any) => p?.id).filter(Boolean)
+        );
+        const contactPhone = (contact?.phone || '').trim();
+        const contactFullName = `${contact?.firstName || ''} ${contact?.lastName || ''}`.trim().toLowerCase();
+        const claimClientName = `${c.contact?.firstName || ''} ${c.contact?.lastName || ''}`.trim().toLowerCase();
+
+        const isMatch = (
+          c.contactId === cId ||
+          c.contact?.id === cId ||
+          (c.policyId && contactPolicyIds.has(c.policyId)) ||
+          (c.policy?.id && contactPolicyIds.has(c.policy.id)) ||
+          (contactPhone && (c.contact?.phone === contactPhone || c.phone === contactPhone)) ||
+          (contactFullName && claimClientName && (contactFullName === claimClientName || contactFullName.includes(claimClientName) || claimClientName.includes(contactFullName)))
+        );
+        if (!isMatch) return false;
+      }
+
       // 1. Text Search (Client Full Name, Patient Name, Claim Number, Phone)
       const clientName = `${c.contact?.firstName || ''} ${c.contact?.lastName || ''}`.trim().toLowerCase();
       const patientName = `${notes.patientName || c.patientName || ''}`.trim().toLowerCase();
@@ -2939,54 +3084,6 @@ export default function Claims() {
         const uStatus = getClaimUiStatus(c);
         if (uStatus !== filterStatus) return false;
       }
-
-      // 3. Claim Type Filter (Analytics Top Bar)
-      if (filterClaimType !== 'ALL') {
-        if (c.claimType?.toLowerCase() !== filterClaimType.toLowerCase()) return false;
-      }
-
-      // 4. Company Filter (Analytics Top Bar)
-      if (filterCompany) {
-        const companyName = (c.policy?.plan?.company?.name || '').toLowerCase();
-        if (!companyName.includes(filterCompany.toLowerCase())) return false;
-      }
-
-      // 5. Hospital Filter (Analytics Top Bar)
-      if (filterHospital) {
-        const hospitalName = (notes.hospital || '').toLowerCase();
-        if (!hospitalName.includes(filterHospital.toLowerCase())) return false;
-      }
-
-      // 6. Date range Filter (Analytics Top Bar)
-      if (filterStartDate) {
-        const start = new Date(filterStartDate).setHours(0, 0, 0, 0);
-        const dateStr = c.intimatedAt || c.createdAt;
-        if (!dateStr) return false;
-        const date = new Date(dateStr).getTime();
-        if (isNaN(date) || date < start) return false;
-      }
-      if (filterEndDate) {
-        const end = new Date(filterEndDate).setHours(23, 59, 59, 999);
-        const dateStr = c.intimatedAt || c.createdAt;
-        if (!dateStr) return false;
-        const date = new Date(dateStr).getTime();
-        if (isNaN(date) || date > end) return false;
-      }
-
-      // 7. Duration shortcut filter
-      if (analyticsDuration === '30_DAYS') {
-        const diff = (Date.now() - new Date(c.intimatedAt || c.createdAt).getTime()) / 86400000;
-        if (diff > 30) return false;
-      } else if (analyticsDuration === '90_DAYS') {
-        const diff = (Date.now() - new Date(c.intimatedAt || c.createdAt).getTime()) / 86400000;
-        if (diff > 90) return false;
-      } else if (analyticsDuration === 'THIS_YEAR') {
-        const year = new Date(c.intimatedAt || c.createdAt).getFullYear();
-        if (year !== new Date().getFullYear()) return false;
-      }
-
-      // 8. Agent Filter
-      if (filterAgent && c.assignedEmployeeId !== filterAgent) return false;
 
       // --- DEDICATED 20 FILTERS EVALUATION ---
 
@@ -3184,13 +3281,13 @@ export default function Claims() {
       return true;
     });
   }, [
-    rawClaims, search, filterStatus, filterStartDate, filterEndDate, filterCompany, filterHospital, filterClaimType, analyticsDuration, filterAgent,
+    rawClaims, search, filterStatus,
     filterProposerName, filterCompanyName, filterPlanName, filterAssignedEmployee, filterAgentName,
     filterClaimTypeModal, filterClaimStatusModal, filterClaimedAmountRange, filterSettledMin, filterSettledMax,
     filterDeductedMin, filterDeductedMax, filterHospitalState, filterHospitalCity, filterHospitalNameModal,
     filterDoctorName, filterAdmissionDateFrom, filterAdmissionDateTo, filterDischargeDateFrom, filterDischargeDateTo,
     filterAffectedOrgan, filterRoomCategory, filterTypeOfManagement, filterTypeOfAdmission,
-    filterCreationDateFrom, filterCreationDateTo
+    filterCreationDateFrom, filterCreationDateTo, contactId, contact
   ]);
 
   // Client-side Sorting
@@ -3319,135 +3416,6 @@ export default function Claims() {
     printWindow.document.close();
   };
 
-  // Calculations for Advanced Analytics Dashboard
-  const stats = useMemo(() => {
-    let totalClaimed = 0;
-    let totalSettled = 0;
-    let totalPending = 0;
-    const companyMap: Record<string, { count: number; claimed: number; settled: number }> = {};
-    const hospitalMap: Record<string, { count: number; claimed: number; settled: number }> = {};
-    const typeMap: Record<string, { count: number; claimed: number; settled: number }> = {};
-    const statusMap: Record<string, { count: number; claimed: number; settled: number }> = {
-      Pending: { count: 0, claimed: 0, settled: 0 },
-      'In Progress': { count: 0, claimed: 0, settled: 0 },
-      Approved: { count: 0, claimed: 0, settled: 0 },
-      Settled: { count: 0, claimed: 0, settled: 0 },
-      Rejected: { count: 0, claimed: 0, settled: 0 },
-    };
-
-    filteredClaims.forEach((c: any) => {
-      const notes = getClaimNotesData(c.notes);
-      const claimed = Number(c.claimAmount || 0);
-      const approved = Number(c.approvedAmount || 0);
-      const notedSettlement = Number(notes.amtPayableToInsured || 0);
-      const isSettled = getClaimUiStatus(c) === 'Settled';
-      const settled = approved > 0
-        ? approved
-        : notedSettlement > 0
-          ? notedSettlement
-          : isSettled ? claimed : 0;
-      const company = c.policy?.plan?.company?.name || 'Unknown Company';
-      const hospital = notes.hospital || 'Outpatient / Other';
-      const type = c.claimType || 'Other';
-      const statusStr = getClaimUiStatus(c);
-
-      totalClaimed += claimed;
-      totalSettled += settled;
-      totalPending += Math.max(0, claimed - settled);
-
-      // Company
-      if (!companyMap[company]) companyMap[company] = { count: 0, claimed: 0, settled: 0 };
-      companyMap[company].count++;
-      companyMap[company].claimed += claimed;
-      companyMap[company].settled += settled;
-
-      // Hospital
-      if (!hospitalMap[hospital]) hospitalMap[hospital] = { count: 0, claimed: 0, settled: 0 };
-      hospitalMap[hospital].count++;
-      hospitalMap[hospital].claimed += claimed;
-      hospitalMap[hospital].settled += settled;
-
-      // Type
-      if (!typeMap[type]) typeMap[type] = { count: 0, claimed: 0, settled: 0 };
-      typeMap[type].count++;
-      typeMap[type].claimed += claimed;
-      typeMap[type].settled += settled;
-
-      // Status
-      if (!statusMap[statusStr]) statusMap[statusStr] = { count: 0, claimed: 0, settled: 0 };
-      statusMap[statusStr].count++;
-      statusMap[statusStr].claimed += claimed;
-      statusMap[statusStr].settled += settled;
-    });
-
-    const pendingClaimed = totalPending;
-    const settlementRatio = totalClaimed > 0 ? (totalSettled / totalClaimed) * 100 : 0;
-    const avgClaim = filteredClaims.length > 0 ? totalClaimed / filteredClaims.length : 0;
-
-    return {
-      totalClaims: filteredClaims.length,
-      totalClaimed,
-      totalSettled,
-      pendingClaimed,
-      settlementRatio,
-      avgClaim,
-      companies: Object.entries(companyMap).map(([name, v]) => ({ name, ...v })),
-      hospitals: Object.entries(hospitalMap).map(([name, v]) => ({ name, ...v })),
-      types: Object.entries(typeMap).map(([name, v]) => ({ name, ...v })),
-      statuses: Object.entries(statusMap).map(([name, v]) => ({ name, ...v })),
-    };
-  }, [filteredClaims]);
-
-  // Group claims by Month for Visual Line Chart
-  const monthlyData = useMemo(() => {
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const values = months.map(() => 0);
-    filteredClaims.forEach((c: any) => {
-      const m = new Date(c.intimatedAt).getMonth();
-      if (m >= 0 && m < 12) {
-        values[m] += Number(c.claimAmount || 0);
-      }
-    });
-    return { months, values };
-  }, [filteredClaims]);
-
-  // Export Analytics function
-  const exportAnalytics = () => {
-    let csvContent = "data:text/csv;charset=utf-8,";
-    csvContent += "Category,Name,Total Claims,Claimed Amount,Settled Amount\n";
-
-    // Summary
-    csvContent += `Summary,All Filtered Claims,${stats.totalClaims},${stats.totalClaimed},${stats.totalSettled}\n\n`;
-
-    // Company wise
-    csvContent += "Company-wise Breakdown,,,\n";
-    stats.companies.forEach(item => {
-      csvContent += `Company,${item.name},${item.count},${item.claimed},${item.settled}\n`;
-    });
-    csvContent += "\n";
-
-    // Hospital wise
-    csvContent += "Hospital-wise Breakdown,,,\n";
-    stats.hospitals.forEach(item => {
-      csvContent += `Hospital,${item.name},${item.count},${item.claimed},${item.settled}\n`;
-    });
-    csvContent += "\n";
-
-    // Type wise
-    csvContent += "Type Breakdown,,,\n";
-    stats.types.forEach(item => {
-      csvContent += `Claim Type,${item.name},${item.count},${item.claimed},${item.settled}\n`;
-    });
-
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `claims_analytics_report_${format(new Date(), 'yyyyMMdd')}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
   // Contact picker state
   const [contactSearch, setContactSearch] = useState('');
   const [contactDropdown, setContactDropdown] = useState(false);
@@ -3533,15 +3501,34 @@ export default function Claims() {
     if (availableConnectedPersonsInCreate.length === 0) return;
     setNewNominees(prev => {
       const hasValid = prev.some(n => (n?.name || '').trim() !== '');
-      if (hasValid) return prev;
-      return availableConnectedPersonsInCreate.map(p => ({
-        name: p.name,
-        relationship: p.relationship,
-        phone: p.phone,
-        dob: p.dob,
-        percentage: p.percentage || (availableConnectedPersonsInCreate.length === 1 ? '100' : ''),
-        comment: p.comment || '',
-      }));
+      if (!hasValid) {
+        return availableConnectedPersonsInCreate.map(p => ({
+          name: p.name,
+          relationship: p.relationship,
+          phone: p.phone,
+          dob: p.dob,
+          percentage: p.percentage || (availableConnectedPersonsInCreate.length === 1 ? '100' : ''),
+          comment: p.comment || '',
+        }));
+      }
+      return prev.map(n => {
+        const match = availableConnectedPersonsInCreate.find(
+          p => p.name.trim().toLowerCase() === (n.name || '').trim().toLowerCase()
+        );
+        const curRel = (n.relationship || '').trim();
+        const normCurRel = normalizeNomineeRelationship(curRel, n.name);
+        if (match && match.relationship) {
+          const matchRel = match.relationship.trim();
+          if (!curRel || ['dependent', 'nominee', 'member', 'other', 'in_law'].includes(curRel.toLowerCase()) ||
+              (curRel.toLowerCase() === 'mother' && matchRel.toLowerCase() === 'father') ||
+              (curRel.toLowerCase() === 'father' && matchRel.toLowerCase() === 'mother') ||
+              (curRel.toLowerCase() === 'sister' && matchRel.toLowerCase() === 'brother') ||
+              (curRel.toLowerCase() === 'brother' && matchRel.toLowerCase() === 'sister')) {
+            return { ...n, relationship: matchRel, phone: n.phone || match.phone, dob: n.dob || match.dob };
+          }
+        }
+        return { ...n, relationship: normCurRel || n.relationship };
+      });
     });
   }, [availableConnectedPersonsInCreate]);
 
@@ -3851,10 +3838,34 @@ export default function Claims() {
     }
   }, [watchPolicyId, selectedContact, setValue]);
 
+  useEffect(() => {
+    if (contact && !selectedContact) {
+      setSelectedContact(contact);
+      setValue('contactId', contact.id);
+    }
+  }, [contact, selectedContact, setValue]);
+
+  const handleOpenNewClaim = () => {
+    setModalOpen(true);
+    setValue('claimNumber', genClaimNumber());
+    if (contact) {
+      setSelectedContact(contact);
+      setValue('contactId', contact.id);
+      setValue('patientName', `${contact.firstName || ''} ${contact.lastName || ''}`.trim());
+    } else if (contactId) {
+      setValue('contactId', contactId);
+    }
+  };
+
   const closeModal = () => {
     setModalOpen(false);
     reset();
-    setSelectedContact(null); setContactSearch('');
+    if (!embedded) {
+      setSelectedContact(null); setContactSearch('');
+    } else if (contact) {
+      setSelectedContact(contact);
+      setValue('contactId', contact.id);
+    }
     setSelectedPolicy(null);
     setClaimFormFile(null);
     setDischargeSummaryFile(null);
@@ -4126,14 +4137,71 @@ export default function Claims() {
   ];
  
   const activeCols = useMemo(() => {
-    return COLS.filter(c => {
-      if (c.key === 'actions') return true;
-      if (visibleColumns[String(c.key)] !== undefined) {
-        return visibleColumns[String(c.key)];
+    const norm = (s: string) => (s || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    const cols: Column<Claim>[] = [];
+
+    allClaimsColumnsConfig.forEach(colName => {
+      const n = norm(colName);
+      if (n === 'actions') return;
+      if (!isColVisibleInSettings(colName)) return;
+
+      const baseMatch = COLS.find(c => norm(c.label || String(c.key)) === n);
+      if (baseMatch) {
+        cols.push(baseMatch);
+        return;
       }
-      return isColVisibleInSettings(c.label || String(c.key));
+
+      if (n === 'clientname') {
+        cols.push({
+          key: 'contact' as any,
+          label: 'Client Name',
+          render: r => <span className="font-bold text-gray-900">{r.contact ? `${r.contact.firstName} ${r.contact.lastName || ''}`.trim() : '—'}</span>
+        });
+      } else if (n === 'policyno' || n === 'policynumber') {
+        cols.push({
+          key: 'policy' as any,
+          label: 'Policy No',
+          render: r => <span className="text-xs font-semibold text-gray-700">{r.policy?.policyNumber || '—'}</span>
+        });
+      } else if (n === 'hospital') {
+        cols.push({
+          key: 'hospital' as any,
+          label: 'Hospital',
+          render: r => {
+            const notes = getClaimNotesData(r.notes);
+            return <span className="text-xs text-gray-700">{notes.hospital || (r as any).hospital || '—'}</span>;
+          }
+        });
+      } else if (n === 'claimno') {
+        cols.push({
+          key: 'claimNumber',
+          label: 'Claim No',
+          render: r => <span className="font-bold text-gray-900">{r.claimNumber || '—'}</span>
+        });
+      } else if (n === 'amount') {
+        cols.push({
+          key: 'claimAmount',
+          label: 'Amount',
+          render: r => <span className="font-semibold text-gray-900">₹{Number(r.claimAmount || 0).toLocaleString('en-IN')}</span>
+        });
+      } else {
+        cols.push({
+          key: colName as any,
+          label: colName,
+          render: r => {
+            const notes = getClaimNotesData(r.notes);
+            const val = (r as any)[colName] ?? (notes as any)[colName] ?? (r as any).customFields?.[colName] ?? '—';
+            return <span className="text-xs font-medium text-gray-700">{typeof val === 'object' ? JSON.stringify(val) : String(val)}</span>;
+          }
+        });
+      }
     });
-  }, [COLS, visibleColumns, isColVisibleInSettings]);
+
+    const actionsCol = COLS.find(c => c.key === 'actions');
+    if (actionsCol) cols.push(actionsCol);
+
+    return cols;
+  }, [allClaimsColumnsConfig, COLS, isColVisibleInSettings]);
 
   const genClaimNumber = () => `CLM-${Date.now().toString().slice(-8)}`;
 
@@ -4142,31 +4210,33 @@ export default function Claims() {
     <div className="space-y-4 text-sm sm:text-base">
       {/* Floating Right Action Panel */}
       <input type="file" ref={fileInputRef} onChange={handleImport} accept=".csv,.xlsx,.xls" className="hidden" />
-      <div className="fixed right-5 top-1/2 -translate-y-1/2 z-40 flex flex-col gap-3 bg-white/90 backdrop-blur-xl p-2 rounded-2xl shadow-2xl border border-slate-200/80 animate-fadeIn">
-        {/* Import CSV */}
-        <button
-          type="button"
-          onClick={() => setImportFormatOpen(true)}
-          className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 hover:from-emerald-700 hover:to-teal-600 text-white flex items-center justify-center transition-all hover:scale-105 shadow-md shadow-emerald-500/25 cursor-pointer group relative"
-        >
-          <Upload size={18} strokeWidth={2.2} />
-          <span className="absolute right-full mr-3 px-3 py-1.5 rounded-xl bg-slate-900/90 backdrop-blur-md text-white text-[11px] font-bold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-all pointer-events-none shadow-xl border border-slate-800">
-            Import Claims CSV
-          </span>
-        </button>
+      {!embedded && (
+        <div className="fixed right-5 top-1/2 -translate-y-1/2 z-40 flex flex-col gap-3 bg-white/90 backdrop-blur-xl p-2 rounded-2xl shadow-2xl border border-slate-200/80 animate-fadeIn">
+          {/* Import CSV */}
+          <button
+            type="button"
+            onClick={() => setImportFormatOpen(true)}
+            className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 hover:from-emerald-700 hover:to-teal-600 text-white flex items-center justify-center transition-all hover:scale-105 shadow-md shadow-emerald-500/25 cursor-pointer group relative"
+          >
+            <Upload size={18} strokeWidth={2.2} />
+            <span className="absolute right-full mr-3 px-3 py-1.5 rounded-xl bg-slate-900/90 backdrop-blur-md text-white text-[11px] font-bold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-all pointer-events-none shadow-xl border border-slate-800">
+              Import Claims CSV
+            </span>
+          </button>
 
-        {/* New Claim */}
-        <button
-          type="button"
-          onClick={() => { setModalOpen(true); setValue('claimNumber', genClaimNumber()); }}
-          className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white flex items-center justify-center transition-all hover:scale-105 shadow-lg shadow-blue-500/30 cursor-pointer group relative"
-        >
-          <Plus size={18} strokeWidth={2.2} />
-          <span className="absolute right-full mr-3 px-3 py-1.5 rounded-xl bg-slate-900/90 backdrop-blur-md text-white text-[11px] font-bold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-all pointer-events-none shadow-xl border border-slate-800">
-            New Claim
-          </span>
-        </button>
-      </div>
+          {/* New Claim */}
+          <button
+            type="button"
+            onClick={handleOpenNewClaim}
+            className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white flex items-center justify-center transition-all hover:scale-105 shadow-lg shadow-blue-500/30 cursor-pointer group relative"
+          >
+            <Plus size={18} strokeWidth={2.2} />
+            <span className="absolute right-full mr-3 px-3 py-1.5 rounded-xl bg-slate-900/90 backdrop-blur-md text-white text-[11px] font-bold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-all pointer-events-none shadow-xl border border-slate-800">
+              New Claim
+            </span>
+          </button>
+        </div>
+      )}
 
       {/* Unified Search & Actions Row (Policy UI Style) */}
       <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-3 border border-slate-100 rounded-2xl shadow-sm">
@@ -4239,17 +4309,8 @@ export default function Claims() {
             </button>
           </div>
 
-          <button
-            onClick={() => setShowAnalytics(!showAnalytics)}
-            onMouseEnter={() => setShowAnalytics(true)}
-            className={clsx('btn-secondary h-9 py-0 px-3 text-xs flex items-center gap-1.5 font-bold cursor-pointer rounded-lg',
-              showAnalytics && 'bg-blue-50 border-blue-200 text-blue-600')}
-          >
-            {showAnalytics ? 'Hide Analytics' : 'Show Analytics'}
-          </button>
-
           {/* Column Picker Toggle */}
-          <div className="relative">
+          <div className="relative" ref={colPickerRef}>
             <button
               onClick={() => setShowColPicker(!showColPicker)}
               className={clsx(
@@ -4261,30 +4322,28 @@ export default function Claims() {
               <Settings size={14} />
             </button>
             {showColPicker && (
-              <div className="absolute right-0 mt-2 w-56 bg-white border border-slate-200/90 rounded-2xl shadow-2xl p-3 z-50 text-xs space-y-2 animate-fadeIn">
+              <div className="absolute right-0 mt-2 w-64 max-h-80 overflow-y-auto bg-white border border-slate-200/90 rounded-2xl shadow-2xl p-3 z-50 text-xs space-y-2 animate-fadeIn">
                 <div className="pb-1.5 border-b border-slate-100">
                   <p className="font-extrabold text-slate-400 uppercase tracking-wider text-[10px]">Show Columns</p>
                 </div>
-                {COLS.filter(c => c.key !== 'actions').map(col => {
-                  const isVisible = visibleColumns[String(col.key)] !== undefined
-                    ? visibleColumns[String(col.key)]
-                    : isColVisibleInSettings(col.label || String(col.key));
-                  return (
-                    <label key={String(col.key)} className="flex items-center gap-2 cursor-pointer font-bold text-slate-700 hover:text-blue-600 transition-colors">
-                      <input
-                        type="checkbox"
-                        checked={isVisible}
-                        onChange={() => {
-                          const next = !isVisible;
-                          setVisibleColumns(prev => ({ ...prev, [String(col.key)]: next }));
-                          toggleColInSettings(col.label || String(col.key));
-                        }}
-                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
-                      />
-                      <span>{col.label}</span>
-                    </label>
-                  );
-                })}
+                {allClaimsColumnsConfig
+                  .filter(c => (c || '').trim().toLowerCase() !== 'actions')
+                  .map(colName => {
+                    const isVisible = isColVisibleInSettings(colName);
+                    return (
+                      <label key={colName} className="flex items-center gap-2 cursor-pointer font-bold text-slate-700 hover:text-blue-600 transition-colors">
+                        <input
+                          type="checkbox"
+                          checked={isVisible}
+                          onChange={() => {
+                            toggleColInSettings(colName, isVisible);
+                          }}
+                          className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
+                        />
+                        <span>{colName}</span>
+                      </label>
+                    );
+                  })}
               </div>
             )}
           </div>
@@ -4292,8 +4351,9 @@ export default function Claims() {
           {/* Advanced Filters Toggle Button (Policy Page Style) */}
           <button
             type="button"
-            onClick={() => setFiltersOpen(!filtersOpen)}
-            onMouseEnter={() => setFiltersOpen(true)}
+            onClick={() => {
+              setFiltersOpen(!filtersOpen);
+            }}
             className={clsx(
               'p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-500 hover:text-slate-700 cursor-pointer shadow-2xs transition-all flex items-center gap-1.5 text-xs font-bold bg-white shrink-0',
               filtersOpen && 'bg-blue-50 border-blue-200 text-blue-600 font-extrabold'
@@ -4308,6 +4368,18 @@ export default function Claims() {
               </span>
             )}
           </button>
+
+          {embedded && (
+            <button
+              type="button"
+              onClick={handleOpenNewClaim}
+              className="px-3.5 py-2 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white flex items-center gap-1.5 transition-all hover:scale-105 shadow-md shadow-blue-500/30 cursor-pointer text-xs font-bold shrink-0"
+              title="Add New Claim"
+            >
+              <Plus size={14} strokeWidth={2.5} />
+              <span>New Claim</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -4819,463 +4891,6 @@ export default function Claims() {
         </div>
       )}
 
-      {/* Analytics & Reports Collapsible Card */}
-      {showAnalytics && (
-        <div className="bg-slate-50/50 p-6 rounded-2xl border border-slate-100 shadow-sm space-y-6 mb-4 animate-in fade-in slide-in-from-top-2 duration-200">
-          
-          {/* Header & Main Controls */}
-          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 pb-4">
-            <div>
-              <h3 className="text-sm font-bold text-gray-800 flex flex-wrap items-center gap-1.5">
-                <FileCheck2 size={16} className="text-blue-600" />
-                Claims Analytics Dashboard
-              </h3>
-              <p className="text-xs text-gray-500 mt-0.5">Real-time statistics, graphs, and filtered reports</p>
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                onClick={exportAnalytics}
-                className="btn-primary h-8 py-0 px-3 text-[10px] sm:text-xs bg-emerald-600 hover:bg-emerald-700 font-bold flex flex-wrap items-center gap-1.5 shadow-sm rounded-lg"
-              >
-                <FileCheck2 size={13} /> Export Report (CSV)
-              </button>
-            </div>
-          </div>
-
-          {/* Advanced Filters Panel */}
-          <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-4">
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Start Date</label>
-              <DatePicker
-                value={filterStartDate}
-                onDateChange={setFilterStartDate}
-                className="input h-8 text-xs py-0 px-2 rounded-lg bg-slate-50 border border-slate-200 w-full"
-              />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">End Date</label>
-              <DatePicker
-                value={filterEndDate}
-                onDateChange={setFilterEndDate}
-                className="input h-8 text-xs py-0 px-2 rounded-lg bg-slate-50 border border-slate-200 w-full"
-              />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Company</label>
-              <input
-                type="text"
-                placeholder="Search company..."
-                value={filterCompany}
-                onChange={e => setFilterCompany(e.target.value)}
-                className="input h-8 text-xs py-0 px-2 rounded-lg bg-slate-50 border border-slate-200 w-full"
-              />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Hospital</label>
-              <input
-                type="text"
-                placeholder="Search hospital..."
-                value={filterHospital}
-                onChange={e => setFilterHospital(e.target.value)}
-                className="input h-8 text-xs py-0 px-2 rounded-lg bg-slate-50 border border-slate-200 w-full"
-              />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Claim Type</label>
-              <select
-                value={filterClaimType}
-                onChange={e => setFilterClaimType(e.target.value)}
-                className="input h-8 text-xs py-0 px-2 rounded-lg bg-slate-50 border border-slate-200 w-full"
-              >
-                <option value="ALL">All Types</option>
-                <option value="Cashless">Cashless</option>
-                <option value="Reimbursement">Reimbursement</option>
-                <option value="DEATH">Death</option>
-                <option value="ACCIDENTAL">Accidental</option>
-              </select>
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Agent</label>
-              <select
-                value={filterAgent}
-                onChange={e => setFilterAgent(e.target.value)}
-                className="input h-8 text-xs py-0 px-2 rounded-lg bg-slate-50 border border-slate-200 w-full"
-              >
-                <option value="">All Agents</option>
-                {employees.map((emp: any) => (
-                  <option key={emp.id} value={emp.id}>{emp.firstName} {emp.lastName}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {/* Claim Stage Count Cards Row */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4">
-            {['Pending', 'In Progress', 'Approved', 'Settled', 'Rejected'].map(status => {
-              const statusData = stats.statuses.find(s => s.name === status);
-              const count = statusData ? statusData.count : 0;
-              return (
-                <div key={status} className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm flex flex-col justify-between items-center text-center">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{status}</span>
-                  <span className="text-xl font-bold text-indigo-600 mt-1">{count}</span>
-                </div>
-              );
-            })}
-            <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm flex flex-col justify-between items-center text-center">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Claims</span>
-              <span className="text-xl font-bold text-slate-800 mt-1">{stats.totalClaims}</span>
-            </div>
-          </div>
-
-          {/* 6 KPI Cards Row */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4">
-            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm flex flex-col justify-between">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Claims</span>
-              <span className="text-xl font-bold text-slate-800 mt-1">{stats.totalClaims}</span>
-            </div>
-
-            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm flex flex-col justify-between">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Claimed Amt</span>
-              <span className="text-xl font-bold text-slate-800 mt-1">₹{Math.round(stats.totalClaimed).toLocaleString('en-IN')}</span>
-            </div>
-
-            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm flex flex-col justify-between">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Settled Amt</span>
-              <span className="text-xl font-bold text-emerald-600 mt-1">₹{Math.round(stats.totalSettled).toLocaleString('en-IN')}</span>
-            </div>
-
-            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm flex flex-col justify-between">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Pending Amt</span>
-              <span className="text-xl font-bold text-amber-600 mt-1">₹{Math.round(stats.pendingClaimed).toLocaleString('en-IN')}</span>
-            </div>
-
-            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm flex flex-col justify-between">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Settlement %</span>
-              <div className="flex flex-wrap items-center gap-2 mt-1">
-                <span className="text-xl font-bold text-slate-800">{stats.settlementRatio.toFixed(1)}%</span>
-              </div>
-            </div>
-
-            <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm flex flex-col justify-between">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Avg Claim</span>
-              <span className="text-xl font-bold text-slate-800 mt-1">₹{Math.round(stats.avgClaim).toLocaleString('en-IN')}</span>
-            </div>
-          </div>
-
-          {/* Interactive SVG Charts Section */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            
-            {/* Chart 1: Claims Trend (SVG Line Chart) */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
-              <div>
-                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Claims Trend (Monthly)</h4>
-                <p className="text-[10px] text-slate-400">Total claimed amount in ₹</p>
-              </div>
-              <div className="relative h-44 flex items-end justify-center">
-                <svg viewBox="0 0 240 120" className="w-full h-full">
-                  {/* Grid Lines */}
-                  <line x1="10" y1="20" x2="230" y2="20" stroke="#f1f5f9" strokeWidth="1" />
-                  <line x1="10" y1="60" x2="230" y2="60" stroke="#f1f5f9" strokeWidth="1" />
-                  <line x1="10" y1="100" x2="230" y2="100" stroke="#e2e8f0" strokeWidth="1" />
-                  
-                  {/* Polyline */}
-                  {(() => {
-                    const maxVal = Math.max(...monthlyData.values, 1);
-                    const points = monthlyData.values.map((val, idx) => {
-                      const x = 10 + idx * 20;
-                      const y = 100 - (val / maxVal) * 80;
-                      return `${x},${y}`;
-                    }).join(' ');
-                    return (
-                      <>
-                        <polyline fill="none" stroke="#3b82f6" strokeWidth="2.5" points={points} />
-                        {monthlyData.values.map((val, idx) => {
-                          const x = 10 + idx * 20;
-                          const y = 100 - (val / maxVal) * 80;
-                          if (val === 0) return null;
-                          return (
-                            <circle key={idx} cx={x} cy={y} r="3.5" fill="#2563eb" stroke="#ffffff" strokeWidth="1.5" />
-                          );
-                        })}
-                      </>
-                    );
-                  })()}
-                  
-                  {/* X Axis Labels */}
-                  {monthlyData.months.map((m, idx) => (
-                    <text key={m} x={10 + idx * 20} y="115" fontSize="6.5" fill="#94a3b8" textAnchor="middle">{m}</text>
-                  ))}
-                </svg>
-              </div>
-            </div>
-
-            {/* Chart 2: Claim Type Share (SVG Doughnut Chart) */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
-              <div>
-                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Claim Type Share</h4>
-                <p className="text-[10px] text-slate-400">Cashless vs Reimbursement distribution</p>
-              </div>
-              <div className="h-44 flex items-center justify-between gap-2">
-                <div className="w-1/2 relative flex items-center justify-center">
-                  <svg width="100" height="100" viewBox="0 0 36 36" className="w-24 h-24">
-                    <circle cx="18" cy="18" r="15.915" fill="none" stroke="#f1f5f9" strokeWidth="3" />
-                    {(() => {
-                      let accumulatedPercent = 0;
-                      const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ec4899', '#6366f1'];
-                      return stats.types.map((type, idx) => {
-                        const pct = stats.totalClaims > 0 ? (type.count / stats.totalClaims) * 100 : 0;
-                        const dashArray = `${pct} ${100 - pct}`;
-                        const dashOffset = 100 - accumulatedPercent + 25;
-                        accumulatedPercent += pct;
-                        return (
-                          <circle
-                            key={type.name}
-                            cx="18"
-                            cy="18"
-                            r="15.915"
-                            fill="none"
-                            stroke={colors[idx % colors.length]}
-                            strokeWidth="3.5"
-                            strokeDasharray={dashArray}
-                            strokeDashoffset={dashOffset}
-                          />
-                        );
-                      });
-                    })()}
-                  </svg>
-                  <div className="absolute flex flex-col items-center justify-center">
-                    <span className="text-[10px] text-slate-400 uppercase font-semibold">Total</span>
-                    <span className="text-base font-bold text-slate-800">{stats.totalClaims}</span>
-                  </div>
-                </div>
-                <div className="w-1/2 space-y-1.5 max-h-36 overflow-y-auto pr-1">
-                  {stats.types.map((t, idx) => {
-                    const colors = ['bg-blue-500', 'bg-emerald-500', 'bg-amber-500', 'bg-pink-500', 'bg-indigo-500'];
-                    const pct = stats.totalClaims > 0 ? (t.count / stats.totalClaims) * 100 : 0;
-                    return (
-                      <div key={t.name} className="flex flex-wrap items-center gap-1.5 text-[9px] text-slate-600">
-                        <span className={`w-2 h-2 rounded-full ${colors[idx % colors.length]}`} />
-                        <span className="truncate font-medium flex-1">{t.name}</span>
-                        <span className="font-bold text-slate-800">{pct.toFixed(0)}%</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            {/* Chart 3: Status Distribution (SVG Bar Chart) */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
-              <div>
-                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Status Distribution</h4>
-                <p className="text-[10px] text-slate-400">Total claims per status stage</p>
-              </div>
-              <div className="relative h-44 flex items-end justify-center">
-                <svg viewBox="0 0 200 120" className="w-full h-full">
-                  <line x1="10" y1="20" x2="190" y2="20" stroke="#f1f5f9" strokeWidth="1" />
-                  <line x1="10" y1="60" x2="190" y2="60" stroke="#f1f5f9" strokeWidth="1" />
-                  <line x1="10" y1="100" x2="190" y2="100" stroke="#e2e8f0" strokeWidth="1" />
-
-                  {(() => {
-                    const counts = stats.statuses.map(s => s.count);
-                    const maxCount = Math.max(...counts, 1);
-                    const colors: Record<string, string> = {
-                      Pending: '#3b82f6',
-                      'In Progress': '#f59e0b',
-                      Approved: '#10b981',
-                      Rejected: '#ef4444',
-                      Settled: '#059669',
-                    };
-                    return stats.statuses.map((s, idx) => {
-                      const barWidth = 18;
-                      const x = 20 + idx * 35;
-                      const barHeight = (s.count / maxCount) * 80;
-                      const y = 100 - barHeight;
-                      return (
-                        <g key={s.name}>
-                          <rect
-                            x={x}
-                            y={y}
-                            width={barWidth}
-                            height={barHeight}
-                            rx="2"
-                            fill={colors[s.name] || '#64748b'}
-                          />
-                          <text x={x + 9} y={y - 4} fontSize="7" fontWeight="bold" fill="#475569" textAnchor="middle">{s.count}</text>
-                          <text x={x + 9} y="113" fontSize="6" fill="#64748b" textAnchor="middle" transform={`rotate(0, ${x + 9}, 113)`}>{s.name}</text>
-                        </g>
-                      );
-                    });
-                  })()}
-                </svg>
-              </div>
-            </div>
-
-          </div>
-
-          {/* Breakdown Tables Grid (2x2) */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
-            {/* Company wise */}
-            <div className="space-y-2 bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
-              <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Company-wise Breakdown & Share</h4>
-              <div className="border border-slate-100 rounded-xl overflow-hidden bg-white max-h-48 overflow-y-auto">
-                <table className="min-w-full divide-y divide-slate-100 text-xs">
-                  <thead className="bg-slate-50 font-bold text-slate-600">
-                    <tr>
-                      <th className="px-3 py-2 text-left">Company</th>
-                      <th className="px-3 py-2 text-center">Claims</th>
-                      <th className="px-3 py-2 text-right">Claimed</th>
-                      <th className="px-3 py-2 text-right">Settled</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-slate-700">
-                    {stats.companies.length === 0 ? (
-                      <tr><td colSpan={4} className="text-center py-4 text-slate-400">No data found</td></tr>
-                    ) : (
-                      stats.companies.map(c => {
-                        const pct = stats.totalClaimed > 0 ? (c.claimed / stats.totalClaimed) * 100 : 0;
-                        return (
-                          <tr key={c.name} className="hover:bg-slate-50/50">
-                            <td className="px-3 py-2">
-                              <span className="font-medium block">{c.name}</span>
-                              <div className="w-full bg-slate-100 h-1.5 rounded-full mt-1.5 overflow-hidden">
-                                <div className="bg-blue-600 h-full rounded-full" style={{ width: `${Math.max(3, pct)}%` }} />
-                              </div>
-                            </td>
-                            <td className="px-3 py-2 text-center font-semibold">{c.count}</td>
-                            <td className="px-3 py-2 text-right">₹{c.claimed.toLocaleString('en-IN')}</td>
-                            <td className="px-3 py-2 text-right text-emerald-600 font-semibold">₹{c.settled.toLocaleString('en-IN')}</td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Hospital wise */}
-            <div className="space-y-2 bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
-              <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Hospital-wise Breakdown & Share</h4>
-              <div className="border border-slate-100 rounded-xl overflow-hidden bg-white max-h-48 overflow-y-auto">
-                <table className="min-w-full divide-y divide-slate-100 text-xs">
-                  <thead className="bg-slate-50 font-bold text-slate-600">
-                    <tr>
-                      <th className="px-3 py-2 text-left">Hospital</th>
-                      <th className="px-3 py-2 text-center">Claims</th>
-                      <th className="px-3 py-2 text-right">Claimed</th>
-                      <th className="px-3 py-2 text-right">Settled</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-slate-700">
-                    {stats.hospitals.length === 0 ? (
-                      <tr><td colSpan={4} className="text-center py-4 text-slate-400">No data found</td></tr>
-                    ) : (
-                      stats.hospitals.map(h => {
-                        const pct = stats.totalClaimed > 0 ? (h.claimed / stats.totalClaimed) * 100 : 0;
-                        return (
-                          <tr key={h.name} className="hover:bg-slate-50/50">
-                            <td className="px-3 py-2">
-                              <span className="font-medium block truncate max-w-[150px]" title={h.name}>{h.name}</span>
-                              <div className="w-full bg-slate-100 h-1.5 rounded-full mt-1.5 overflow-hidden">
-                                <div className="bg-indigo-600 h-full rounded-full" style={{ width: `${Math.max(3, pct)}%` }} />
-                              </div>
-                            </td>
-                            <td className="px-3 py-2 text-center font-semibold">{h.count}</td>
-                            <td className="px-3 py-2 text-right">₹{h.claimed.toLocaleString('en-IN')}</td>
-                            <td className="px-3 py-2 text-right text-emerald-600 font-semibold">₹{h.settled.toLocaleString('en-IN')}</td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Claim Type Breakdown (Cashless/Reimburse) */}
-            <div className="space-y-2 bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
-              <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Claim Type Breakdown (Cashless / Reimbursement)</h4>
-              <div className="border border-slate-100 rounded-xl overflow-hidden bg-white max-h-48 overflow-y-auto">
-                <table className="min-w-full divide-y divide-slate-100 text-xs">
-                  <thead className="bg-slate-50 font-bold text-slate-600">
-                    <tr>
-                      <th className="px-3 py-2 text-left">Type</th>
-                      <th className="px-3 py-2 text-center">Claims</th>
-                      <th className="px-3 py-2 text-right">Claimed</th>
-                      <th className="px-3 py-2 text-right">Settled</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-slate-700">
-                    {stats.types.length === 0 ? (
-                      <tr><td colSpan={4} className="text-center py-4 text-slate-400">No data found</td></tr>
-                    ) : (
-                      stats.types.map(t => {
-                        const pct = stats.totalClaimed > 0 ? (t.claimed / stats.totalClaimed) * 100 : 0;
-                        return (
-                          <tr key={t.name} className="hover:bg-slate-50/50">
-                            <td className="px-3 py-2">
-                              <span className="font-medium block">{t.name}</span>
-                              <div className="w-full bg-slate-100 h-1.5 rounded-full mt-1.5 overflow-hidden">
-                                <div className="bg-emerald-600 h-full rounded-full" style={{ width: `${Math.max(3, pct)}%` }} />
-                              </div>
-                            </td>
-                            <td className="px-3 py-2 text-center font-semibold">{t.count}</td>
-                            <td className="px-3 py-2 text-right">₹{t.claimed.toLocaleString('en-IN')}</td>
-                            <td className="px-3 py-2 text-right text-emerald-600 font-semibold">₹{t.settled.toLocaleString('en-IN')}</td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Duration Breakdown */}
-            <div className="space-y-2 bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
-              <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Duration-wise Breakdown</h4>
-              <div className="border border-slate-100 rounded-xl overflow-hidden bg-white max-h-48 overflow-y-auto">
-                <table className="min-w-full divide-y divide-slate-100 text-xs">
-                  <thead className="bg-slate-50 font-bold text-slate-600">
-                    <tr>
-                      <th className="px-3 py-2 text-left">Time Range</th>
-                      <th className="px-3 py-2 text-center">Claims</th>
-                      <th className="px-3 py-2 text-right">Claimed</th>
-                      <th className="px-3 py-2 text-right">Settled</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-slate-700">
-                    {[
-                      { name: 'Last 30 Days', filter: (c: any) => (Date.now() - new Date(c.intimatedAt).getTime()) / 86400000 <= 30 },
-                      { name: '31 to 90 Days', filter: (c: any) => { const diff = (Date.now() - new Date(c.intimatedAt).getTime()) / 86400000; return diff > 30 && diff <= 90; } },
-                      { name: 'Older (90+ Days)', filter: (c: any) => (Date.now() - new Date(c.intimatedAt).getTime()) / 86400000 > 90 },
-                    ].map(range => {
-                      const matched = filteredClaims.filter(range.filter);
-                      const claimed = matched.reduce((sum: number, c: any) => sum + Number(c.claimAmount || 0), 0);
-                      const settled = matched.reduce((sum: number, c: any) => sum + Number(c.approvedAmount || 0), 0);
-                      const pct = stats.totalClaimed > 0 ? (claimed / stats.totalClaimed) * 100 : 0;
-                      return (
-                        <tr key={range.name} className="hover:bg-slate-50/50">
-                          <td className="px-3 py-2">
-                            <span className="font-medium block">{range.name}</span>
-                            <div className="w-full bg-slate-100 h-1.5 rounded-full mt-1.5 overflow-hidden">
-                              <div className="bg-amber-500 h-full rounded-full" style={{ width: `${Math.max(3, pct)}%` }} />
-                            </div>
-                          </td>
-                          <td className="px-3 py-2 text-center font-semibold">{matched.length}</td>
-                          <td className="px-3 py-2 text-right">₹{claimed.toLocaleString('en-IN')}</td>
-                          <td className="px-3 py-2 text-right text-emerald-600 font-semibold">₹{settled.toLocaleString('en-IN')}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
 
 
@@ -5287,7 +4902,7 @@ export default function Claims() {
             total={sortedClaims.length}
             page={page}
             pageSize={20}
-            scrollAreaHeight="420px"
+            scrollAreaHeight={embedded ? "360px" : "420px"}
             showPagination
             horizontalScroll
             loading={isLoading}
@@ -5306,7 +4921,7 @@ export default function Claims() {
           />
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 pb-4 flex-1 overflow-y-auto custom-scrollbar" style={{ maxHeight: 'calc(100vh - 180px)' }}>
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 pb-4 flex-1 overflow-y-auto custom-scrollbar" style={{ maxHeight: embedded ? '460px' : 'calc(100vh - 180px)' }}>
           {['Pending', 'In Progress', 'Approved', 'Rejected', 'Settled'].map(stage => {
             const stageClaims = sortedClaims.filter(c => getClaimUiStatus(c) === stage);
             const totalClaimed = stageClaims.reduce((sum, curr) => sum + Number(curr.claimAmount || 0), 0);
@@ -5466,6 +5081,7 @@ export default function Claims() {
         closeOnEscapeAndBackdrop={false}
         title="Add New Claim" 
         size="2xl"
+        zIndexClass={embedded ? "z-[70]" : undefined}
         actions={
           <button type="submit" form="add-claim-form" className="btn-primary py-1.5 px-5 text-xs shadow-sm bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 border-0" disabled={createClaim.isPending}>
             {createClaim.isPending ? 'Saving...' : 'Save Claim'}
@@ -6535,21 +6151,42 @@ export default function Claims() {
                         </div>
                         <div>
                           <label className="label text-[10px]">Type of Management</label>
-                          <CustomSelect
-                            className="input mt-1 py-1 text-xs"
-                            value={watch('typeOfManagement') || ''}
-                            onChange={val => setValue('typeOfManagement', val)}
-                            placeholder="Select Option"
-                            options={['Surgical', 'Medicinal', 'Other']}
-                          />
-                          {watch('typeOfManagement') === 'Other' && (
-                            <input
-                              type="text"
+                          {watch('typeOfManagement') !== 'Other' ? (
+                            <CustomSelect
                               className="input mt-1 py-1 text-xs"
-                              value={otherManagementDetail}
-                              onChange={e => setOtherManagementDetail(e.target.value)}
-                              placeholder="Specify type of management"
+                              value={watch('typeOfManagement') || ''}
+                              onChange={val => {
+                                setValue('typeOfManagement', val);
+                                if (val !== 'Other') {
+                                  setOtherManagementDetail('');
+                                }
+                              }}
+                              placeholder="Select Option"
+                              options={['Surgical', 'Medicinal', 'Other']}
                             />
+                          ) : (
+                            <div className="relative mt-1">
+                              <input
+                                type="text"
+                                className="input py-1 pr-7 text-xs w-full"
+                                value={otherManagementDetail}
+                                onChange={e => setOtherManagementDetail(e.target.value)}
+                                placeholder="Specify type of management"
+                                onKeyDown={e => { if (e.key === 'Enter') e.preventDefault(); }}
+                                autoFocus
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setValue('typeOfManagement', '');
+                                  setOtherManagementDetail('');
+                                }}
+                                title="Back to list options"
+                                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-blue-600 p-1 rounded hover:bg-slate-100 transition-colors cursor-pointer"
+                              >
+                                <ChevronDown size={14} />
+                              </button>
+                            </div>
                           )}
                         </div>
                         <div>
@@ -7144,11 +6781,12 @@ export default function Claims() {
           onSave={body => updateClaimMutation.mutate({ id: editTarget.id, body })}
           onCancel={() => setEditTarget(null)}
           employees={employees}
+          zIndexClass={embedded ? "z-[70]" : undefined}
         />
       )}
 
       {/* Delete Confirmation */}
-      <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)} closeOnEscapeAndBackdrop={false} title="Delete Claim" size="sm">
+      <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)} closeOnEscapeAndBackdrop={false} title="Delete Claim" size="sm" zIndexClass={embedded ? "z-[70]" : undefined}>
         <p className="text-sm text-gray-600 mb-4">Delete claim <strong>{deleteTarget?.claimNumber}</strong>?</p>
         <div className="flex flex-wrap justify-end gap-2">
           <button className="btn-secondary" onClick={() => setDeleteTarget(null)}>Cancel</button>
@@ -7173,7 +6811,7 @@ export default function Claims() {
       </Modal>
 
       {/* Claim Detail Sheet */}
-      <Modal open={detailOpen} onClose={() => setDetailOpen(false)} closeOnEscapeAndBackdrop={false} title="Claim Details" size="2xl">
+      <Modal open={detailOpen} onClose={() => setDetailOpen(false)} closeOnEscapeAndBackdrop={false} title="Claim Details" size="2xl" zIndexClass={embedded ? "z-[70]" : undefined}>
         {selectedClaim ? (
           <ClaimDetailView claim={selectedClaim} onEdit={() => { setDetailOpen(false); setEditTarget(selectedClaim); }} />
         ) : null}
@@ -7228,17 +6866,53 @@ export default function Claims() {
         onChooseFile={() => fileInputRef.current?.click()}
         title="Import Claims from CSV or Excel"
         description="Download the sample file and keep the column headers unchanged."
-        warning="Claim Number, Policy Number, and Contact Phone are required. Contact Phone and Policy Number must match existing records."
+        warning="Claim Intimation Number, Policy Number, and Contact No. are required. Contact No. and Policy Number should match existing records."
         columns={[
-          { name: 'Claim Number', requirement: 'Required. Must be unique.' },
-          { name: 'Status', requirement: 'Optional. Use INTIMATED, DOC_COLLECTION, FILED, IN_REVIEW, APPROVED, REJECTED, or SETTLED.' },
-          { name: 'Claim Type', requirement: 'Optional. Example: HEALTH, LIFE, or MOTOR; defaults to HEALTH.' },
-          { name: 'Claim Amount', requirement: 'Optional. Use a number; defaults to 0.' },
-          { name: 'Intimated At', requirement: 'Optional. Recommended format: YYYY-MM-DD; defaults to today.' },
-          { name: 'Policy Number', requirement: 'Required. Must match an existing policy.' },
-          { name: 'Contact Phone', requirement: 'Required. Must match an existing contact phone.' },
+          { name: 'Sr. No.', requirement: 'Optional. Serial number (e.g. 1, 2, 3).' },
+          { name: 'Proposer Name', requirement: 'Optional. Name of the policy proposer / primary contact.' },
+          { name: 'Patient Name', requirement: 'Optional. Name of the insured patient undergoing treatment.' },
+          { name: 'Contact No.', requirement: 'Required. 10-digit mobile number matching existing contact or client.' },
+          { name: 'Insurance Company Category', requirement: 'Optional. Category (e.g. Health, Life, General).' },
+          { name: 'Company Name', requirement: 'Optional. Name of insurance company (e.g. Star Health, HDFC ERGO).' },
+          { name: 'Product Name', requirement: 'Optional. Insurance product or plan name (e.g. Youngstar, Optima Secure).' },
+          { name: 'Policy Number', requirement: 'Required. Policy number matching existing policy.' },
+          { name: 'Premium', requirement: 'Optional. Policy premium amount (e.g. 17550).' },
+          { name: 'Sum Insured', requirement: 'Optional. Policy sum insured (e.g. 1000000 or 10 L).' },
+          { name: 'Admitted Date', requirement: 'Optional. Date of hospital admission (YYYY-MM-DD or MM/DD/YYYY).' },
+          { name: 'Discharge Date', requirement: 'Optional. Date of hospital discharge (YYYY-MM-DD or MM/DD/YYYY).' },
+          { name: 'Hospital Admitted', requirement: 'Optional. Name of the hospital or clinic.' },
+          { name: 'Hospital City', requirement: 'Optional. City where the hospital is located.' },
+          { name: 'Hospital Type', requirement: 'Optional. Hospital network type (Network, Non Network, NA).' },
+          { name: 'Diagnosis', requirement: 'Optional. Medical ailment, diagnosis, or reason for claim.' },
+          { name: 'Claim Intimation Number', requirement: 'Required. Unique claim intimation number / Claim ID.' },
+          { name: 'Claimed Amount', requirement: 'Optional. Total amount claimed in INR (e.g. 35000).' },
+          { name: 'Settled Amount', requirement: 'Optional. Approved or settled claim amount in INR (e.g. 30000).' },
+          { name: 'Status', requirement: 'Optional. In Process, Close, Settled, Approved, Rejected, or Intimated.' },
+          { name: 'Claim Type', requirement: 'Optional. Reimbursement, Cashless, Accidental, Death, or Health.' },
         ]}
-        sampleRow={['CLM-SAMPLE-001', 'INTIMATED', 'HEALTH', '50000', '2026-01-15', 'POL-SAMPLE-001', '9000000001']}
+        sampleRow={[
+          '1',
+          'Amarsinh Vasantrao Javlekar',
+          'Ranveer Amarsinh Javlekar',
+          '9326047171',
+          'Health',
+          'Star Health',
+          'Youngstar',
+          'P/151117/01/2022/025726',
+          '17550',
+          '1000000',
+          '01/22/2023',
+          '01/25/2023',
+          "Aditya Rainbow Children's Hospital",
+          'Pune',
+          'NA',
+          'Viral Fever',
+          'CIR/2023/151117/1411568',
+          '35000',
+          '30000',
+          'In Process',
+          'Reimbursement',
+        ]}
         fileFormats="CSV, XLS, and XLSX"
         sampleFileName="claims-sample.csv"
       />

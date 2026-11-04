@@ -192,6 +192,7 @@ export default function EmployeeAccessControl() {
       employeesService.updateRole(id, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['employees'] });
+      qc.invalidateQueries({ queryKey: ['employees', 'all'] });
       toast.success('Access permissions updated successfully');
       setPermEditEmp(null);
     },

@@ -209,9 +209,9 @@ export default function ClaimPolicyDetailsTab({
           </div>
 
           <div className="flex items-center gap-2 ml-auto">
-            {p.id && (
+            {(p?.id || p?._id || targetId) && (
               <Link
-                to={`/policies/${p.id}`}
+                to={`/policies/${p?.id || p?._id || targetId}`}
                 target="_blank"
                 rel="noreferrer"
                 className="px-3 py-1.5 rounded-xl text-xs font-bold text-blue-700 bg-white hover:bg-blue-50 border border-blue-200 shadow-2xs hover:shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"

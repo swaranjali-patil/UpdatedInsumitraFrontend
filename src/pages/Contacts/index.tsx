@@ -31,7 +31,7 @@ import ContactDetailModal from './ContactDetailModal';
 import FamilyMemberModal from './FamilyMemberModal';
 import PolicyDetailModal from '../Policies/PolicyDetailModal';
 import CreatePolicyModal from '../Policies/CreatePolicyModal';
-import { ClaimDetailView } from '../Claims';
+import Claims, { ClaimDetailView } from '../Claims';
 import ClaimDetailModal from '../Claims/ClaimDetailModal';
 import * as XLSX from 'xlsx';
 import { CountryPhoneInput } from '@comps/common/CountryPhoneInput';
@@ -464,6 +464,15 @@ const MEDICAL_CONDITIONS_LIST = [
   'Others'
 ];
 
+const autoResizeTextarea = (el: HTMLTextAreaElement | null) => {
+  if (!el) return;
+  el.style.height = 'auto';
+  const scrollH = el.scrollHeight;
+  const newHeight = Math.max(56, Math.min(scrollH, 360));
+  el.style.height = `${newHeight}px`;
+  el.style.overflowY = scrollH > 360 ? 'auto' : 'hidden';
+};
+
 function MultiSelectBox({
   label,
   selectedValues,
@@ -641,9 +650,23 @@ export default function Contacts() {
   // Sorting & Column customisation states
   const [sortKey, setSortKey] = useState('');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
-  const { isVisible: isColVisibleInSettings, toggleColumn: toggleColInSettings } = useTableColumnVisibility('contacts');
-  const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>({});
+  const { isVisible: isColVisibleInSettings, toggleColumn: toggleColInSettings, allColumns: allContactColumnsConfig } = useTableColumnVisibility('contacts');
   const [showColPicker, setShowColPicker] = useState(false);
+  const colPickerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (colPickerRef.current && !colPickerRef.current.contains(e.target as Node)) {
+        setShowColPicker(false);
+      }
+    };
+    if (showColPicker) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showColPicker]);
   const [showProductDropdown, setShowProductDropdown] = useState(false);
   const [filterProducts, setFilterProducts] = useState<string[]>([]);
   const [excludeProduct, setExcludeProduct] = useState(false);
@@ -875,6 +898,8 @@ export default function Contacts() {
     isViewMode: boolean;
     contactName?: string;
   }>>([]);
+  const [parentNavInfo, setParentNavInfo] = useState<{ parentContactId: string; returnTab?: string } | null>(null);
+  const parentNavInfoRef = useRef<{ parentContactId: string; returnTab?: string } | null>(null);
 
   type PersonalFields = Record<string, any>;
 
@@ -2248,7 +2273,7 @@ export default function Contacts() {
     window.open(url.toString(), '_blank', 'noopener,noreferrer');
   };
 
-  const openFamilyMemberInNewTab = (contactId: string, memberIdx?: number | null) => {
+  const openFamilyMemberInNewTab = (contactId: string, memberIdx?: number | null, options?: { parentContactId?: string; returnTab?: string }) => {
     const url = new URL('/contacts', window.location.origin);
     url.searchParams.set('openFamilyContact', contactId);
     if (memberIdx !== null && memberIdx !== undefined && memberIdx >= 0) {
@@ -2256,13 +2281,24 @@ export default function Contacts() {
     } else {
       url.searchParams.set('openNewFamilyMember', '1');
     }
-    window.open(url.toString(), '_blank', 'noopener,noreferrer');
+    const parentId = options?.parentContactId || contactId || editContactId || loadedContact?.id;
+    if (parentId) {
+      url.searchParams.set('parentContactId', parentId);
+      url.searchParams.set('returnTab', options?.returnTab || activeLeadTab || 'Family');
+    }
+    window.open(url.toString(), '_blank');
   };
 
-  const openContactInNewTab = (contactId: string) => {
+  const openContactInNewTab = (contactId: string, options?: { parentContactId?: string; returnTab?: string; isView?: boolean }) => {
     const url = new URL('/contacts', window.location.origin);
     url.searchParams.set('openContactId', contactId);
-    window.open(url.toString(), '_blank', 'noopener,noreferrer');
+    const parentId = options?.parentContactId || editContactId || loadedContact?.id;
+    if (parentId) {
+      url.searchParams.set('parentContactId', parentId);
+      url.searchParams.set('returnTab', options?.returnTab || activeLeadTab || 'Family');
+    }
+    url.searchParams.set('viewMode', options?.isView === false ? '0' : '1');
+    window.open(url.toString(), '_blank');
   };
 
   // Handle URL query parameters to open Policy Modal in a new tab
@@ -2424,6 +2460,20 @@ export default function Contacts() {
     if (openedDirectContactRef.current === requestKey) return;
     openedDirectContactRef.current = requestKey;
 
+    const parentContactId = searchParams.get('parentContactId');
+    const returnTab = searchParams.get('returnTab');
+    const viewModeParam = searchParams.get('viewMode');
+    const shouldBeView = viewModeParam === null ? true : (viewModeParam === '1' || viewModeParam === 'true');
+
+    if (parentContactId) {
+      const pInfo = {
+        parentContactId,
+        returnTab: returnTab || 'Family',
+      };
+      setParentNavInfo(pInfo);
+      parentNavInfoRef.current = pInfo;
+    }
+
     const loadDirectContact = async () => {
       try {
         const contactRes = await contactsService.get(directContactId);
@@ -2432,7 +2482,8 @@ export default function Contacts() {
           throw new Error('Contact details were not found');
         }
 
-        await openLeadEdit(contact);
+        await openLeadEdit(contact, { isView: shouldBeView });
+        setIsViewMode(shouldBeView);
         navigate('/contacts', { replace: true });
       } catch (error: any) {
         openedDirectContactRef.current = null;
@@ -2547,7 +2598,8 @@ export default function Contacts() {
         }
       ]);
     }
-    openLeadEdit(target);
+    openLeadEdit(target, { isView: true });
+    setIsViewMode(true);
   };
 
   const closeLeadModal = () => {
@@ -2555,6 +2607,8 @@ export default function Contacts() {
       return;
     }
     setContactNavHistory([]);
+    setParentNavInfo(null);
+    parentNavInfoRef.current = null;
     setLeadModalOpen(false);
     setLoadedContact(null);
     setIsViewMode(false);
@@ -2574,6 +2628,36 @@ export default function Contacts() {
         { defaultTab: prev.activeTab || 'Family', isView: prev.isViewMode }
       );
       return;
+    }
+
+    const pNav = parentNavInfo || parentNavInfoRef.current;
+    if (pNav?.parentContactId) {
+      setParentNavInfo(null);
+      parentNavInfoRef.current = null;
+
+      try {
+        if (window.opener && !window.opener.closed) {
+          try {
+            window.opener.focus();
+          } catch (_) {}
+          window.close();
+          return;
+        } else {
+          window.close();
+        }
+      } catch (_) {}
+
+      // If window.close() didn't close this tab (e.g. script-close restricted), navigate back to the parent contact on the Family tab
+      try {
+        const parentRes = await contactsService.get(pNav.parentContactId);
+        const parentContact = parentRes?.data?.data || parentRes?.data || parentRes;
+        if (parentContact?.id) {
+          await openLeadEdit(parentContact, { defaultTab: pNav.returnTab || 'Family' });
+          return;
+        }
+      } catch (err) {
+        console.error('Failed to return to parent contact:', err);
+      }
     }
 
     closeLeadModal();
@@ -3280,6 +3364,8 @@ export default function Contacts() {
       qc.invalidateQueries({ queryKey: ['leads'] });
       qc.invalidateQueries({ queryKey: ['policies'] });
       qc.invalidateQueries({ queryKey: ['contacts-policies-list'] });
+      qc.invalidateQueries({ queryKey: ['leads-policies-list'] });
+      qc.invalidateQueries({ queryKey: ['claims'] });
       qc.invalidateQueries({ queryKey: ['contact-activity'] });
       if (editContactId) {
         qc.invalidateQueries({ queryKey: ['contact-activity', editContactId] });
@@ -4611,25 +4697,78 @@ export default function Contacts() {
   };
 
   const activeCols = useMemo(() => {
-    const cols = activeTab === 'birthdays'
-      ? BIRTHDAY_COLS
-      : activeTab === 'customers'
-        ? CUSTOMER_COLS
-        : CONTACT_COLS;
-    return cols.filter(c => {
-      if (c.key === 'actions') return true;
-      if (c.key === 'name') {
-        if (visibleColumns['name'] !== undefined) {
-          return visibleColumns['name'];
-        }
-        return true;
+    if (activeTab === 'birthdays') {
+      return BIRTHDAY_COLS.filter(c => c.key === 'actions' || isColVisibleInSettings(c.label || String(c.key)));
+    }
+    if (activeTab === 'customers') {
+      return CUSTOMER_COLS.filter(c => c.key === 'actions' || isColVisibleInSettings(c.label || String(c.key)));
+    }
+
+    const norm = (s: string) => (s || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+
+    const KNOWN_COLS: Record<string, Column<any>> = {
+      contactid: {
+        key: 'contactId',
+        label: 'CONTACT ID',
+        sortable: true,
+        render: r => <span className="text-slate-500 font-mono text-xs">{r.contactId || r.id || '—'}</span>
+      },
+      name: CONTACT_COLS.find(c => c.key === 'name')!,
+      phone: CONTACT_COLS.find(c => c.key === 'phone')!,
+      role: CONTACT_COLS.find(c => c.key === 'role')!,
+      status: CONTACT_COLS.find(c => c.key === 'contactStatus')!,
+      leadstage: CONTACT_COLS.find(c => c.key === 'leadStage')!,
+      leadstatus: CONTACT_COLS.find(c => c.key === 'leadStatus')!,
+      assignedemployee: CONTACT_COLS.find(c => c.key === 'assignedTo')!,
+      source: CONTACT_COLS.find(c => c.key === 'source')!,
+      product: CUSTOMER_COLS.find(c => c.key === 'product')!,
+      renewstatus: CUSTOMER_COLS.find(c => c.key === 'renewStatus')!,
+      renewassigned: CUSTOMER_COLS.find(c => c.key === 'renewAssigned')!,
+      claimstatus: CUSTOMER_COLS.find(c => c.key === 'claimStatus')!,
+      claimassigned: CUSTOMER_COLS.find(c => c.key === 'claimAssigned')!,
+      wacampaign: CUSTOMER_COLS.find(c => c.key === 'waCampaign')!,
+      dateofbirth: BIRTHDAY_COLS.find(c => c.key === 'dateOfBirth')!,
+      daysuntilbirthday: BIRTHDAY_COLS.find(c => c.key === 'daysUntil')!,
+      email: {
+        key: 'email',
+        label: 'EMAIL',
+        sortable: true,
+        render: r => <span className="text-slate-600 text-sm">{r.email || '—'}</span>
+      },
+      city: {
+        key: 'city',
+        label: 'CITY',
+        sortable: true,
+        render: r => <span className="text-slate-600 text-sm">{r.city || (r as any).address?.city || '—'}</span>
+      },
+    };
+
+    const cols: Column<any>[] = [];
+    allContactColumnsConfig.forEach(colName => {
+      const n = norm(colName);
+      if (n === 'actions') return;
+      if (!isColVisibleInSettings(colName)) return;
+
+      if (KNOWN_COLS[n]) {
+        cols.push(KNOWN_COLS[n]);
+      } else {
+        cols.push({
+          key: colName,
+          label: colName.toUpperCase(),
+          sortable: false,
+          render: (r: any) => {
+            const val = r[colName] ?? r[colName.toLowerCase()] ?? (r.customFields && r.customFields[colName]) ?? (r.extraData && r.extraData[colName]) ?? '—';
+            return <span className="text-slate-700 text-sm font-medium">{typeof val === 'object' ? JSON.stringify(val) : String(val)}</span>;
+          }
+        });
       }
-      if (visibleColumns[String(c.key)] !== undefined) {
-        return visibleColumns[String(c.key)];
-      }
-      return isColVisibleInSettings(c.label || String(c.key));
     });
-  }, [activeTab, visibleColumns, CUSTOMER_COLS, CONTACT_COLS, BIRTHDAY_COLS]);
+
+    const actionsCol = CONTACT_COLS.find(c => c.key === 'actions');
+    if (actionsCol) cols.push(actionsCol);
+
+    return cols;
+  }, [activeTab, allContactColumnsConfig, isColVisibleInSettings, CONTACT_COLS, CUSTOMER_COLS, BIRTHDAY_COLS]);
 
   return (
     <div className="space-y-4 font-sans text-slate-800 text-sm sm:text-base">
@@ -4876,7 +5015,7 @@ export default function Contacts() {
             </div>
 
             {/* Column Picker Dropdown */}
-            <div className="relative">
+            <div className="relative" ref={colPickerRef}>
               <button
                 onClick={() => setShowColPicker(!showColPicker)}
                 className={clsx(
@@ -4888,36 +5027,28 @@ export default function Contacts() {
                 <Settings size={14} />
               </button>
               {showColPicker && (
-                <div className="absolute right-0 mt-2 w-56 max-h-80 overflow-y-auto bg-white border border-slate-200/90 rounded-2xl shadow-2xl p-3 z-50 text-xs space-y-2 animate-fadeIn">
+                <div className="absolute right-0 mt-2 w-64 max-h-80 overflow-y-auto bg-white border border-slate-200/90 rounded-2xl shadow-2xl p-3 z-50 text-xs space-y-2 animate-fadeIn">
                   <div className="pb-1.5 border-b border-slate-100">
                     <p className="font-extrabold text-slate-400 uppercase tracking-wider text-[10px]">Show Columns</p>
                   </div>
-                  {(activeTab === 'birthdays'
-                    ? BIRTHDAY_COLS
-                    : activeTab === 'customers'
-                      ? CUSTOMER_COLS
-                      : CONTACT_COLS
-                  ).map(c => {
-                    if (c.key === 'actions') return null;
-                    const isVisible = visibleColumns[String(c.key)] !== undefined
-                      ? visibleColumns[String(c.key)]
-                      : (c.key === 'name' ? true : isColVisibleInSettings(c.label || String(c.key)));
-                    return (
-                      <label key={String(c.key)} className="flex items-center gap-2 cursor-pointer font-bold text-slate-700 hover:text-blue-600 transition-colors">
-                        <input
-                          type="checkbox"
-                          checked={isVisible}
-                          onChange={() => {
-                            const next = !isVisible;
-                            setVisibleColumns(prev => ({ ...prev, [String(c.key)]: next }));
-                            toggleColInSettings(c.label || String(c.key));
-                          }}
-                          className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
-                        />
-                        <span>{c.label}</span>
-                      </label>
-                    );
-                  })}
+                  {allContactColumnsConfig
+                    .filter(c => (c || '').trim().toLowerCase() !== 'actions')
+                    .map(colName => {
+                      const isVisible = isColVisibleInSettings(colName);
+                      return (
+                        <label key={colName} className="flex items-center gap-2 cursor-pointer font-bold text-slate-700 hover:text-blue-600 transition-colors">
+                          <input
+                            type="checkbox"
+                            checked={isVisible}
+                            onChange={() => {
+                              toggleColInSettings(colName, isVisible);
+                            }}
+                            className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
+                          />
+                          <span>{colName}</span>
+                        </label>
+                      );
+                    })}
                 </div>
               )}
             </div>
@@ -4925,7 +5056,6 @@ export default function Contacts() {
             {/* Advanced Filters Toggle Button */}
             <button
               onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
-              onMouseEnter={() => setShowAdvancedFilters(true)}
               className={clsx(
                 "p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-500 hover:text-slate-700 cursor-pointer shadow-2xs transition-all flex items-center gap-1.5 text-xs font-bold bg-white",
                 showAdvancedFilters && "bg-blue-50 border-blue-200 text-blue-600"
@@ -5581,16 +5711,20 @@ export default function Contacts() {
         closeOnEscapeAndBackdrop={false}
         title={
           activeLeadTab === 'Policy'
-            ? (editContactId ? "Edit Policy" : "Add Policy")
+            ? (editContactId ? (isViewMode ? "View Policy" : "Edit Policy") : "Add Policy")
             : editContactId
-              ? (activeTab === 'customers' ? "Edit Customer Profile" : "Edit Contact Profile")
+              ? (isViewMode
+                  ? (activeTab === 'customers' ? "View Customer Profile" : "View Contact Profile")
+                  : (activeTab === 'customers' ? "Edit Customer Profile" : "Edit Contact Profile"))
               : (activeTab === 'customers' ? "Add New Customer" : "Add New Contact")
         }
         subtitle={
           activeLeadTab === 'Policy'
             ? "Add or update policy details, company, plan name, and coverage."
             : editContactId
-              ? (activeTab === 'customers' ? "Update customer profile, family details, and policies." : "Update contact profile, family details, and address.")
+              ? (isViewMode
+                  ? (activeTab === 'customers' ? "View customer profile, family details, and policies." : "View contact profile, family details, and address.")
+                  : (activeTab === 'customers' ? "Update customer profile, family details, and policies." : "Update contact profile, family details, and address."))
               : (activeTab === 'customers' ? "Manage customer profile, family details, and policies." : "Manage contact profile, family details, and address.")
         }
         size="2xl"
@@ -5607,7 +5741,18 @@ export default function Contacts() {
                 <span>Cancel</span>
               </button>
             )}
-            {contactNavHistory.length === 0 && !isViewMode && (
+            {(parentNavInfo || parentNavInfoRef.current) && contactNavHistory.length === 0 && (
+              <button
+                type="button"
+                className="px-3 sm:px-4 py-1.5 sm:py-2 text-[10px] sm:text-xs font-bold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl cursor-pointer transition-all flex items-center gap-1.5 shadow-2xs hover:scale-105"
+                onClick={handleCancelLeadModal}
+                title="Close and return to previous contact (Family tab)"
+              >
+                <ArrowLeft size={13} />
+                <span>Back</span>
+              </button>
+            )}
+            {!isViewMode && (
               <button
                 type="button"
                 className="px-3 sm:px-4 py-1.5 sm:py-2 text-[10px] sm:text-xs font-bold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl cursor-pointer transition-all shadow-2xs hover:scale-105"
@@ -5625,10 +5770,11 @@ export default function Contacts() {
             {isViewMode ? (
               <button
                 type="button"
-                className="px-3 sm:px-5 py-1.5 sm:py-2 text-[10px] sm:text-xs font-extrabold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl cursor-pointer shadow-md shadow-blue-500/20 transition-all hover:scale-105"
+                className="px-3 sm:px-5 py-1.5 sm:py-2 text-[10px] sm:text-xs font-extrabold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl cursor-pointer shadow-md shadow-blue-500/20 transition-all hover:scale-105 flex items-center gap-1.5"
                 onClick={() => setIsViewMode(false)}
               >
-                Edit
+                <Pencil size={12} />
+                <span>Edit</span>
               </button>
             ) : (
               <button
@@ -6715,10 +6861,13 @@ export default function Contacts() {
                     <div>
                       <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Details of Medical History</label>
                       <textarea
-                        className="input w-full resize-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
-                        rows={2}
+                        ref={el => autoResizeTextarea(el)}
+                        className="input w-full text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all leading-relaxed py-2 resize-y"
+                        style={{ height: 'auto', minHeight: '56px' }}
+                        rows={Math.max(2, (personalFields.medicalHistoryDetails || '').split('\n').length)}
                         placeholder="Add any additional medical history details..."
                         value={personalFields.medicalHistoryDetails}
+                        onInput={e => autoResizeTextarea(e.currentTarget)}
                         onChange={e => setPersonalFields(p => ({ ...p, medicalHistoryDetails: e.target.value }))}
                       />
                     </div>
@@ -6748,10 +6897,13 @@ export default function Contacts() {
                     <div className="p-4">
                     <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Surgery Details / History</label>
                     <textarea
-                      className="input w-full text-xs resize-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
-                      rows={2}
+                      ref={el => autoResizeTextarea(el)}
+                      className="input w-full text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all leading-relaxed py-2 resize-y"
+                      style={{ height: 'auto', minHeight: '56px' }}
+                      rows={Math.max(2, (personalFields.surgeryDetails || '').split('\n').length)}
                       placeholder="Specify any surgeries done or advised..."
                       value={personalFields.surgeryDetails || ''}
+                      onInput={e => autoResizeTextarea(e.currentTarget)}
                       onChange={e => setPersonalFields(p => ({ ...p, surgeryDetails: e.target.value }))}
                     />
                     </div>
@@ -6780,10 +6932,13 @@ export default function Contacts() {
                     <div className="p-4">
                     <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Prescription &amp; Medication Details</label>
                     <textarea
-                      className="input w-full text-xs resize-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
-                      rows={2}
+                      ref={el => autoResizeTextarea(el)}
+                      className="input w-full text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all leading-relaxed py-2 resize-y"
+                      style={{ height: 'auto', minHeight: '56px' }}
+                      rows={Math.max(2, (personalFields.prescriptionDetails || '').split('\n').length)}
                       placeholder="List current ongoing medicines or prescriptions..."
                       value={personalFields.prescriptionDetails || ''}
+                      onInput={e => autoResizeTextarea(e.currentTarget)}
                       onChange={e => setPersonalFields(p => ({ ...p, prescriptionDetails: e.target.value }))}
                     />
                     </div>
@@ -6814,8 +6969,16 @@ export default function Contacts() {
                       }
                       openAddFamilyMemberModal();
                     }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const contactId = editContactId || loadedContact?.id;
+                        if (contactId) openFamilyMemberInNewTab(contactId);
+                      }
+                    }}
                     className="flex items-center justify-center gap-2 px-4 py-2.5 border-2 border-blue-400 text-blue-600 text-xs font-bold rounded-xl hover:bg-blue-50 cursor-pointer transition-all shadow-xs shrink-0"
-                    title="Add Family Member (Ctrl+Click to open in new tab)"
+                    title="Add Family Member (Ctrl+Click or Ctrl+Enter to open in new tab)"
                   >
                     <Plus size={15} />
                     + Add Family Member
@@ -6843,8 +7006,16 @@ export default function Contacts() {
                           }
                           openAddFamilyMemberModal();
                         }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const contactId = editContactId || loadedContact?.id;
+                            if (contactId) openFamilyMemberInNewTab(contactId);
+                          }
+                        }}
                         className="mt-4 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition-all flex items-center gap-1.5 cursor-pointer"
-                        title="Add First Family Member (Ctrl+Click to open in new tab)"
+                        title="Add First Family Member (Ctrl+Click or Ctrl+Enter to open in new tab)"
                       >
                         <Plus size={14} />
                         Add First Family Member
@@ -6855,7 +7026,16 @@ export default function Contacts() {
                       {familyMembers.map((member, idx) => {
                         const fullName = [member.firstName, member.middleName, member.lastName].filter(Boolean).join(' ').trim() || member.name || 'Family Member';
                         const rel = (member.relation || 'OTHER').toUpperCase();
-                        const relLabel = rel.replace(/_/g, ' ');
+                        let relLabel = rel.replace(/_/g, ' ');
+                        if (rel === 'SPOUSE') {
+                          const g = (member.gender || '').toUpperCase();
+                          if (g === 'FEMALE') relLabel = 'WIFE';
+                          else if (g === 'MALE') relLabel = 'HUSBAND';
+                          else {
+                            const fn = (member.firstName || member.name || '').trim().split(' ')[0].toLowerCase();
+                            if (/(a|i|ee|ita|ika|shree|priya|devi|bai|ben)$/i.test(fn)) relLabel = 'WIFE';
+                          }
+                        }
                         const dobVal = member.dob || member.dateOfBirth || '';
                         const ageVal = member.age || (dobVal ? calculateAge(dobVal) : '');
                         const phoneVal = (member.whatsapp && !member.whatsapp.startsWith('00') && member.whatsapp !== '0000000000')
@@ -6887,21 +7067,54 @@ export default function Contacts() {
                         return (
                           <div
                             key={idx}
-                            className={`overflow-hidden rounded-2xl border ${cardBorder} bg-white shadow-xs hover:shadow-md transition-all relative`}
+                            tabIndex={0}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                if (e.ctrlKey || e.metaKey) {
+                                  const contactId = editContactId || loadedContact?.id;
+                                  if (contactId) {
+                                    openFamilyMemberInNewTab(contactId, idx, {
+                                      parentContactId: contactId,
+                                      returnTab: 'Family',
+                                    });
+                                  } else if (member.contactId) {
+                                    openContactInNewTab(member.contactId, {
+                                      parentContactId: editContactId || loadedContact?.id,
+                                      returnTab: 'Family',
+                                    });
+                                  }
+                                } else {
+                                  openEditFamilyMemberModal(idx);
+                                }
+                              }
+                            }}
+                            className={`overflow-hidden rounded-2xl border ${cardBorder} bg-white shadow-xs hover:shadow-md transition-all relative outline-none focus-within:ring-2 focus-within:ring-blue-400`}
                           >
-                            {/* Card Header (Clicking card opens Family Member popup in Edit mode, same like new policy!) */}
+                            {/* Card Header (Clicking card opens family member in same tab; Ctrl+Click or Ctrl+Enter opens in new tab) */}
                             <div
                               onClick={(e) => {
+                                e.stopPropagation();
                                 if (e.ctrlKey || e.metaKey) {
-                                  e.preventDefault();
                                   const contactId = editContactId || loadedContact?.id;
-                                  if (contactId) openFamilyMemberInNewTab(contactId, idx);
+                                  if (contactId) {
+                                    openFamilyMemberInNewTab(contactId, idx, {
+                                      parentContactId: contactId,
+                                      returnTab: 'Family',
+                                    });
+                                  } else if (member.contactId) {
+                                    openContactInNewTab(member.contactId, {
+                                      parentContactId: editContactId || loadedContact?.id,
+                                      returnTab: 'Family',
+                                    });
+                                  }
                                   return;
                                 }
                                 openEditFamilyMemberModal(idx);
                               }}
                               className={`flex items-center justify-between bg-gradient-to-r ${headerGradient} px-4 py-3 cursor-pointer select-none`}
-                              title="Click to open Family Member form popup (Ctrl+Click to open in new tab)"
+                              title="Click to view/edit family member in same tab (Ctrl+Click or Ctrl+Enter to open in new tab)"
                             >
                               <div className="flex items-center gap-3 min-w-0 flex-1">
                                 <div className="w-7 h-7 rounded-lg bg-white/20 backdrop-blur-sm flex items-center justify-center text-white shrink-0 font-black text-xs">
@@ -6915,11 +7128,6 @@ export default function Contacts() {
                                     <h4 className="text-white font-extrabold text-xs sm:text-sm truncate">
                                       {fullName}
                                     </h4>
-                                    {member.isDependent && (
-                                      <span className="px-1.5 py-0.5 rounded-md bg-amber-400 text-slate-900 font-black text-[9px] uppercase tracking-wider">
-                                        Dependent
-                                      </span>
-                                    )}
                                   </div>
                                   <div className="flex flex-wrap items-center gap-3 text-white/80 text-[11px] font-medium mt-0.5">
                                     {ageVal ? <span>Age: <strong className="text-white">{ageVal} yrs</strong></span> : null}
@@ -6935,15 +7143,32 @@ export default function Contacts() {
                                   <button
                                     type="button"
                                     onClick={(e) => {
+                                      e.stopPropagation();
                                       if (e.ctrlKey || e.metaKey) {
-                                        e.preventDefault();
-                                        openContactInNewTab(member.contactId);
+                                        openContactInNewTab(member.contactId, {
+                                          parentContactId: editContactId || loadedContact?.id,
+                                          returnTab: 'Family',
+                                        });
                                         return;
                                       }
-                                      navigateToContact({ id: member.contactId });
+                                      navigateToContact({ id: member.contactId, contactId: member.contactId });
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        if (e.ctrlKey || e.metaKey) {
+                                          openContactInNewTab(member.contactId, {
+                                            parentContactId: editContactId || loadedContact?.id,
+                                            returnTab: 'Family',
+                                          });
+                                        } else {
+                                          navigateToContact({ id: member.contactId, contactId: member.contactId });
+                                        }
+                                      }
                                     }}
                                     className="px-2.5 py-1 rounded-lg bg-white/20 hover:bg-white/30 text-white font-bold text-[10px] flex items-center gap-1 transition-all cursor-pointer"
-                                    title="Open this family member's direct Contact Form (Ctrl+Click to open in new tab)"
+                                    title="Open this family member's direct Contact Form in same tab (Ctrl+Click or Ctrl+Enter to open in new tab)"
                                   >
                                     <ExternalLink size={12} />
                                     <span className="hidden sm:inline">Open Contact</span>
@@ -6960,8 +7185,19 @@ export default function Contacts() {
                                     }
                                     openEditFamilyMemberModal(idx);
                                   }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      if (e.ctrlKey || e.metaKey) {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        const contactId = editContactId || loadedContact?.id;
+                                        if (contactId) openFamilyMemberInNewTab(contactId, idx);
+                                        return;
+                                      }
+                                    }
+                                  }}
                                   className="p-1.5 rounded-lg bg-white/15 hover:bg-white/30 text-white font-bold text-xs flex items-center gap-1 transition-all cursor-pointer"
-                                  title="Edit Family Member Details in Popup (Ctrl+Click to open in new tab)"
+                                  title="Edit Family Member Details in Popup (Ctrl+Click or Ctrl+Enter to open in new tab)"
                                 >
                                   <Pencil size={13} />
                                   <span className="text-[11px]">Edit</span>
@@ -6980,16 +7216,26 @@ export default function Contacts() {
                             {/* Card Body Summary */}
                             <div
                               onClick={(e) => {
+                                e.stopPropagation();
                                 if (e.ctrlKey || e.metaKey) {
-                                  e.preventDefault();
                                   const contactId = editContactId || loadedContact?.id;
-                                  if (contactId) openFamilyMemberInNewTab(contactId, idx);
+                                  if (contactId) {
+                                    openFamilyMemberInNewTab(contactId, idx, {
+                                      parentContactId: contactId,
+                                      returnTab: 'Family',
+                                    });
+                                  } else if (member.contactId) {
+                                    openContactInNewTab(member.contactId, {
+                                      parentContactId: editContactId || loadedContact?.id,
+                                      returnTab: 'Family',
+                                    });
+                                  }
                                   return;
                                 }
                                 openEditFamilyMemberModal(idx);
                               }}
                               className="p-3.5 bg-slate-50/40 hover:bg-slate-50/80 transition-colors cursor-pointer grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs text-slate-600"
-                              title="Click to open Family Member form popup (Ctrl+Click to open in new tab)"
+                              title="Click to view/edit family member in same tab (Ctrl+Click or Ctrl+Enter to open in new tab)"
                             >
                               <div>
                                 <span className="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">Contact</span>
@@ -7051,8 +7297,16 @@ export default function Contacts() {
                           }
                           openAddFamilyMemberModal();
                         }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const contactId = editContactId || loadedContact?.id;
+                            if (contactId) openFamilyMemberInNewTab(contactId);
+                          }
+                        }}
                         className="w-full mt-2 py-3 rounded-2xl border-2 border-dashed border-blue-300 hover:border-blue-500 bg-blue-50/40 hover:bg-blue-50 text-blue-600 hover:text-blue-700 text-xs font-extrabold flex items-center justify-center gap-2 transition-all cursor-pointer group"
-                        title="Add Another Family Member (Ctrl+Click to open in new tab)"
+                        title="Add Another Family Member in same tab (Ctrl+Click or Ctrl+Enter to open in new tab)"
                       >
                         <Plus size={15} />
                         + Add Another Family Member
@@ -7260,6 +7514,104 @@ export default function Contacts() {
                             </div>
                           </div>
                         </div>
+
+                        {/* Connected Persons / Covered Members on this Policy */}
+                        {(() => {
+                          const pMembers: any[] = [];
+                          const seenPM = new Set<string>();
+                          if (Array.isArray(policy.members)) {
+                            policy.members.forEach((m: any) => {
+                              const name = (m.name || `${m.firstName || ''} ${m.lastName || ''}`).trim();
+                              if (name && !seenPM.has(name.toLowerCase())) {
+                                seenPM.add(name.toLowerCase());
+                                pMembers.push({
+                                  id: m.id,
+                                  name,
+                                  relationship: m.relationship || 'Member',
+                                  phone: m.phone || m.contactNo || '',
+                                });
+                              }
+                            });
+                          }
+                          if (policy.notes) {
+                            policy.notes.split('\n').forEach((line: string, i: number) => {
+                              if (line.startsWith('Connected Person')) {
+                                const nameM = line.match(/Name:\s*([^,]+)/);
+                                const relM = line.match(/Relationship:\s*([^,]+)/);
+                                const contactM = line.match(/Contact:\s*([^,]+)/);
+                                if (nameM) {
+                                  const name = nameM[1].trim();
+                                  if (name && !seenPM.has(name.toLowerCase())) {
+                                    seenPM.add(name.toLowerCase());
+                                    pMembers.push({
+                                      id: `note-m-${i}`,
+                                      name,
+                                      relationship: relM ? relM[1].trim() : 'Member',
+                                      phone: contactM && contactM[1].trim() !== 'N/A' ? contactM[1].trim() : '',
+                                    });
+                                  }
+                                }
+                              }
+                            });
+                          }
+                          if (pMembers.length === 0 && Array.isArray(familyMembers) && familyMembers.length > 0) {
+                            familyMembers.forEach((fm: any, i: number) => {
+                              const name = (fm.name || `${fm.firstName || ''} ${fm.lastName || ''}`).trim();
+                              if (name && !seenPM.has(name.toLowerCase())) {
+                                seenPM.add(name.toLowerCase());
+                                pMembers.push({
+                                  id: fm.id || fm.contactId || `fm-${i}`,
+                                  name,
+                                  relationship: fm.relation || fm.relationship || 'Member',
+                                  phone: fm.phone || fm.contactNo || fm.whatsapp || '',
+                                });
+                              }
+                            });
+                          }
+                          if (pMembers.length === 0 && Array.isArray(loadedContact?.relationships) && loadedContact.relationships.length > 0) {
+                            loadedContact.relationships.forEach((rel: any, i: number) => {
+                              const target = rel.relatedContact || rel.contact || rel;
+                              const name = (target?.name || `${target?.firstName || ''} ${target?.lastName || ''}`).trim();
+                              if (name && !seenPM.has(name.toLowerCase())) {
+                                seenPM.add(name.toLowerCase());
+                                pMembers.push({
+                                  id: target?.id || rel.id || `rel-${i}`,
+                                  name,
+                                  relationship: rel.relationshipType || rel.relation || target?.relation || 'Member',
+                                  phone: target?.phone || target?.contactNo || '',
+                                });
+                              }
+                            });
+                          }
+                          if (pMembers.length === 0) return null;
+                          return (
+                            <div className="rounded-xl border border-blue-100 bg-blue-50/30 p-2.5 shadow-2xs">
+                              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                                <Users size={12} className="text-blue-600" /> Connected Persons ({pMembers.length})
+                              </p>
+                              <div className="flex flex-wrap gap-2">
+                                {pMembers.map((m, mIdx) => (
+                                  <div
+                                    key={m.id || mIdx}
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-slate-200 shadow-2xs text-xs font-semibold text-slate-800"
+                                  >
+                                    <span>{m.name}</span>
+                                    {m.relationship && (
+                                      <span className="text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">
+                                        {m.relationship}
+                                      </span>
+                                    )}
+                                    {m.phone && (
+                                      <span className="text-[10px] text-slate-400 font-normal">
+                                        · {m.phone}
+                                      </span>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })()}
 
                         <div className="flex justify-end pt-2 border-t border-slate-200/80 mt-2">
                           <button
@@ -7504,7 +7856,7 @@ export default function Contacts() {
                               setSelectedClaimDetail(cl);
                             }
                           }}
-                          className="w-full text-left p-3 bg-white rounded-2xl border border-slate-200/80 shadow-2xs space-y-2 hover:border-blue-300 hover:shadow-sm transition-all cursor-pointer pointer-events-auto select-none group"
+                          className="w-full text-left p-3.5 bg-white rounded-2xl border border-blue-300 shadow-2xs space-y-2 hover:border-blue-400 hover:shadow-sm transition-all cursor-pointer pointer-events-auto select-none group"
                           aria-label={`View claim ${cl.claimNumber || ''}`}
                         >
                           <div className="flex items-center justify-between">
@@ -7516,18 +7868,16 @@ export default function Contacts() {
                               <p className="text-[10px] text-slate-400">Policy: {cl.policy?.policyNumber || 'N/A'}</p>
                             </div>
                             <div className="text-right">
-                              <span className="px-2 py-0.5 rounded text-[9px] font-extrabold uppercase bg-blue-50 text-blue-700 border border-blue-100">
+                              <span className="px-2 py-0.5 rounded text-[9px] font-extrabold uppercase bg-blue-50 text-blue-700 border border-blue-200">
                                 {cl.status}
                               </span>
                               <p className="text-xs font-extrabold text-slate-800 mt-1">₹{Number(cl.claimAmount || 0).toLocaleString('en-IN')}</p>
                             </div>
                           </div>
-                          {cl.intimatedAt && (
-                            <p className="text-[10px] text-slate-400 border-t border-slate-100 pt-1.5 flex justify-between">
-                              <span>Intimated: {format(new Date(cl.intimatedAt), 'dd MMM yyyy')}</span>
-                              {cl.approvedAmount != null && <span>Approved: ₹{Number(cl.approvedAmount).toLocaleString('en-IN')}</span>}
-                            </p>
-                          )}
+                          <p className="text-[10px] text-slate-400 border-t border-slate-100 pt-1.5 flex justify-between">
+                            <span>Intimated: {cl.intimatedAt ? format(new Date(cl.intimatedAt), 'dd MMM yyyy') : '—'}</span>
+                            <span>Approved: ₹{Number(cl.approvedAmount || 0).toLocaleString('en-IN')}</span>
+                          </p>
                         </div>
                       ))}
                     </div>
@@ -7831,6 +8181,11 @@ export default function Contacts() {
         }}
         contactId={editContactId || loadedContact?.id}
         contactName={loadedContact ? `${loadedContact.firstName || ''} ${loadedContact.lastName || ''}`.trim() : undefined}
+        initialData={{
+          ...(loadedContact || {}),
+          familyMembers: familyMembers.length > 0 ? familyMembers : (loadedContact?.relationships || []),
+          relationships: loadedContact?.relationships || [],
+        }}
         onSuccess={() => {
           setPolicyToEdit(null);
           refetchContacts();

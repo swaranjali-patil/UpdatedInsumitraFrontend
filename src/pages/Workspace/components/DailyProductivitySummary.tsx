@@ -76,22 +76,10 @@ export default function DailyProductivitySummary({ data, isViewOnly = false }: D
         </div>
       </div>
 
-      {/* 7 Key Productivity KPI Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2.5">
-        {/* 1. Tasks Completed */}
-        <div className="bg-slate-50/80 hover:bg-slate-100/70 border border-slate-200/80 rounded-xl p-3 flex flex-col justify-between transition-all">
-          <div className="flex items-center justify-between text-emerald-600 mb-1.5">
-            <CheckCircle2 className="w-4 h-4" />
-            <span className="text-[10px] font-bold text-slate-400">Tasks</span>
-          </div>
-          <div>
-            <span className="text-xl font-black text-slate-800">{summary.tasksCompleted}</span>
-            <p className="text-[10px] font-bold text-slate-500 truncate">Tasks Done</p>
-          </div>
-        </div>
-
-        {/* 2. Lead Movements */}
-        <div className="bg-blue-50/50 hover:bg-blue-50/80 border border-blue-200/70 rounded-xl p-3 flex flex-col justify-between transition-all col-span-2 sm:col-span-1">
+      {/* Essential Productivity KPI Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {/* 1. Lead Movements */}
+        <div className="bg-blue-50/50 hover:bg-blue-50/80 border border-blue-200/70 rounded-xl p-3 flex flex-col justify-between transition-all">
           <div className="flex items-center justify-between text-blue-600 mb-1.5">
             <TrendingUp className="w-4 h-4" />
             <span className="text-[10px] font-bold text-blue-700 bg-blue-100/70 px-1.5 py-0.2 rounded">Stages</span>
@@ -105,31 +93,7 @@ export default function DailyProductivitySummary({ data, isViewOnly = false }: D
           </div>
         </div>
 
-        {/* 3. Installments Closed */}
-        <div className="bg-purple-50/50 hover:bg-purple-50/80 border border-purple-200/70 rounded-xl p-3 flex flex-col justify-between transition-all">
-          <div className="flex items-center justify-between text-purple-600 mb-1.5">
-            <CreditCard className="w-4 h-4" />
-            <span className="text-[10px] font-bold text-purple-400">EMIs</span>
-          </div>
-          <div>
-            <span className="text-xl font-black text-purple-900">{summary.installmentsClosed}</span>
-            <p className="text-[10px] font-bold text-slate-500 truncate">Installments Closed</p>
-          </div>
-        </div>
-
-        {/* 4. PHCs Completed */}
-        <div className="bg-rose-50/50 hover:bg-rose-50/80 border border-rose-200/70 rounded-xl p-3 flex flex-col justify-between transition-all">
-          <div className="flex items-center justify-between text-rose-600 mb-1.5">
-            <HeartPulse className="w-4 h-4" />
-            <span className="text-[10px] font-bold text-rose-400">Health</span>
-          </div>
-          <div>
-            <span className="text-xl font-black text-rose-900">{summary.phcsCompleted}</span>
-            <p className="text-[10px] font-bold text-slate-500 truncate">PHC Completed</p>
-          </div>
-        </div>
-
-        {/* 5. Claims Completed */}
+        {/* 2. Claims Completed */}
         <div className="bg-amber-50/50 hover:bg-amber-50/80 border border-amber-200/70 rounded-xl p-3 flex flex-col justify-between transition-all">
           <div className="flex items-center justify-between text-amber-600 mb-1.5">
             <FileCheck2 className="w-4 h-4" />
@@ -141,7 +105,7 @@ export default function DailyProductivitySummary({ data, isViewOnly = false }: D
           </div>
         </div>
 
-        {/* 6. Renewals Completed */}
+        {/* 3. Renewals Completed */}
         <div className="bg-teal-50/50 hover:bg-teal-50/80 border border-teal-200/70 rounded-xl p-3 flex flex-col justify-between transition-all">
           <div className="flex items-center justify-between text-teal-600 mb-1.5">
             <RefreshCw className="w-4 h-4" />
@@ -153,8 +117,8 @@ export default function DailyProductivitySummary({ data, isViewOnly = false }: D
           </div>
         </div>
 
-        {/* 7. Premium Generated */}
-        <div className="bg-gradient-to-br from-emerald-500/10 to-teal-500/10 border border-emerald-200 rounded-xl p-3 flex flex-col justify-between transition-all col-span-2 sm:col-span-3 lg:col-span-1">
+        {/* 4. Premium Generated */}
+        <div className="bg-gradient-to-br from-emerald-500/10 to-teal-500/10 border border-emerald-200 rounded-xl p-3 flex flex-col justify-between transition-all">
           <div className="flex items-center justify-between text-emerald-700 mb-1.5">
             <IndianRupee className="w-4 h-4" />
             <span className="text-[10px] font-extrabold text-emerald-800 bg-emerald-100/80 px-1.5 py-0.2 rounded">Revenue</span>

@@ -17,141 +17,6 @@ import type { Employee } from './EmployeesLayout';
 import { sortData } from '../../utils/sortUtils';
 import EmployeeDailyDrillDown, { DailyDrillDownRecord } from './components/EmployeeDailyDrillDown';
 
-// ── Mock Detailed Daily Records for Period Reporting ──
-const MOCK_PERIOD_RECORDS: DailyDrillDownRecord[] = [
-  {
-    date: '2026-08-22',
-    employeeId: 'emp-001',
-    employeeName: 'Rahul Sharma',
-    designation: 'Senior Insurance Specialist',
-    department: 'Sales',
-    attendanceStatus: 'PRESENT',
-    clockInTime: '09:04 AM',
-    clockOutTime: '06:15 PM',
-    breakDuration: '45m',
-    netWorkingHours: '8h 26m',
-    tasksCompleted: 7,
-    leadMovements: 14,
-    installmentsClosed: 5,
-    phcsCompleted: 3,
-    claimsHandled: 2,
-    renewalsClosed: 4,
-    premiumGenerated: 125000,
-    eodNotes: 'Followed up with 14 leads, converted 2 Star Health proposals. Verified KYC for Policy #POL-8902.',
-    nextDayPlan: '1. Follow up on 5 corporate renewal leads.\n2. Submit medical test report for Dr. Vikrant.',
-    timelineEvents: [
-      { id: 't1', time: '09:04 AM', title: 'Clocked In — Shift Started', category: 'Attendance', isAutoCaptured: true },
-      { id: 't2', time: '09:20 AM – 09:45 AM', duration: '25m', title: 'Lead Follow-up Calls (5 Leads)', category: 'Sales', outcome: 'Quotation sent for Star Comprehensive ₹10L', isAutoCaptured: true },
-      { id: 't3', time: '10:00 AM – 10:40 AM', duration: '40m', title: 'Customer In-Person Proposal Discussion', category: 'Client Visit', outcome: 'Agreed on HDFC Life Click 2 Protect ₹1.5 Cr', isAutoCaptured: false },
-      { id: 't4', time: '10:50 AM – 11:30 AM', duration: '40m', title: 'Policy Processing & Documentation Upload', category: 'Operations', outcome: 'KYC & Medical reports submitted to insurer', isAutoCaptured: true },
-      { id: 't5', time: '11:45 AM – 12:20 PM', duration: '35m', title: 'Renewal Follow-up & Payment Link Sharing', category: 'Renewals', outcome: 'Shared direct payment link (₹24,500)', isAutoCaptured: true },
-      { id: 't6', time: '01:00 PM – 01:45 PM', duration: '45m', title: 'Lunch Break (Deducted from Work Time)', category: 'Break', isBreak: true },
-      { id: 't7', time: '02:00 PM – 03:00 PM', duration: '60m', title: 'Motor Accident Claim Survey Assistance', category: 'Claims', outcome: 'Garage estimate verified and approved', isAutoCaptured: true },
-    ]
-  },
-  {
-    date: '2026-08-22',
-    employeeId: 'emp-002',
-    employeeName: 'Priya Sharma',
-    designation: 'Insurance Agent',
-    department: 'Sales',
-    attendanceStatus: 'PRESENT',
-    clockInTime: '09:15 AM',
-    clockOutTime: '06:00 PM',
-    breakDuration: '30m',
-    netWorkingHours: '8h 15m',
-    tasksCompleted: 6,
-    leadMovements: 9,
-    installmentsClosed: 3,
-    phcsCompleted: 2,
-    claimsHandled: 1,
-    renewalsClosed: 2,
-    premiumGenerated: 85000,
-    eodNotes: 'Closed 2 motor policy renewals and collected 3 premium installments.',
-    nextDayPlan: '1. Contact 8 new online leads.\n2. Submit claim endorsement docs.',
-    timelineEvents: [
-      { id: 't1', time: '09:15 AM', title: 'Clocked In', category: 'Attendance', isAutoCaptured: true },
-      { id: 't2', time: '10:00 AM', duration: '30m', title: 'Motor Renewal Follow-ups', category: 'Renewals', outcome: '2 policies renewed successfully', isAutoCaptured: true },
-      { id: 't3', time: '01:15 PM', duration: '30m', title: 'Lunch Break', category: 'Break', isBreak: true },
-      { id: 't4', time: '03:00 PM', duration: '45m', title: 'Claim Intimation Form Fill', category: 'Claims', outcome: 'Claim submitted to Care Health', isAutoCaptured: true },
-    ]
-  },
-  {
-    date: '2026-08-21',
-    employeeId: 'emp-001',
-    employeeName: 'Rahul Sharma',
-    designation: 'Senior Insurance Specialist',
-    department: 'Sales',
-    attendanceStatus: 'PRESENT',
-    clockInTime: '09:00 AM',
-    clockOutTime: '06:30 PM',
-    breakDuration: '40m',
-    netWorkingHours: '8h 50m',
-    tasksCompleted: 9,
-    leadMovements: 16,
-    installmentsClosed: 6,
-    phcsCompleted: 4,
-    claimsHandled: 3,
-    renewalsClosed: 5,
-    premiumGenerated: 190000,
-    eodNotes: 'Exceeded daily target. Handled 3 major claim surveys and assisted 4 PHC bookings.',
-    nextDayPlan: 'Follow up on pending KYC documents.',
-    timelineEvents: [
-      { id: 't1', time: '09:00 AM', title: 'Clocked In', category: 'Attendance', isAutoCaptured: true },
-      { id: 't2', time: '11:00 AM', duration: '50m', title: 'Comprehensive Family Floater Proposal', category: 'Sales', outcome: 'Proposal issued', isAutoCaptured: true },
-    ]
-  },
-  {
-    date: '2026-08-21',
-    employeeId: 'emp-003',
-    employeeName: 'Anjali Nair',
-    designation: 'Operations Executive',
-    department: 'Operations',
-    attendanceStatus: 'PRESENT',
-    clockInTime: '09:30 AM',
-    clockOutTime: '06:10 PM',
-    breakDuration: '45m',
-    netWorkingHours: '7h 55m',
-    tasksCompleted: 11,
-    leadMovements: 6,
-    installmentsClosed: 8,
-    phcsCompleted: 5,
-    claimsHandled: 4,
-    renewalsClosed: 3,
-    premiumGenerated: 95000,
-    eodNotes: 'Reconciled 8 bank payment installments and processed 5 PHC vouchers.',
-    nextDayPlan: 'Audit monthly policy issuance register.',
-    timelineEvents: [
-      { id: 't1', time: '09:30 AM', title: 'Clocked In', category: 'Attendance', isAutoCaptured: true },
-      { id: 't2', time: '10:15 AM', duration: '60m', title: 'Installment Bank Reconciliation', category: 'Operations', outcome: '8 payments verified', isAutoCaptured: true },
-    ]
-  },
-  {
-    date: '2026-08-20',
-    employeeId: 'emp-002',
-    employeeName: 'Priya Sharma',
-    designation: 'Insurance Agent',
-    department: 'Sales',
-    attendanceStatus: 'PRESENT',
-    clockInTime: '09:05 AM',
-    clockOutTime: '05:45 PM',
-    breakDuration: '30m',
-    netWorkingHours: '8h 10m',
-    tasksCompleted: 5,
-    leadMovements: 8,
-    installmentsClosed: 4,
-    phcsCompleted: 2,
-    claimsHandled: 2,
-    renewalsClosed: 3,
-    premiumGenerated: 72000,
-    eodNotes: 'Handled customer renewal callbacks and shared quotes.',
-    nextDayPlan: 'Follow up with lead pipeline.',
-    timelineEvents: [
-      { id: 't1', time: '09:05 AM', title: 'Clocked In', category: 'Attendance', isAutoCaptured: true },
-    ]
-  }
-];
-
 export default function EmployeeEodReports() {
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -177,6 +42,18 @@ export default function EmployeeEodReports() {
   });
   const employeeOptions = (empData?.data ?? empData ?? []) as any[];
 
+  // Dynamic Departments extracted from actual employee profiles
+  const departmentOptions = useMemo(() => {
+    const depts = new Set<string>();
+    employeeOptions.forEach((e: any) => {
+      if (e.department && typeof e.department === 'string' && e.department.trim()) {
+        depts.add(e.department.trim());
+      }
+    });
+    ['Sales', 'Operations', 'Renewals', 'Claims', 'Health Insurance', 'Management'].forEach(d => depts.add(d));
+    return Array.from(depts).sort();
+  }, [employeeOptions]);
+
   // Quick Preset Handlers
   const handleQuickPreset = (preset: 'TODAY' | 'THIS_WEEK' | 'THIS_MONTH' | 'LAST_MONTH') => {
     const today = new Date();
@@ -197,47 +74,35 @@ export default function EmployeeEodReports() {
     }
   };
 
-  // Filtered Period Records
-  const filteredRecords = useMemo(() => {
-    return MOCK_PERIOD_RECORDS.filter(r => {
-      // 1. Employee Filter
-      if (selectedEmpId !== 'ALL' && r.employeeId !== selectedEmpId && !r.employeeName.toLowerCase().includes(selectedEmpId.toLowerCase())) {
-        return false;
-      }
-      // 2. Department Filter
-      if (selectedDept !== 'ALL' && r.department !== selectedDept) {
-        return false;
-      }
-      // 3. Date Range Filter
-      if (dateFrom && r.date < dateFrom) return false;
-      if (dateTo && r.date > dateTo) return false;
+  // Real Workforce Productivity & Deliverables Query
+  const { data: reportData, isLoading: isReportLoading } = useQuery({
+    queryKey: ['workforce-reports', selectedEmpId, selectedDept, dateFrom, dateTo],
+    queryFn: () => employeesService.getWorkforceReports({
+      employeeId: selectedEmpId,
+      department: selectedDept,
+      startDate: dateFrom,
+      endDate: dateTo,
+    }),
+  });
 
-      return true;
-    });
-  }, [selectedEmpId, selectedDept, dateFrom, dateTo]);
+  // Filtered / Received Period Records
+  const filteredRecords: DailyDrillDownRecord[] = useMemo(() => {
+    return (reportData?.data?.records ?? []) as DailyDrillDownRecord[];
+  }, [reportData]);
 
   // Aggregated Summary Statistics for Selected Period
   const periodTotals = useMemo(() => {
-    const totalWorkingDays = filteredRecords.length;
-    const totalTasks = filteredRecords.reduce((sum, r) => sum + r.tasksCompleted, 0);
-    const totalLeadMoves = filteredRecords.reduce((sum, r) => sum + r.leadMovements, 0);
-    const totalInstallments = filteredRecords.reduce((sum, r) => sum + r.installmentsClosed, 0);
-    const totalPHCs = filteredRecords.reduce((sum, r) => sum + r.phcsCompleted, 0);
-    const totalClaims = filteredRecords.reduce((sum, r) => sum + r.claimsHandled, 0);
-    const totalRenewals = filteredRecords.reduce((sum, r) => sum + r.renewalsClosed, 0);
-    const totalPremium = filteredRecords.reduce((sum, r) => sum + r.premiumGenerated, 0);
-
-    return {
-      totalWorkingDays,
-      totalTasks,
-      totalLeadMoves,
-      totalInstallments,
-      totalPHCs,
-      totalClaims,
-      totalRenewals,
-      totalPremium
+    return reportData?.data?.totals ?? {
+      totalWorkingDays: 0,
+      totalTasks: 0,
+      totalLeadMoves: 0,
+      totalInstallments: 0,
+      totalPHCs: 0,
+      totalClaims: 0,
+      totalRenewals: 0,
+      totalPremium: 0,
     };
-  }, [filteredRecords]);
+  }, [reportData]);
 
   // Full Multi-Column Excel Export Handler
   const handleExportExcel = () => {
@@ -312,12 +177,19 @@ export default function EmployeeEodReports() {
             <select
               value={selectedEmpId}
               onChange={(e) => setSelectedEmpId(e.target.value)}
-              className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-white font-semibold text-slate-800"
+              className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-white font-semibold text-slate-800 focus:outline-none focus:border-blue-500"
             >
-              <option value="ALL">👥 All Employees ({employeeOptions.length || 3})</option>
-              <option value="emp-001">Rahul Sharma (Senior Insurance Specialist)</option>
-              <option value="emp-002">Priya Sharma (Insurance Agent)</option>
-              <option value="emp-003">Anjali Nair (Operations Executive)</option>
+              <option value="ALL">👥 All Employees ({employeeOptions.length})</option>
+              {employeeOptions.map((emp: any) => {
+                const empValue = emp.userId || emp.id;
+                const empName = `${emp.firstName || ''} ${emp.lastName || ''}`.trim() || 'Employee';
+                const roleDesc = emp.designation || emp.department || 'Employee';
+                return (
+                  <option key={emp.id} value={empValue}>
+                    {empName} ({roleDesc})
+                  </option>
+                );
+              })}
             </select>
           </div>
 
@@ -327,13 +199,12 @@ export default function EmployeeEodReports() {
             <select
               value={selectedDept}
               onChange={(e) => setSelectedDept(e.target.value)}
-              className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-white font-semibold text-slate-800"
+              className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-white font-semibold text-slate-800 focus:outline-none focus:border-blue-500"
             >
               <option value="ALL">All Departments</option>
-              <option value="Sales">Sales</option>
-              <option value="Operations">Operations</option>
-              <option value="Renewals">Renewals</option>
-              <option value="Claims">Claims</option>
+              {departmentOptions.map(dept => (
+                <option key={dept} value={dept}>{dept}</option>
+              ))}
             </select>
           </div>
 
@@ -479,7 +350,16 @@ export default function EmployeeEodReports() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredRecords.length === 0 ? (
+              {isReportLoading ? (
+                <tr>
+                  <td colSpan={11} className="text-center py-12 text-slate-500 font-semibold">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <RefreshCw className="w-5 h-5 text-blue-600 animate-spin" />
+                      <span className="text-xs">Loading employee deliverables report...</span>
+                    </div>
+                  </td>
+                </tr>
+              ) : filteredRecords.length === 0 ? (
                 <tr>
                   <td colSpan={11} className="text-center py-10 text-slate-400 font-medium">
                     No productivity logs found for the selected employee and date range.

@@ -1,6 +1,6 @@
 import { isFieldRequired as isFieldRequiredHelper, COMPULSORY_RULES_UPDATED_EVENT } from '../../utils/compulsoryFieldRules';
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
+import { useNavigate, useLocation, useSearchParams, useParams } from 'react-router-dom';
 import { Plus, X, User, Shield, Pencil, Trash2, Upload, Filter, Search, Info, Save, ChevronDown, Settings, CreditCard, Building, CheckCircle2, AlertTriangle, Users, Activity, FileText, FileCheck2, Clock, Download, MessageCircle, History, Eye } from 'lucide-react';
 import EmiTrackingView, { MonthPickerDropdown } from './EmiTrackingView';
 import PhcTrackingView from './PhcTrackingView';
@@ -25,6 +25,8 @@ import { DatePicker } from '@comps/common/DatePicker';
 import CustomSelect from '@comps/common/CustomSelect';
 import { getActiveDropdownOptions, isCategoryMatch } from '../../utils/masterDropdowns';
 import { useMasterDropdowns } from '../../hooks/useMasterDropdowns';
+import { formatPolicyRelationship } from './CreatePolicyModal';
+import ClaimDetailModal from '../Claims/ClaimDetailModal';
 import * as XLSX from 'xlsx';
 
 const formatPreview = (dateStr?: string) => {
@@ -43,7 +45,7 @@ import { useTableColumnVisibility } from '@hooks/useTableColumnVisibility';
 import clsx from 'clsx';
 import { getPolicyStatusDisplay, calculateLastInstallmentDate } from '../../utils/policyStatusUtils';
 
-const DEFAULT_COMPANIES_BY_TYPE: Record<string, string[]> = {
+export const DEFAULT_COMPANIES_BY_TYPE: Record<string, string[]> = {
   HEALTH: [
     'Star Health',
     'Niva Bupa',
@@ -181,7 +183,7 @@ export const PRIMARY_DEFAULT_COMPANIES = [
   'TATA AIA',
 ];
 
-const COMPANY_PRIMARY_CATEGORY: Record<string, string> = {
+export const COMPANY_PRIMARY_CATEGORY: Record<string, string> = {
   'Star Health': 'Health',
   'Niva Bupa': 'Health',
   'Care': 'Health',
@@ -196,7 +198,7 @@ const COMPANY_PRIMARY_CATEGORY: Record<string, string> = {
   'TATA AIA': 'Life',
 };
 
-const isCompanyMatch = (dbName: string, selected: string) => {
+export const isCompanyMatch = (dbName: string, selected: string) => {
   if (!dbName || !selected) return false;
   const a = dbName.toLowerCase().replace(/[^a-z0-9]/g, '');
   const b = selected.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -285,6 +287,18 @@ export const POLICY_STATUS_OPTIONS = [
   { value: 'INACTIVE_OLD', label: 'Inactive(Old)' },
   { value: 'CANCELLED', label: 'Cancelled' },
 ];
+
+export const normalizeStatusVal = (val?: string): string => {
+  if (!val) return 'INFORCE';
+  const u = String(val).toUpperCase().trim();
+  if (u === 'ACTIVE' || u === 'INFORCE') return 'INFORCE';
+  if (u === 'RENEWAL DUE' || u === 'RENEWAL_DUE') return 'RENEWAL_DUE';
+  if (u === 'GRACE PERIOD' || u === 'GRACE_PERIOD') return 'GRACE_PERIOD';
+  if (u === 'LAPSED') return 'LAPSED';
+  if (u === 'INACTIVE(OLD)' || u === 'INACTIVE_OLD' || u === 'INACTIVE (OLD)') return 'INACTIVE_OLD';
+  if (u === 'CANCELLED') return 'CANCELLED';
+  return u.replace(/\s+/g, '_');
+};
 
 export const INSTALLMENT_DATE_OPTIONS = Array.from({ length: 31 }, (_, i) => {
   const day = i + 1;
@@ -514,6 +528,7 @@ export function parseExtraNotes(notesText?: string | null): Record<string, any> 
     phcComment: '',
     nominees: [] as { name: string; relationship: string; contact: string; dob: string; sharePercent: number }[],
     connectedPersons: [] as { name: string; relationship: string; contact: string; dob: string; gender: string }[],
+    policyStatus: '',
     cleanNotes: '',
   };
   if (!notesText) return res;
@@ -522,7 +537,10 @@ export function parseExtraNotes(notesText?: string | null): Record<string, any> 
   const cleanLines: string[] = [];
 
   lines.forEach(line => {
-    if (line.startsWith('Policy Type: ')) {
+    if (line.match(/^(?:Policy Statuses|Policy Status):\s*/i)) {
+      const st = line.replace(/^(?:Policy Statuses|Policy Status):\s*/i, '').trim();
+      if (st) res.policyStatus = st;
+    } else if (line.startsWith('Policy Type: ')) {
       res.policyType = line.replace('Policy Type: ', '').trim();
     } else if (line.startsWith('Customer Category: ')) {
       res.customerCategory = line.replace('Customer Category: ', '').trim();
@@ -698,26 +716,32 @@ export function parseExtraNotes(notesText?: string | null): Record<string, any> 
       const contactM = line.match(/Contact:\s*([^,]+)/);
       const dobM = line.match(/DoB:\s*([^,]+)/);
       const shareM = line.match(/Share:\s*([0-9.]+)%/);
-      res.nominees.push({
-        name: nameM ? nameM[1].trim() : '',
-        relationship: relM ? relM[1].trim() : '',
-        contact: contactM && contactM[1].trim().toUpperCase() !== 'N/A' ? contactM[1].trim() : '',
-        dob: dobM && dobM[1].trim() !== 'N/A' ? dobM[1].trim() : '',
-        sharePercent: shareM ? Number(shareM[1]) : 100,
-      });
+      const parsedNomName = nameM ? nameM[1].trim() : '';
+      if (parsedNomName && !res.nominees.some((n: any) => n.name.toLowerCase() === parsedNomName.toLowerCase())) {
+        res.nominees.push({
+          name: parsedNomName,
+          relationship: relM ? relM[1].trim() : '',
+          contact: contactM && contactM[1].trim().toUpperCase() !== 'N/A' ? contactM[1].trim() : '',
+          dob: dobM && dobM[1].trim() !== 'N/A' ? dobM[1].trim() : '',
+          sharePercent: shareM ? Number(shareM[1]) : 100,
+        });
+      }
     } else if (line.startsWith('Connected Person')) {
       const nameM = line.match(/Name:\s*([^,]+)/);
       const relM = line.match(/Relationship:\s*([^,]+)/);
       const contactM = line.match(/Contact:\s*([^,]+)/);
       const dobM = line.match(/DoB:\s*([^,]+)/);
       const genderM = line.match(/Gender:\s*([^,]+)/);
-      res.connectedPersons.push({
-        name: nameM ? nameM[1].trim() : '',
-        relationship: relM ? relM[1].trim() : '',
-        contact: contactM && contactM[1].trim().toUpperCase() !== 'N/A' ? contactM[1].trim() : '',
-        dob: dobM && dobM[1].trim() !== 'N/A' ? dobM[1].trim() : '',
-        gender: genderM ? genderM[1].trim() : 'MALE',
-      });
+      const parsedCpName = nameM ? nameM[1].trim() : '';
+      if (parsedCpName && !res.connectedPersons.some((cp: any) => cp.name.toLowerCase() === parsedCpName.toLowerCase())) {
+        res.connectedPersons.push({
+          name: parsedCpName,
+          relationship: relM ? relM[1].trim() : '',
+          contact: contactM && contactM[1].trim().toUpperCase() !== 'N/A' ? contactM[1].trim() : '',
+          dob: dobM && dobM[1].trim() !== 'N/A' ? dobM[1].trim() : '',
+          gender: genderM ? genderM[1].trim() : 'MALE',
+        });
+      }
     } else if (line.startsWith('Bank Details: ')) {
       const bankM = line.match(/Bank:\s*([^,]+)/);
       const ifscM = line.match(/IFSC:\s*([^,]+)/);
@@ -755,6 +779,16 @@ export function parseExtraNotes(notesText?: string | null): Record<string, any> 
       cleanLines.push(line);
     }
   });
+
+  const stageIsCompleted = res.phcStage && (res.phcStage === 'PROCESS_COMPLETED' || res.phcStage.toUpperCase().includes('COMPLET'));
+  if (stageIsCompleted) {
+    if (!res.phcStatus || res.phcStatus === 'N/A' || res.phcStatus === 'TO_CONTACT' || res.phcStatus === 'UPCOMING') {
+      res.phcStatus = 'Completed';
+    }
+    if ((!res.phcUtilizedAmount || res.phcUtilizedAmount === 0) && res.phcAmount) {
+      res.phcUtilizedAmount = res.phcAmount;
+    }
+  }
 
   if ((res.phcStatus === 'FULLY_UTILISED' || res.phcStatus === 'Fully Utilised') && (!res.phcUtilizedAmount || res.phcUtilizedAmount === 0) && res.phcAmount) {
     res.phcUtilizedAmount = res.phcAmount;
@@ -893,6 +927,15 @@ export default function Policies() {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
+  const { id: routePolicyId } = useParams<{ id?: string }>();
+  const targetViewPolicyId = routePolicyId || searchParams.get('viewPolicyId') || searchParams.get('policyId') || (searchParams.get('action') === 'view' ? searchParams.get('id') : null);
+
+  const { data: routePolicyRes, isLoading: isRoutePolicyLoading, error: routePolicyError } = useQuery({
+    queryKey: ['policy-detail-route-view', targetViewPolicyId],
+    queryFn: () => policiesService.get(targetViewPolicyId!),
+    enabled: !!targetViewPolicyId,
+  });
+
   const qc = useQueryClient();
   const user = useAuthStore(s => s.user);
   const { dropdownMenus, getOptions, getCustomDropdowns } = useMasterDropdowns();
@@ -911,6 +954,19 @@ export default function Policies() {
 
   const policyTypeOptions = useMemo(() => {
     return getOptions('Policy', 'Policy Types', POLICY_TYPE_OPTIONS);
+  }, [getOptions, dropdownMenus]);
+
+  const policyStatusOptions = useMemo(() => {
+    const rawOptions = getOptions('Policy', 'Policy Statuses', POLICY_STATUS_OPTIONS);
+    return rawOptions.map(opt => {
+      const v = typeof opt === 'string' ? opt : opt.value;
+      const l = typeof opt === 'string' ? opt : opt.label;
+      const norm = normalizeStatusVal(v);
+      return {
+        value: norm,
+        label: l || v,
+      };
+    }).filter((opt, idx, arr) => arr.findIndex(x => x.value === opt.value) === idx);
   }, [getOptions, dropdownMenus]);
 
   const customPolicyDropdowns = useMemo(() => {
@@ -954,6 +1010,7 @@ export default function Policies() {
   const createClaimMutation = useCreateClaim();
   const { data: allClaimsData } = useClaims({ page: 1, limit: 500 });
   const allClaimsList = allClaimsData?.data ?? [];
+  const [selectedClaimDetail, setSelectedClaimDetail] = useState<any | null>(null);
   const [isManualSumAssured, setIsManualSumAssured] = useState(false);
 
   // Tab 5: Preventive Health Checkup Extra Details State
@@ -1106,11 +1163,22 @@ export default function Policies() {
     );
   };
 
+  const displayedConnectedPersons = useMemo(() => {
+    const seen = new Set<string>();
+    return connectedPersons.filter(p => {
+      const k = (p.name || '').trim().toLowerCase();
+      if (!k) return true;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }, [connectedPersons]);
+
   const totalNomineePercentage = useMemo(() => {
-    return connectedPersons
+    return displayedConnectedPersons
       .filter(p => p.isNominee)
       .reduce((sum, p) => sum + (Number(p.nomineePercentage) || 0), 0);
-  }, [connectedPersons]);
+  }, [displayedConnectedPersons]);
 
   const [editTarget, setEditTarget] = useState<Policy | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Policy | null>(null);
@@ -1197,8 +1265,7 @@ export default function Policies() {
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   // Column Visibility Selection
-  const { isVisible: isColVisibleInSettings, toggleColumn: toggleColInSettings } = useTableColumnVisibility('policies');
-  const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>({});
+  const { isVisible: isColVisibleInSettings, toggleColumn: toggleColInSettings, allColumns: allPolicyColumnsConfig } = useTableColumnVisibility('policies');
   const [colPickerOpen, setColPickerOpen] = useState(false);
   const colPickerRef = useRef<HTMLDivElement>(null);
 
@@ -1364,10 +1431,10 @@ export default function Policies() {
     try {
       let fileToUpload = file;
       if (/\.(xlsx|xls)$/i.test(file.name)) {
-        const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+        const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
         const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
         if (!firstSheet) throw new Error('The Excel file does not contain a worksheet');
-        const csvContent = XLSX.utils.sheet_to_csv(firstSheet);
+        const csvContent = XLSX.utils.sheet_to_csv(firstSheet, { dateNF: 'YYYY-MM-DD' });
         fileToUpload = new File([csvContent], file.name.replace(/\.[^/.]+$/, '.csv'), { type: 'text/csv' });
       }
       const res = await policiesService.importCsv(fileToUpload);
@@ -2371,32 +2438,6 @@ export default function Policies() {
       .trim()
       .toLowerCase();
 
-    const relationshipTypes: Record<string, string> = {
-      SPOUSE: 'Spouse',
-      HUSBAND: 'Husband',
-      WIFE: 'Wife',
-      SON: 'Son',
-      DAUGHTER: 'Daughter',
-      FATHER: 'Father',
-      MOTHER: 'Mother',
-      BROTHER: 'Brother',
-      SISTER: 'Sister',
-      GRANDFATHER: 'Grandfather',
-      GRANDMOTHER: 'Grandmother',
-      GRANDSON: 'Grandson',
-      GRANDDAUGHTER: 'Granddaughter',
-      GRANDPARENT: 'Grandparent',
-      GRANDCHILD: 'Grandchild',
-      UNCLE: 'Uncle',
-      AUNT: 'Aunt / Unty',
-      NEPHEW: 'Nephew',
-      NIECE: 'Niece',
-      CHILD: 'Child',
-      IN_LAW: 'In-Law',
-      DEPENDENT: 'Dependent',
-      OTHER: 'Other',
-    };
-
     const seenMemberIds = new Set<string>();
     const seenNames = new Set<string>();
 
@@ -2406,10 +2447,10 @@ export default function Policies() {
     const familyMembers: ConnectedPersonItem[] = [];
 
     const processRelationshipItem = (rel: any, isDirect: boolean) => {
-      const member = isDirect ? (rel.relatedContact || rel.contact) : (rel.primaryContact || rel.contact);
+      const member = isDirect ? (rel.relatedContact || rel.contact || rel) : (rel.primaryContact || rel.contact || rel);
       if (!member) return;
 
-      const memberId = String(member.id || member._id || '');
+      const memberId = String(member.id || member._id || member.contactId || '');
       if (memberId && seenMemberIds.has(memberId)) return;
 
       const name = [member.firstName, member.middleName, member.lastName]
@@ -2424,25 +2465,15 @@ export default function Policies() {
       if (memberId) seenMemberIds.add(memberId);
       seenNames.add(lowerName);
 
-      const rawRelType = String(rel.relationshipType || rel.relation || rel.relType || '').toUpperCase();
-      let relationshipLabel = relationshipTypes[rawRelType] || 'Dependent';
-
-      if (!isDirect && rawRelType) {
-        if (rawRelType === 'CHILD' || rawRelType === 'SON' || rawRelType === 'DAUGHTER') {
-          relationshipLabel = String(member.gender).toUpperCase() === 'FEMALE' ? 'Mother' : 'Father';
-        } else if (rawRelType === 'PARENT' || rawRelType === 'FATHER' || rawRelType === 'MOTHER') {
-          relationshipLabel = String(member.gender).toUpperCase() === 'FEMALE' ? 'Daughter' : 'Son';
-        } else if (rawRelType === 'NEPHEW' || rawRelType === 'NIECE') {
-          relationshipLabel = String(member.gender).toUpperCase() === 'FEMALE' ? 'Aunt / Unty' : 'Uncle';
-        }
-      }
+      const rawRelType = String(rel.relationshipType || rel.relation || rel.relType || rel.relationship || member.relationshipType || member.relation || '');
+      const relationshipLabel = formatPolicyRelationship(rawRelType, member.gender, isDirect);
 
       familyMembers.push({
         id: memberId ? `contact-${memberId}` : `member-${Math.random().toString(36).substring(2, 9)}`,
         addedAt: rel.createdAt || member.createdAt || new Date().toISOString(),
         name,
         relationship: relationshipLabel,
-        contactNo: cleanConnectedPhone(member.phone || member.alternatePhone || member.mobile || member.whatsappNumber || member.whatsapp),
+        contactNo: cleanConnectedPhone(member.phone || member.alternatePhone || member.mobile || member.whatsappNumber || member.whatsapp || member.contactNo),
         dob: member.dateOfBirth ? String(member.dateOfBirth).slice(0, 10) : (member.dob ? String(member.dob).slice(0, 10) : ''),
         gender: ['MALE', 'FEMALE', 'OTHER'].includes(String(member.gender).toUpperCase())
           ? String(member.gender).toUpperCase()
@@ -2463,6 +2494,9 @@ export default function Policies() {
     // 2. Process reverse relationships (relatedTo) only for members not already seen
     (contact?.relatedTo || []).forEach((rel: any) => processRelationshipItem(rel, false));
 
+    // 3. Process family members array if present
+    (contact?.familyMembers || []).forEach((rel: any) => processRelationshipItem(rel, true));
+
     setConnectedPersons(prev => {
       const manual = prev.filter(p =>
         !p.id.startsWith('contact-') &&
@@ -2471,7 +2505,14 @@ export default function Policies() {
       );
       const manualNames = new Set(manual.map(p => p.name.trim().toLowerCase()));
       const uniqueFamily = familyMembers.filter(p => !manualNames.has(p.name.trim().toLowerCase()));
-      return [...manual, ...uniqueFamily];
+      const combined = [...manual, ...uniqueFamily];
+      const seen = new Set<string>();
+      return combined.filter(p => {
+        const k = p.name.trim().toLowerCase();
+        if (!k || seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
     });
 
     const cCity = contact.addresses?.find((a: any) => a.isPrimary)?.city || contact.addresses?.[0]?.city || contact.city || '';
@@ -2511,7 +2552,7 @@ export default function Policies() {
   }, [searchParams, syncContactFamilyMembers, navigate, setValue]);
 
   useEffect(() => {
-    if (!modalOpen || editTarget || isViewMode) return;
+    if (!modalOpen) return;
     const cId = selectedContact?.id || watch('contactId');
     if (!cId) return;
     if (connectedPersons.length === 0) {
@@ -2578,6 +2619,10 @@ export default function Policies() {
         replace: true,
         state: returnPayload,
       });
+      return;
+    }
+    if (routePolicyId || searchParams.has('viewPolicyId') || searchParams.has('policyId')) {
+      navigate('/policies', { replace: true });
     }
   };
 
@@ -2666,7 +2711,13 @@ export default function Policies() {
     }
 
     setValue('policyNumber', p.policyNumber || '');
-    setValue('status', (p.status === 'ACTIVE' ? 'INFORCE' : p.status) || 'INFORCE');
+    const initialStatus = p.status || extra.policyStatus || 'INFORCE';
+    setValue('status', normalizeStatusVal(initialStatus) as any);
+    const initCustom: Record<string, string> = {};
+    customPolicyDropdowns.forEach(cd => {
+      if ((extra as any)[cd.name]) initCustom[cd.name] = (extra as any)[cd.name];
+    });
+    setCustomDropdownValues(initCustom);
     setValue('premiumAmount', p.premiumAmount || 0);
     setValue('sumAssured', (p.sumAssured as any) || undefined);
     setValue('startDate', p.startDate ? p.startDate.slice(0, 10) : '');
@@ -2698,11 +2749,23 @@ export default function Policies() {
     setValue('lastInstallmentDate', extra.lastInstallmentDate || extra.lastPremiumDate || p.lastPremiumDate || '');
     setValue('lastPremiumDate', extra.lastPremiumDate || extra.lastInstallmentDate || p.lastPremiumDate || '');
 
-    if (extra.phcAmount || extra.phcStatus || extra.phcInsuredPerson || extra.phcStage) {
+    if (extra.phcAmount || extra.phcStatus || extra.phcInsuredPerson || extra.phcStage || extra.phcUtilizedAmount !== undefined || extra.phcBookingDate || extra.phcAppointmentDate) {
       setPhcExtraDetails(prev => ({
         ...prev,
-        frequency: 'ANNUAL',
+        eligibilityStartDate: extra.phcEligibilityStartDate || '',
+        frequency: extra.phcFrequency || 'ANNUAL',
+        followUpDate: extra.phcFollowUpDate || '',
         insuredPersonName: extra.phcInsuredPerson || prev.insuredPersonName || '',
+        bookingDate: extra.phcBookingDate || '',
+        appointmentDate: extra.phcAppointmentDate || '',
+        centreName: extra.phcCentreName || '',
+        centreCity: extra.phcCentreCity || '',
+        utilizedAmount: extra.phcUtilizedAmount !== undefined && extra.phcUtilizedAmount !== null ? String(extra.phcUtilizedAmount) : '',
+        reimbursementCashless: extra.phcReimbursementCashless || 'CASHLESS',
+        reportReceivedDate: extra.phcReportReceivedDate || '',
+        reportBillReceivedDate: extra.phcReportBillReceivedDate || '',
+        reportBillSubmittedDate: extra.phcReportBillSubmittedDate || '',
+        settlementDate: extra.phcSettlementDate || '',
         phcStage: extra.phcStage || prev.phcStage || 'TO_CONTACT',
       }));
     }
@@ -2721,39 +2784,103 @@ export default function Policies() {
 
     let initialPersons: ConnectedPersonItem[] = [];
     if ((p as any).members && (p as any).members.length > 0) {
-      initialPersons = (p as any).members.map((m: any) => ({
-        id: m.id || String(Math.random()),
-        addedAt: m.createdAt || m.addedAt || p.createdAt || new Date().toISOString(),
-        name: m.name || `${m.firstName || ''} ${m.lastName || ''}`.trim(),
-        relationship: m.relationship || 'Spouse',
-        contactNo: m.contactNo || m.phone || '',
-        dob: m.dateOfBirth ? m.dateOfBirth.slice(0, 10) : (m.dob || ''),
-        gender: m.gender || 'MALE',
-        isCovered: true,
-        isNominee: false,
-        nomineeName: '',
-        nomineeRelation: 'Spouse',
-        nomineeContact: '',
-        nomineeDob: '',
-        nomineePercentage: 100,
-      }));
+      initialPersons = (p as any).members.map((m: any) => {
+        let relToUse = m.relationship;
+        let genToUse = m.gender;
+        if ((!relToUse || relToUse.toUpperCase() === 'OTHER') && (p as any).contact?.relationships) {
+          const mNameLower = (m.name || `${m.firstName || ''} ${m.lastName || ''}`).trim().toLowerCase();
+          const matchedRel = (p as any).contact.relationships.find((r: any) => {
+            const rc = r.relatedContact || r.contact;
+            const rNameLower = `${rc?.firstName || ''} ${rc?.lastName || ''}`.trim().toLowerCase();
+            return rNameLower && (rNameLower === mNameLower || mNameLower.includes(rNameLower) || rNameLower.includes(mNameLower));
+          });
+          if (matchedRel) {
+            relToUse = matchedRel.relationshipType;
+            if (!genToUse && matchedRel.relatedContact?.gender) {
+              genToUse = matchedRel.relatedContact.gender;
+            }
+          }
+        }
+        const formattedRel = formatPolicyRelationship(relToUse, genToUse, true);
+        return {
+          id: m.id || String(Math.random()),
+          addedAt: m.createdAt || m.addedAt || p.createdAt || new Date().toISOString(),
+          name: m.name || `${m.firstName || ''} ${m.lastName || ''}`.trim(),
+          relationship: formattedRel,
+          contactNo: m.contactNo || m.phone || '',
+          dob: m.dateOfBirth ? m.dateOfBirth.slice(0, 10) : (m.dob || ''),
+          gender: genToUse || m.gender || 'MALE',
+          isCovered: true,
+          isNominee: false,
+          nomineeName: '',
+          nomineeRelation: formattedRel || 'Spouse',
+          nomineeContact: '',
+          nomineeDob: '',
+          nomineePercentage: 100,
+        };
+      });
     } else if (extra.connectedPersons && extra.connectedPersons.length > 0) {
-      initialPersons = extra.connectedPersons.map((cp: any) => ({
-        id: String(Math.random()),
-        addedAt: cp.addedAt || cp.createdAt || p.createdAt || new Date().toISOString(),
-        name: cp.name,
-        relationship: cp.relationship || 'Spouse',
-        contactNo: cp.contact || '',
-        dob: cp.dob || '',
-        gender: cp.gender || 'MALE',
-        isCovered: true,
-        isNominee: false,
-        nomineeName: '',
-        nomineeRelation: 'Spouse',
-        nomineeContact: '',
-        nomineeDob: '',
-        nomineePercentage: 100,
-      }));
+      initialPersons = extra.connectedPersons.map((cp: any) => {
+        let relToUse = cp.relationship;
+        let genToUse = cp.gender;
+        if ((!relToUse || relToUse.toUpperCase() === 'OTHER') && (p as any).contact?.relationships) {
+          const cpNameLower = (cp.name || '').trim().toLowerCase();
+          const matchedRel = (p as any).contact.relationships.find((r: any) => {
+            const rc = r.relatedContact || r.contact;
+            const rNameLower = `${rc?.firstName || ''} ${rc?.lastName || ''}`.trim().toLowerCase();
+            return rNameLower && (rNameLower === cpNameLower || cpNameLower.includes(rNameLower) || rNameLower.includes(cpNameLower));
+          });
+          if (matchedRel) {
+            relToUse = matchedRel.relationshipType;
+            if (!genToUse && matchedRel.relatedContact?.gender) {
+              genToUse = matchedRel.relatedContact.gender;
+            }
+          }
+        }
+        const formattedRel = formatPolicyRelationship(relToUse, genToUse, true);
+        return {
+          id: String(Math.random()),
+          addedAt: cp.addedAt || cp.createdAt || p.createdAt || new Date().toISOString(),
+          name: cp.name,
+          relationship: formattedRel,
+          contactNo: cp.contact || '',
+          dob: cp.dob || '',
+          gender: genToUse || cp.gender || 'MALE',
+          isCovered: true,
+          isNominee: false,
+          nomineeName: '',
+          nomineeRelation: formattedRel || 'Spouse',
+          nomineeContact: '',
+          nomineeDob: '',
+          nomineePercentage: 100,
+        };
+      });
+    }
+
+    if (initialPersons.length === 0 && (p as any).contact?.relationships && Array.isArray((p as any).contact.relationships)) {
+      (p as any).contact.relationships.forEach((rel: any) => {
+        const rc = rel.relatedContact || rel.contact || rel;
+        const name = [rc?.firstName, rc?.middleName, rc?.lastName].filter(Boolean).join(' ').trim() || (rc?.name || '').trim();
+        if (!name) return;
+        const relType = rel.relationshipType || rel.relation || rc.relation || '';
+        const formattedRel = formatPolicyRelationship(relType, rc.gender, true);
+        initialPersons.push({
+          id: String(Math.random()),
+          addedAt: rel.createdAt || rc.createdAt || p.createdAt || new Date().toISOString(),
+          name,
+          relationship: formattedRel,
+          contactNo: rc.phone || rc.alternatePhone || '',
+          dob: rc.dateOfBirth ? String(rc.dateOfBirth).slice(0, 10) : (rc.dob ? String(rc.dob).slice(0, 10) : ''),
+          gender: rc.gender || 'MALE',
+          isCovered: true,
+          isNominee: false,
+          nomineeName: '',
+          nomineeRelation: formattedRel || 'Spouse',
+          nomineeContact: '',
+          nomineeDob: '',
+          nomineePercentage: 100,
+        });
+      });
     }
 
     if ((p as any).nominees && (p as any).nominees.length > 0) {
@@ -2831,10 +2958,51 @@ export default function Policies() {
       }
     }
 
-    setConnectedPersons(initialPersons);
+    const seenPersonNames = new Set<string>();
+    const dedupedPersons = initialPersons.filter(cp => {
+      const key = (cp.name || '').trim().toLowerCase();
+      if (!key) return false;
+      if (seenPersonNames.has(key)) return false;
+      seenPersonNames.add(key);
+      return true;
+    });
+
+    setConnectedPersons(dedupedPersons);
 
     setModalOpen(true);
   };
+
+  const openedPolicyIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!targetViewPolicyId) {
+      openedPolicyIdRef.current = null;
+      return;
+    }
+    if (openedPolicyIdRef.current === targetViewPolicyId && modalOpen) return;
+
+    const fetchedPolicy = routePolicyRes?.data || routePolicyRes;
+    if (fetchedPolicy && (fetchedPolicy.id === targetViewPolicyId || (fetchedPolicy as any)._id === targetViewPolicyId)) {
+      openedPolicyIdRef.current = targetViewPolicyId;
+      openView(fetchedPolicy);
+      return;
+    }
+
+    if (rawPolicies && rawPolicies.length > 0) {
+      const match = rawPolicies.find((p: any) => p.id === targetViewPolicyId || (p as any)._id === targetViewPolicyId);
+      if (match) {
+        openedPolicyIdRef.current = targetViewPolicyId;
+        openView(match);
+      }
+    }
+  }, [targetViewPolicyId, routePolicyRes, rawPolicies, modalOpen]);
+
+  useEffect(() => {
+    if (targetViewPolicyId && routePolicyError) {
+      toast.error('Failed to load policy details');
+      navigate('/policies', { replace: true });
+    }
+  }, [targetViewPolicyId, routePolicyError, navigate]);
 
   const openCreatePolicy = () => {
     const todayStr = format(new Date(), 'yyyy-MM-dd');
@@ -2875,6 +3043,7 @@ export default function Policies() {
     setInsuredPerson('');
     setConnectedPersons([]);
     setPendingDocs([]);
+    setCustomDropdownValues({});
     setEditTarget(null);
     setIsViewMode(false);
     setIsPremiumBreakdownCollapsed(false);
@@ -3222,11 +3391,29 @@ export default function Policies() {
     ];
 
     colConfigs.forEach(col => {
-      const isVisible = visibleColumns[col.key] !== undefined
-        ? visibleColumns[col.key]
-        : isColVisibleInSettings((col as any).label || col.key);
+      const isVisible = isColVisibleInSettings((col as any).label || col.key);
       if (isVisible) {
         cols.push(col as any);
+      }
+    });
+
+    // Also include any custom columns or extra columns in allPolicyColumnsConfig that aren't in colConfigs
+    const norm = (s: string) => (s || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    const existingNorms = new Set(colConfigs.map(c => norm(c.label || c.key)));
+    allPolicyColumnsConfig.forEach(colName => {
+      const n = norm(colName);
+      if (n === 'actions' || existingNorms.has(n)) return;
+      if (isColVisibleInSettings(colName)) {
+        cols.push({
+          key: colName as any,
+          label: colName,
+          sortable: false,
+          render: (r: any) => {
+            const extra = parseExtraNotes(r.notes);
+            const val = (r as any)[colName] ?? extra[colName] ?? (r as any).customFields?.[colName] ?? '—';
+            return <span className="font-medium text-slate-700 text-xs">{val}</span>;
+          }
+        });
       }
     });
 
@@ -3268,7 +3455,7 @@ export default function Policies() {
     });
 
     return cols;
-  }, [user?.role, data, selectedIds, allClaims, visibleColumns]);
+  }, [user?.role, data, selectedIds, allClaims, isColVisibleInSettings, allPolicyColumnsConfig]);
 
   const submitEdit = async (body: EditForm) => {
     if (!editTarget) return;
@@ -3289,17 +3476,47 @@ export default function Policies() {
       if (emiDt) extraNotes += `\nInstallment Date: ${emiDt}`;
     }
     if (body.phcRequired || watchPhcRequired) {
-      extraNotes += `\nPreventive Health Checkup: Yes (Amount: ₹${body.phcAmount || '0'}, Status: ${body.phcStatus || 'N/A'}, Claim Settled: ${body.phcClaimSettled ? 'Yes' : 'No'}${phcExtraDetails.insuredPersonName ? `, Insured Person: ${phcExtraDetails.insuredPersonName}` : ''})`;
+      const isCompleted = phcExtraDetails.phcStage === 'PROCESS_COMPLETED' ||
+        phcExtraDetails.phcStage === 'Process Completed' ||
+        phcExtraDetails.phcStage?.toUpperCase().includes('COMPLET') ||
+        body.phcStatus === 'COMPLETED' ||
+        body.phcStatus === 'Completed';
+      const effectivePhcStatus = isCompleted ? 'Completed' : (body.phcStatus || 'N/A');
+      const phcAmountNum = Number(body.phcAmount || 0);
+      const utilizedNum = Number(phcExtraDetails.utilizedAmount || 0);
+      const balanceNum = Math.max(0, phcAmountNum - utilizedNum);
+
+      extraNotes += `\nPreventive Health Checkup: Yes (Amount: ₹${phcAmountNum}, Status: ${effectivePhcStatus}, Claim Settled: ${body.phcClaimSettled ? 'Yes' : 'No'}${phcExtraDetails.insuredPersonName ? `, Insured Person: ${phcExtraDetails.insuredPersonName}` : ''})`;
+      extraNotes += `\nPHC Required: Yes`;
       if (phcExtraDetails.insuredPersonName) {
         extraNotes += `\nPHC Insured Person: ${phcExtraDetails.insuredPersonName}`;
       }
       if (phcExtraDetails.phcStage) {
         extraNotes += `\nPHC Stage: ${phcExtraDetails.phcStage}`;
       }
+      if (isCompleted) {
+        extraNotes += `\nPHC Status: Completed`;
+      }
+      if (phcExtraDetails.utilizedAmount !== '' && phcExtraDetails.utilizedAmount !== undefined && phcExtraDetails.utilizedAmount !== null) {
+        extraNotes += `\nPHC Utilized Amount: ₹${utilizedNum}`;
+      }
+      extraNotes += `\nPHC Balance Amount: ₹${balanceNum}`;
+      if (phcExtraDetails.bookingDate) extraNotes += `\nPHC Booking Date: ${phcExtraDetails.bookingDate}`;
+      if (phcExtraDetails.appointmentDate) extraNotes += `\nPHC Appointment Date: ${phcExtraDetails.appointmentDate}`;
+      if (phcExtraDetails.centreName) extraNotes += `\nPHC Centre / Lab Name: ${phcExtraDetails.centreName}`;
+      if (phcExtraDetails.centreCity) extraNotes += `\nPHC Centre City: ${phcExtraDetails.centreCity}`;
+      if (phcExtraDetails.reimbursementCashless) extraNotes += `\nPHC Reimbursement Type: ${phcExtraDetails.reimbursementCashless}`;
+      if (phcExtraDetails.reportReceivedDate) extraNotes += `\nPHC Report Received Date: ${phcExtraDetails.reportReceivedDate}`;
+      if (phcExtraDetails.reportBillReceivedDate) extraNotes += `\nPHC Report & Bill Received Date: ${phcExtraDetails.reportBillReceivedDate}`;
+      if (phcExtraDetails.reportBillSubmittedDate) extraNotes += `\nPHC Report & Bill Submitted Date: ${phcExtraDetails.reportBillSubmittedDate}`;
+      if (phcExtraDetails.settlementDate) extraNotes += `\nPHC Settlement Date: ${phcExtraDetails.settlementDate}`;
+      if (phcExtraDetails.eligibilityStartDate) extraNotes += `\nPHC Eligibility Start Date: ${phcExtraDetails.eligibilityStartDate}`;
+      if (phcExtraDetails.frequency) extraNotes += `\nPHC Frequency: ${phcExtraDetails.frequency}`;
+      if (phcExtraDetails.followUpDate) extraNotes += `\nPHC Follow-up Date: ${phcExtraDetails.followUpDate}`;
     }
 
     const cleanedBody = {
-      status: body.status,
+      status: normalizeStatusVal(body.status) || 'INFORCE',
       premiumAmount: Number(body.premiumAmount),
       sumAssured: body.sumAssured ? Number(body.sumAssured) : undefined,
       endDate: body.endDate,
@@ -3522,7 +3739,17 @@ export default function Policies() {
         extraNotes += `\nInstallment Date: ${finalEmiDate}`;
       }
       if (body.phcRequired || watchPhcRequired) {
-        extraNotes += `\nPreventive Health Checkup: Yes (Amount: ₹${body.phcAmount || '0'}, Status: ${body.phcStatus || 'N/A'}, Claim Settled: ${body.phcClaimSettled ? 'Yes' : 'No'}${phcExtraDetails.insuredPersonName ? `, Insured Person: ${phcExtraDetails.insuredPersonName}` : ''})`;
+        const isCompleted = phcExtraDetails.phcStage === 'PROCESS_COMPLETED' ||
+          phcExtraDetails.phcStage === 'Process Completed' ||
+          phcExtraDetails.phcStage?.toUpperCase().includes('COMPLET') ||
+          body.phcStatus === 'COMPLETED' ||
+          body.phcStatus === 'Completed';
+        const effectivePhcStatus = isCompleted ? 'Completed' : (body.phcStatus || 'N/A');
+        const phcAmountNum = Number(body.phcAmount || 0);
+        const utilizedNum = Number(phcExtraDetails.utilizedAmount || 0);
+        const balanceNum = Math.max(0, phcAmountNum - utilizedNum);
+
+        extraNotes += `\nPreventive Health Checkup: Yes (Amount: ₹${phcAmountNum}, Status: ${effectivePhcStatus}, Claim Settled: ${body.phcClaimSettled ? 'Yes' : 'No'}${phcExtraDetails.insuredPersonName ? `, Insured Person: ${phcExtraDetails.insuredPersonName}` : ''})`;
         extraNotes += `\nPHC Required: Yes`;
         if (phcExtraDetails.insuredPersonName) {
           extraNotes += `\nPHC Insured Person: ${phcExtraDetails.insuredPersonName}`;
@@ -3530,11 +3757,38 @@ export default function Policies() {
         if (phcExtraDetails.phcStage) {
           extraNotes += `\nPHC Stage: ${phcExtraDetails.phcStage}`;
         }
+        if (isCompleted) {
+          extraNotes += `\nPHC Status: Completed`;
+        }
+        if (phcExtraDetails.utilizedAmount !== '' && phcExtraDetails.utilizedAmount !== undefined && phcExtraDetails.utilizedAmount !== null) {
+          extraNotes += `\nPHC Utilized Amount: ₹${utilizedNum}`;
+        }
+        extraNotes += `\nPHC Balance Amount: ₹${balanceNum}`;
+        if (phcExtraDetails.bookingDate) extraNotes += `\nPHC Booking Date: ${phcExtraDetails.bookingDate}`;
+        if (phcExtraDetails.appointmentDate) extraNotes += `\nPHC Appointment Date: ${phcExtraDetails.appointmentDate}`;
+        if (phcExtraDetails.centreName) extraNotes += `\nPHC Centre / Lab Name: ${phcExtraDetails.centreName}`;
+        if (phcExtraDetails.centreCity) extraNotes += `\nPHC Centre City: ${phcExtraDetails.centreCity}`;
+        if (phcExtraDetails.reimbursementCashless) extraNotes += `\nPHC Reimbursement Type: ${phcExtraDetails.reimbursementCashless}`;
+        if (phcExtraDetails.reportReceivedDate) extraNotes += `\nPHC Report Received Date: ${phcExtraDetails.reportReceivedDate}`;
+        if (phcExtraDetails.reportBillReceivedDate) extraNotes += `\nPHC Report & Bill Received Date: ${phcExtraDetails.reportBillReceivedDate}`;
+        if (phcExtraDetails.reportBillSubmittedDate) extraNotes += `\nPHC Report & Bill Submitted Date: ${phcExtraDetails.reportBillSubmittedDate}`;
+        if (phcExtraDetails.settlementDate) extraNotes += `\nPHC Settlement Date: ${phcExtraDetails.settlementDate}`;
+        if (phcExtraDetails.eligibilityStartDate) extraNotes += `\nPHC Eligibility Start Date: ${phcExtraDetails.eligibilityStartDate}`;
+        if (phcExtraDetails.frequency) extraNotes += `\nPHC Frequency: ${phcExtraDetails.frequency}`;
+        if (phcExtraDetails.followUpDate) extraNotes += `\nPHC Follow-up Date: ${phcExtraDetails.followUpDate}`;
       } else if (body.phcRequired === false || watchPhcRequired === false) {
         extraNotes += `\nPreventive Health Checkup: No\nPHC Required: No`;
       }
-      if (connectedPersons.length > 0) {
-        connectedPersons.forEach((p, idx) => {
+      const seenPersonNames = new Set<string>();
+      const uniqueConnectedPersons = connectedPersons.filter(p => {
+        const k = (p.name || '').trim().toLowerCase();
+        if (!k || seenPersonNames.has(k)) return false;
+        seenPersonNames.add(k);
+        return true;
+      });
+
+      if (uniqueConnectedPersons.length > 0) {
+        uniqueConnectedPersons.forEach((p, idx) => {
           if (p.name.trim()) {
             extraNotes += `\nConnected Person ${idx + 1}: Name: ${p.name.trim()}, Relationship: ${p.relationship}, Contact: ${cleanConnectedPhone(p.contactNo) || 'N/A'}, DoB: ${p.dob || 'N/A'}, Gender: ${p.gender || 'MALE'}`;
           }
@@ -3558,7 +3812,7 @@ export default function Policies() {
         contactId: finalContactId,
         planId: finalPlanId,
         assignedEmployeeId,
-        status: body.status || 'INFORCE',
+        status: normalizeStatusVal(body.status) || 'INFORCE',
         sumAssured: Number(body.sumAssured || 0),
         premiumAmount: Number(body.premiumAmount || 0),
         paymentFrequency: body.paymentFrequency || 'YEARLY',
@@ -3585,7 +3839,7 @@ export default function Policies() {
             failedDocumentUploads.push(doc.title);
           }
         }
-        for (const person of connectedPersons) {
+        for (const person of uniqueConnectedPersons) {
           if (person.name.trim()) {
             try {
               await policiesService.addMember(editTarget.id, {
@@ -3616,6 +3870,8 @@ export default function Policies() {
         qc.invalidateQueries({ queryKey: ['contacts'] });
         qc.invalidateQueries({ queryKey: ['policies'] });
         qc.invalidateQueries({ queryKey: ['policy', editTarget.id] });
+        qc.invalidateQueries({ queryKey: ['policy-detail-route-view', editTarget.id] });
+        setIsViewMode(true);
         toast.success('Policy updated successfully');
         if (failedDocumentUploads.length > 0) {
           toast.error(`Policy saved, but these documents failed to upload: ${failedDocumentUploads.join(', ')}`);
@@ -3642,7 +3898,7 @@ export default function Policies() {
         }
       }
       if (createdPolicy?.id) {
-        for (const person of connectedPersons) {
+        for (const person of uniqueConnectedPersons) {
           if (person.name.trim()) {
             try {
               await policiesService.addMember(createdPolicy.id, {
@@ -3898,54 +4154,52 @@ export default function Policies() {
                       <div className="pb-1.5 border-b border-slate-100">
                         <p className="font-extrabold text-slate-400 uppercase tracking-wider text-[10px]">Show Columns</p>
                       </div>
-                      {[
-                        { key: 'proposerName', label: 'Proposer Name' },
-                        { key: 'proposerContact', label: 'Proposer Contact No.' },
-                        { key: 'insuredPerson', label: 'Insured Person' },
-                        { key: 'city', label: 'City' },
-                        { key: 'companyCategory', label: 'Insurance Company Category' },
-                        { key: 'plan.company.name', label: 'Insurance Company' },
-                        { key: 'plan.category', label: 'Insurance Plan Category' },
-                        { key: 'plan.name', label: 'Plan Name' },
-                        { key: 'customerCategory', label: 'Customer Category' },
-                        { key: 'policyType', label: 'Policy Type' },
-                        { key: 'policyNumber', label: 'Policy Number' },
-                        { key: 'status', label: 'Policy Status' },
-                        { key: 'sumAssured', label: 'Sum Insured' },
-                        { key: 'policyTenure', label: 'Policy Tenure' },
-                        { key: 'policyTerm', label: 'Policy Term' },
-                        { key: 'assignedTo', label: 'Assigned To' },
-                        { key: 'comment', label: 'Comment' },
-                        { key: 'firstYearPremium', label: '1st Year Premium Amount' },
-                        { key: 'secondYearPremium', label: '2nd Year Onwards Premium Amount' },
-                        { key: 'premiumAmount', label: 'Premium Amount' },
-                        { key: 'installmentCase', label: 'Installment Case?' },
-                        { key: 'downpaymentAmount', label: 'Downpayment Amount' },
-                        { key: 'processingFee', label: 'Processing Fee (incl. GST)' },
-                        { key: 'installmentAmount', label: 'Installment Amount' },
-                        { key: 'noOfInstallments', label: 'No. of Installments' },
-                        { key: 'lastInstallmentDate', label: 'Last Installment Date' },
-                        { key: 'nomineeDetails', label: 'Nominee Details' },
-                      ].map(col => {
-                        const isVisible = visibleColumns[col.key] !== undefined
-                          ? visibleColumns[col.key]
-                          : isColVisibleInSettings(col.label || col.key);
-                        return (
-                          <label key={col.key} className="flex items-center gap-2 cursor-pointer font-bold text-slate-700 hover:text-blue-600 transition-colors">
-                            <input
-                              type="checkbox"
-                              checked={isVisible}
-                              onChange={() => {
-                                const next = !isVisible;
-                                setVisibleColumns(prev => ({ ...prev, [col.key]: next }));
-                                toggleColInSettings(col.label || col.key);
-                              }}
-                              className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
-                            />
-                            <span>{col.label}</span>
-                          </label>
-                        );
-                      })}
+                      {(() => {
+                        const norm = (s: string) => (s || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+                        const list: string[] = [];
+                        const seen = new Set<string>();
+
+                        allPolicyColumnsConfig.forEach(c => {
+                          const n = norm(c);
+                          if (n === 'actions' || seen.has(n)) return;
+                          seen.add(n);
+                          list.push(c);
+                        });
+
+                        [
+                          'Insured Person',
+                          'Premium Amount',
+                          'Installment Case?',
+                          'Downpayment Amount',
+                          'Processing Fee (incl. GST)',
+                          'Installment Amount',
+                          'No. of Installments',
+                          'Last Installment Date',
+                          'Nominee Details'
+                        ].forEach(c => {
+                          const n = norm(c);
+                          if (seen.has(n)) return;
+                          seen.add(n);
+                          list.push(c);
+                        });
+
+                        return list.map(colName => {
+                          const isVisible = isColVisibleInSettings(colName);
+                          return (
+                            <label key={colName} className="flex items-center gap-2 cursor-pointer font-bold text-slate-700 hover:text-blue-600 transition-colors">
+                              <input
+                                type="checkbox"
+                                checked={isVisible}
+                                onChange={() => {
+                                  toggleColInSettings(colName, isVisible);
+                                }}
+                                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer"
+                              />
+                              <span>{colName}</span>
+                            </label>
+                          );
+                        });
+                      })()}
                     </div>
                   )}
                 </div>
@@ -4515,14 +4769,14 @@ export default function Policies() {
       )}
 
       <Modal
-        open={modalOpen}
+        open={modalOpen || Boolean(targetViewPolicyId && isRoutePolicyLoading && !editTarget)}
         onClose={() => {
           if (isDocUploadModalOpen) return;
           closeModal();
         }}
         closeOnEscapeAndBackdrop={false}
-        title={isViewMode ? "View Policy Profile" : (editTarget ? "Edit Policy Profile" : "Add New Policy")}
-        subtitle={isViewMode ? "View policy details and plan information." : (editTarget ? "Update policy details and plan information." : "Enter policy details matching client profile standards.")}
+        title={isViewMode || Boolean(targetViewPolicyId && !editTarget) ? "View Policy Profile" : (editTarget ? "Edit Policy Profile" : "Add New Policy")}
+        subtitle={isViewMode || Boolean(targetViewPolicyId && !editTarget) ? "View policy details and plan information." : (editTarget ? "Update policy details and plan information." : "Enter policy details matching client profile standards.")}
         size="2xl"
         actions={
           <div className="flex flex-wrap items-center gap-2.5 mr-1">
@@ -4534,7 +4788,7 @@ export default function Policies() {
               >
                 Edit
               </button>
-            ) : (
+            ) : (!isRoutePolicyLoading || editTarget) ? (
               <button
                 type="button"
                 className="px-3 sm:px-5 py-1.5 sm:py-2 text-[10px] sm:text-xs font-extrabold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl cursor-pointer shadow-md shadow-blue-500/20 transition-all hover:scale-105"
@@ -4542,11 +4796,17 @@ export default function Policies() {
               >
                 {editTarget ? 'Update Policy' : 'Save Policy'}
               </button>
-            )}
+            ) : null}
           </div>
         }
       >
-        <form onSubmit={handleSubmit(onSubmit, onInvalid)} className="space-y-3">
+        {targetViewPolicyId && isRoutePolicyLoading && !editTarget ? (
+          <div className="flex flex-col h-64 items-center justify-center text-slate-500 gap-3">
+            <div className="h-8 w-8 animate-spin rounded-full border-3 border-blue-600 border-t-transparent" />
+            <span className="text-xs font-bold text-slate-600">Loading policy details...</span>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit(onSubmit, onInvalid)} className="space-y-3">
           {/* Sub-navigation Tabs Header */}
           <div className="flex flex-wrap bg-slate-200/60 p-1.5 rounded-2xl mb-3 gap-1.5 sm:gap-2 border border-slate-200/80 shadow-2xs">
             <button
@@ -4586,7 +4846,7 @@ export default function Policies() {
               )}
             >
               <Users size={14} />
-              Connected Persons ({connectedPersons.length})
+              Connected Persons ({displayedConnectedPersons.length})
             </button>
             <button
               type="button"
@@ -4877,6 +5137,21 @@ export default function Policies() {
                           />
                         </div>
 
+                        {/* Policy Status */}
+                        <div>
+                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                            Policy Status <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>
+                          </label>
+                          <CustomSelect
+                            value={normalizeStatusVal(watch('status'))}
+                            onChange={val => {
+                              setValue('status', normalizeStatusVal(val) as any, { shouldValidate: true, shouldDirty: true });
+                            }}
+                            placeholder="Select Policy Status"
+                            options={policyStatusOptions}
+                          />
+                        </div>
+
                         {/* Custom Dropdown Menus configured in Operations */}
                         {customPolicyDropdowns.map(customDrop => {
                           const currentVal = customDropdownValues[customDrop.name] || '';
@@ -5120,9 +5395,10 @@ export default function Policies() {
                               Policy Status <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>
                             </label>
                             <CustomSelect
-                              value={watch('status') === 'ACTIVE' ? 'INFORCE' : (watch('status') || 'INFORCE')}
-                              onChange={val => setValue('status', val as any, { shouldValidate: true, shouldDirty: true })}
-                              options={POLICY_STATUS_OPTIONS}
+                              value={normalizeStatusVal(watch('status'))}
+                              onChange={val => setValue('status', normalizeStatusVal(val) as any, { shouldValidate: true, shouldDirty: true })}
+                              placeholder="Select Policy Status"
+                              options={policyStatusOptions}
                             />
                           </div>
 
@@ -5285,31 +5561,6 @@ export default function Policies() {
 
                         <div>
                           <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
-                            Installment Frequency <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>
-                          </label>
-                          <CustomSelect
-                            value={watchPaymentFrequency || 'YEARLY'}
-                            onChange={val => {
-                              setValue('paymentFrequency', val as any, { shouldValidate: true, shouldDirty: true });
-                              if (val === 'SINGLE') {
-                                setValue('noOfInstallments', 1, { shouldValidate: true, shouldDirty: true });
-                                recalculateLastInstallment({ freq: 'SINGLE', noOfInst: 1 });
-                              } else {
-                                recalculateLastInstallment({ freq: val });
-                              }
-                            }}
-                            options={[
-                              { value: 'YEARLY', label: 'Yearly' },
-                              { value: 'HALF_YEARLY', label: 'Half Yearly' },
-                              { value: 'QUARTERLY', label: 'Quarterly' },
-                              { value: 'MONTHLY', label: 'Monthly' },
-                              { value: 'SINGLE', label: 'One Time' },
-                            ]}
-                          />
-                        </div>
-
-                        <div>
-                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
                             Premium Payment Period (Years)
                           </label>
                           <input
@@ -5319,136 +5570,6 @@ export default function Policies() {
                             placeholder="e.g. 10"
                           />
                         </div>
-
-                        {/* Downpayment Amount */}
-                        <div>
-                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
-                            Downpayment Amount (₹)
-                          </label>
-                          <input
-                            type="text"
-                            value={formatIndianNumber(watchDownpaymentAmount || 0)}
-                            onChange={(e) => {
-                              const raw = e.target.value.replace(/,/g, '');
-                              const num = Number(raw);
-                              if (!isNaN(num)) {
-                                setValue('downpaymentAmount', num, { shouldValidate: true, shouldDirty: true });
-                              } else if (raw === '') {
-                                setValue('downpaymentAmount', 0 as any, { shouldValidate: true, shouldDirty: true });
-                              }
-                            }}
-                            className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-                            placeholder="Enter downpayment amount"
-                          />
-                        </div>
-
-                        {/* Processing Fee (incl. GST) */}
-                        <div>
-                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
-                            Processing Fee (incl. GST) (₹)
-                          </label>
-                          <input
-                            type="text"
-                            value={formatIndianNumber(watchProcessingFee || 0)}
-                            onChange={(e) => {
-                              const raw = e.target.value.replace(/,/g, '');
-                              const num = Number(raw);
-                              if (!isNaN(num)) {
-                                setValue('processingFee', num, { shouldValidate: true, shouldDirty: true });
-                              } else if (raw === '') {
-                                setValue('processingFee', 0 as any, { shouldValidate: true, shouldDirty: true });
-                              }
-                            }}
-                            className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-                            placeholder="e.g. 500"
-                          />
-                        </div>
-
-                        {/* Installment Amount */}
-                        <div>
-                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
-                            Installment Amount (₹)
-                          </label>
-                          <input
-                            type="text"
-                            value={formatIndianNumber(watchInstallmentAmount || 0)}
-                            onChange={(e) => {
-                              const raw = e.target.value.replace(/,/g, '');
-                              const num = Number(raw);
-                              if (!isNaN(num)) {
-                                setValue('installmentAmount', num, { shouldValidate: true, shouldDirty: true });
-                                setValue('emiPremium', num, { shouldValidate: true, shouldDirty: true });
-                              } else if (raw === '') {
-                                setValue('installmentAmount', 0 as any, { shouldValidate: true, shouldDirty: true });
-                                setValue('emiPremium', 0 as any, { shouldValidate: true, shouldDirty: true });
-                              }
-                            }}
-                            className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-                            placeholder="Enter installment amount"
-                          />
-                        </div>
-
-                        {/* No. of Installments */}
-                        {showInstallmentAndYearlyFields && (
-                          <div>
-                            <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
-                              No. of Installments
-                            </label>
-                            <input
-                              type="number"
-                              min={1}
-                              max={120}
-                              value={watchNoOfInstallments !== undefined && watchNoOfInstallments !== null ? watchNoOfInstallments : ''}
-                              onChange={e => {
-                                const valStr = e.target.value;
-                                const val = valStr === '' ? '' : parseInt(valStr, 10);
-                                setValue('noOfInstallments', val as any, { shouldValidate: true, shouldDirty: true });
-                                recalculateLastInstallment({ noOfInst: val || 1 });
-                              }}
-                              className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-bold text-slate-800"
-                              placeholder="e.g. 12"
-                            />
-                          </div>
-                        )}
-
-                        {/* Installment Date (Day: 01 to 31st) */}
-                        {showInstallmentAndYearlyFields && (
-                          <div>
-                            <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
-                              Installment Date (01 to 31st)
-                            </label>
-                            <CustomSelect
-                              value={normalizeInstallmentDay(watchEmiDate || (getValues ? getValues('emiDate') : ''))}
-                              onChange={val => {
-                                setValue('emiDate', val, { shouldValidate: true, shouldDirty: true });
-                                recalculateLastInstallment({ day: val });
-                              }}
-                              placeholder="Select Day (01 to 31st)"
-                              options={[
-                                { value: '', label: 'Select Day' },
-                                ...INSTALLMENT_DATE_OPTIONS
-                              ]}
-                            />
-                          </div>
-                        )}
-
-                        {/* Last Installment Date */}
-                        {showInstallmentAndYearlyFields && (
-                          <div>
-                            <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
-                              Last Installment Date
-                            </label>
-                            <DatePicker
-                              value={watchLastInstallmentDate || watchLastPremiumDate}
-                              onDateChange={val => {
-                                setValue('lastPremiumDate', val, { shouldValidate: true, shouldDirty: true });
-                                setValue('lastInstallmentDate', val, { shouldValidate: true, shouldDirty: true });
-                              }}
-                              className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 font-semibold"
-                              placeholder="DD/MM/YYYY"
-                            />
-                          </div>
-                        )}
                       </div>
                     )}
                   </div>
@@ -5559,82 +5680,6 @@ export default function Policies() {
                           </div>
                         )}
 
-                        <div>
-                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
-                            Policy 1st Instalment Date
-                          </label>
-                          <DatePicker
-                            value={watchFirstPremiumDate}
-                            onDateChange={val => {
-                              setValue('firstPremiumDate', val, { shouldValidate: true, shouldDirty: true });
-                              recalculateLastInstallment({ baseDate: val });
-                            }}
-                            className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200"
-                            placeholder="DD/MM/YYYY"
-                          />
-                        </div>
-
-                        {/* No. of Installments */}
-                        {showInstallmentAndYearlyFields && (
-                          <div>
-                            <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
-                              No. of Installments
-                            </label>
-                            <input
-                              type="number"
-                              min={1}
-                              max={120}
-                              value={watchNoOfInstallments !== undefined && watchNoOfInstallments !== null ? watchNoOfInstallments : ''}
-                              onChange={e => {
-                                const valStr = e.target.value;
-                                const val = valStr === '' ? '' : parseInt(valStr, 10);
-                                setValue('noOfInstallments', val as any, { shouldValidate: true, shouldDirty: true });
-                                recalculateLastInstallment({ noOfInst: val || 1 });
-                              }}
-                              className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-bold text-slate-800"
-                              placeholder="e.g. 12"
-                            />
-                          </div>
-                        )}
-
-                        {/* Installment Date (Day: 01 to 31st) */}
-                        {showInstallmentAndYearlyFields && (
-                          <div>
-                            <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
-                              Installment Date (01 to 31st)
-                            </label>
-                            <CustomSelect
-                              value={normalizeInstallmentDay(watchEmiDate || (getValues ? getValues('emiDate') : ''))}
-                              onChange={val => {
-                                setValue('emiDate', val, { shouldValidate: true, shouldDirty: true });
-                                recalculateLastInstallment({ day: val });
-                              }}
-                              placeholder="Select Day (01 to 31st)"
-                              options={[
-                                { value: '', label: 'Select Day' },
-                                ...INSTALLMENT_DATE_OPTIONS
-                              ]}
-                            />
-                          </div>
-                        )}
-
-                        {/* Last Installment Date */}
-                        {showInstallmentAndYearlyFields && (
-                          <div>
-                            <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
-                              Last Installment Date
-                            </label>
-                            <DatePicker
-                              value={watchLastInstallmentDate || watchLastPremiumDate}
-                              onDateChange={val => {
-                                setValue('lastPremiumDate', val, { shouldValidate: true, shouldDirty: true });
-                                setValue('lastInstallmentDate', val, { shouldValidate: true, shouldDirty: true });
-                              }}
-                              className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 font-semibold"
-                              placeholder="DD/MM/YYYY"
-                            />
-                          </div>
-                        )}
 
                         {showLifeTermInstallmentFields && (
                           <div>
@@ -5712,13 +5757,46 @@ export default function Policies() {
                             </label>
                             <CustomSelect
                               value={watchEmiCase ? 'yes' : 'no'}
-                              onChange={val => setValue('emiCase', val === 'yes')}
+                              onChange={val => {
+                                const isYes = val === 'yes';
+                                setValue('emiCase', isYes);
+                                if (!isYes) {
+                                  setValue('paymentFrequency', 'YEARLY', { shouldValidate: true, shouldDirty: true });
+                                }
+                              }}
                               options={[
                                 { value: 'no', label: 'No' },
                                 { value: 'yes', label: 'Yes' },
                               ]}
                             />
                           </div>
+
+                          {watchEmiCase && (
+                            <div className="animate-fadeIn">
+                              <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                                Installment Frequency <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>
+                              </label>
+                              <CustomSelect
+                                value={watchPaymentFrequency || 'YEARLY'}
+                                onChange={val => {
+                                  setValue('paymentFrequency', val as any, { shouldValidate: true, shouldDirty: true });
+                                  if (val === 'SINGLE') {
+                                    setValue('noOfInstallments', 1, { shouldValidate: true, shouldDirty: true });
+                                    recalculateLastInstallment({ freq: 'SINGLE', noOfInst: 1 });
+                                  } else {
+                                    recalculateLastInstallment({ freq: val });
+                                  }
+                                }}
+                                options={[
+                                  { value: 'YEARLY', label: 'Yearly' },
+                                  { value: 'HALF_YEARLY', label: 'Half Yearly' },
+                                  { value: 'QUARTERLY', label: 'Quarterly' },
+                                  { value: 'MONTHLY', label: 'Monthly' },
+                                  { value: 'SINGLE', label: 'One Time' },
+                                ]}
+                              />
+                            </div>
+                          )}
                         </div>
 
                         {watchEmiCase && (
@@ -5750,6 +5828,20 @@ export default function Policies() {
                                   }
                                   return base;
                                 })()}
+                              />
+                            </div>
+                            <div>
+                              <label className="label text-[10px] font-extrabold text-blue-700 uppercase tracking-wider block mb-1">
+                                Policy 1st Instalment Date
+                              </label>
+                              <DatePicker
+                                value={watchFirstPremiumDate}
+                                onDateChange={val => {
+                                  setValue('firstPremiumDate', val, { shouldValidate: true, shouldDirty: true });
+                                  recalculateLastInstallment({ baseDate: val });
+                                }}
+                                className="input w-full h-10 text-xs rounded-xl bg-white border border-blue-200"
+                                placeholder="DD/MM/YYYY"
                               />
                             </div>
                             <div>
@@ -6226,7 +6318,7 @@ export default function Policies() {
                   </div>
 
                   {/* Nominee Allocation Percentage Summary Bar */}
-                  {connectedPersons.some(p => p.isNominee) && (
+                  {displayedConnectedPersons.some(p => p.isNominee) && (
                     <div
                       className={clsx(
                         'p-3 rounded-xl border flex items-center justify-between text-xs font-bold transition-all',
@@ -6259,7 +6351,7 @@ export default function Policies() {
                   )}
 
                   {/* Connected Persons List */}
-                  {connectedPersons.length === 0 ? (
+                  {displayedConnectedPersons.length === 0 ? (
                     <div className="p-8 text-center border-2 border-dashed border-slate-200 rounded-2xl bg-slate-50/50 space-y-3">
                       <div className="w-12 h-12 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center mx-auto">
                         <Users size={20} />
@@ -6278,7 +6370,7 @@ export default function Policies() {
                     </div>
                   ) : (
                     <div className="space-y-3.5">
-                      {connectedPersons.map((person, idx) => (
+                      {displayedConnectedPersons.map((person, idx) => (
                         <div
                           key={person.id}
                           className="border border-slate-200 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all p-4 space-y-3.5"
@@ -6338,6 +6430,8 @@ export default function Policies() {
                                 placeholder="Select Relationship"
                                 options={[
                                   { value: 'Spouse', label: 'Spouse' },
+                                  { value: 'Husband', label: 'Husband' },
+                                  { value: 'Wife', label: 'Wife' },
                                   { value: 'Son', label: 'Son' },
                                   { value: 'Daughter', label: 'Daughter' },
                                   { value: 'Father', label: 'Father' },
@@ -6606,7 +6700,7 @@ export default function Policies() {
                                   <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">PHC Balance Amount (₹)</label>
                                   <input
                                     type="text"
-                                    value={`₹${Number(watch('phcAmount')) || 0}`}
+                                    value={`₹${Math.max(0, (Number(watch('phcAmount')) || 0) - (Number(phcExtraDetails.utilizedAmount) || 0))}`}
                                     readOnly
                                     className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-bold text-slate-800"
                                   />
@@ -7050,7 +7144,7 @@ export default function Policies() {
                     const targetPolicyNo = watch('policyNumber') || editTarget?.policyNumber;
                     const matchingClaims = (targetPolicyId || targetPolicyNo)
                       ? allClaimsList.filter((c: any) =>
-                        (targetPolicyId && c.policy?.id === targetPolicyId) ||
+                        (targetPolicyId && (c.policy?.id === targetPolicyId || c.policyId === targetPolicyId)) ||
                         (targetPolicyNo && c.policy?.policyNumber === targetPolicyNo)
                       )
                       : [];
@@ -7079,10 +7173,22 @@ export default function Policies() {
                           } as any)[c.status]) || 'bg-slate-50 text-slate-700 border-slate-200';
 
                           return (
-                            <div key={c.id} className="p-3.5 bg-white border border-slate-200/90 rounded-2xl shadow-2xs hover:shadow-xs transition-all space-y-2">
+                            <div
+                              key={c.id}
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => setSelectedClaimDetail(c)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  setSelectedClaimDetail(c);
+                                }
+                              }}
+                              className="p-3.5 bg-white border border-slate-200/90 rounded-2xl shadow-2xs hover:shadow-xs hover:border-blue-400 transition-all space-y-2 cursor-pointer group"
+                            >
                               <div className="flex items-center justify-between">
                                 <div className="flex flex-wrap items-center gap-2">
-                                  <span className="font-extrabold text-xs text-slate-900">{c.claimNumber}</span>
+                                  <span className="font-extrabold text-xs text-slate-900 group-hover:text-blue-600 transition-colors">{c.claimNumber}</span>
                                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${statusStyle}`}>
                                     {c.status}
                                   </span>
@@ -7091,12 +7197,12 @@ export default function Policies() {
                                   <span className="text-xs font-black text-emerald-700">₹{Number(c.claimAmount || 0).toLocaleString('en-IN')}</span>
                                   <button
                                     type="button"
-                                    onClick={() => {
-                                      closeModal();
-                                      navigate(`/claims`);
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedClaimDetail(c);
                                     }}
                                     className="px-2.5 py-1 text-[11px] font-bold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors flex flex-wrap items-center gap-1 cursor-pointer"
-                                    title="Edit on Claims page"
+                                    title="View / Update Claim"
                                   >
                                     <Pencil size={12} />
                                     Edit
@@ -7156,6 +7262,7 @@ export default function Policies() {
           </div>
 
         </form>
+      )}
       </Modal>
 
 
@@ -7169,6 +7276,14 @@ export default function Policies() {
         defaultType="POLICY_DOCUMENT"
         zIndexClass="z-[60]"
         explicitFilePicker
+      />
+
+      {/* Claim Detail Modal */}
+      <ClaimDetailModal
+        open={!!selectedClaimDetail}
+        claim={selectedClaimDetail}
+        onClose={() => setSelectedClaimDetail(null)}
+        zIndexClass="z-[70]"
       />
 
       {/* Delete Confirm Modal */}
@@ -7188,22 +7303,44 @@ export default function Policies() {
         onClose={() => setImportFormatOpen(false)}
         onChooseFile={() => fileInputRef.current?.click()}
         title="Import Policies from CSV or Excel"
-        description="Download the sample file and keep the column headers unchanged."
-        warning="Policy Number and Contact Phone are required. The contact phone must match an existing contact. Plan Code is optional; an active plan is used when it is blank or not found."
+        description="Download the sample Excel template and keep the column headers unchanged."
+        warning="Policy No., Proposer Name, Customer Contact No., Policy Start Date, and Policy End Date are required. If the contact, insurance company, or insurance plan does not exist, they will be automatically created and linked."
         columns={[
-          { name: 'Policy Number', requirement: 'Required. Must be unique.' },
-          { name: 'Status', requirement: 'Optional. Use ACTIVE, INFORCE, RENEWAL_DUE, GRACE_PERIOD, LAPSED, EXPIRED, CANCELLED, SURRENDERED, or INACTIVE_OLD.' },
-          { name: 'Sum Assured', requirement: 'Optional. Use a number; defaults to 100000.' },
-          { name: 'Premium Amount', requirement: 'Optional. Use a number; defaults to 5000.' },
-          { name: 'Payment Frequency', requirement: 'Optional. Use MONTHLY, QUARTERLY, HALF_YEARLY, YEARLY, or SINGLE.' },
-          { name: 'Start Date', requirement: 'Optional. Recommended format: YYYY-MM-DD.' },
-          { name: 'End Date', requirement: 'Optional. Recommended format: YYYY-MM-DD.' },
-          { name: 'Contact Phone', requirement: 'Required. Must match an existing contact phone.' },
-          { name: 'Plan Code', requirement: 'Optional. Must match an active insurance plan code to select that plan.' },
+          { name: 'Sr. No.', requirement: 'Optional. Serial number (e.g. 1, 2).' },
+          { name: 'Proposer Name', requirement: 'Required. Full name of customer/proposer (e.g. Purushottam D. Ghadge).' },
+          { name: 'Agent Name', requirement: 'Optional. Agent or employee assigned (e.g. Anuja Anil Shinde).' },
+          { name: 'Customer Contact No.', requirement: 'Required. 10-digit mobile number (e.g. 70205 18999).' },
+          { name: 'Customer Email ID', requirement: 'Optional. Valid email address (e.g. purushottamghadage50@gmail.com).' },
+          { name: 'Policy No.', requirement: 'Required. Unique policy number (e.g. P/161117/01/2021/027251).' },
+          { name: 'Insurance Company Category', requirement: 'Optional. Health, Life, Motor, General, or Travel.' },
+          { name: 'Company Name', requirement: 'Optional. Insurance provider name (e.g. Star Health and Allied Insurance Co Ltd).' },
+          { name: 'Plan Name', requirement: 'Optional. Insurance plan name (e.g. Family Health Optima, Young Star).' },
+          { name: 'Fresh Renewal or Port', requirement: 'Optional. Business type (Renewal, Fresh, or Port).' },
+          { name: 'Policy Start Date', requirement: 'Required. Format: DD/MM/YYYY or YYYY-MM-DD (e.g. 24/01/2021).' },
+          { name: 'Policy End Date', requirement: 'Required. Format: DD/MM/YYYY or YYYY-MM-DD (e.g. 23/01/2022).' },
+          { name: 'Policy End Month', requirement: 'Optional. Expiry month name (e.g. January).' },
+          { name: 'Policy End Year', requirement: 'Optional. Expiry year (e.g. 2022).' },
+          { name: 'Policy Tenure', requirement: 'Optional. Duration (e.g. 1 Year, 2 Year).' },
+          { name: 'Family Size', requirement: 'Optional. Coverage structure (e.g. 2A1C, 2A2C, 1A).' },
+          { name: 'Sum Insured', requirement: 'Optional. Coverage sum (e.g. 5L, 10L, 500000).' },
+          { name: 'Premium (Before GST)', requirement: 'Required. Premium amount before GST (e.g. 8525).' },
         ]}
-        sampleRow={['POL-SAMPLE-001', 'ACTIVE', '500000', '25000', 'YEARLY', '2026-01-01', '2027-01-01', '9000000001', '']}
+        sampleRows={[
+          ['1', 'Purushottam D. Ghadge', 'Anuja Anil Shinde', '70205 18999', 'purushottamghadage50@gmail.com', 'P/161117/01/2021/027251', 'Health', 'Star Health and Allied Insurance Co Ltd', 'Family Health Optima', 'Renewal', '24/01/2021', '23/01/2022', 'January', '2022', '1 Year', '2A1C', '5L', '8525'],
+          ['2', 'Pravin Kiran Kulkarni', 'Shrikant Pramod Daphalapurkar', '79721 41923', 'pravin.kulkarni37@gmail.com', 'P/161117/01/2023/025378', 'Health', 'Star Health and Allied Insurance Co Ltd', 'Family Health Optima', 'Renewal', '18/01/2023', '17/01/2024', 'January', '2024', '1 Year', '2A2C', '5L', '12695'],
+          ['3', 'Vinit Vinayak Pujari', 'Shrikant Pramod Daphalapurkar', '94212 42425', 'pujarivinit15@gmail.com', 'P/161117/01/2023/024055', 'Health', 'Star Health and Allied Insurance Co Ltd', 'Family Health Optima', 'Renewal', '14/01/2023', '13/01/2024', 'January', '2024', '1 Year', '2A1C', '5L', '10655'],
+          ['4', 'Veena Vinayak Pujari', 'Shrikant Pramod Daphalapurkar', '94212 42425', 'pujarivinit15@gmail.com', 'P/161117/01/2023/024054', 'Health', 'Star Health and Allied Insurance Co Ltd', 'Medi Classic', 'Renewal', '12/01/2023', '11/01/2024', 'January', '2024', '1 Year', '1A', '3L', '10151'],
+          ['5', 'Abhinandan Mahavir Vhasakule', 'Abhinandan Mahavir Vhasakule', '98704 17711', 'abhinandanmvhasakule@gmail.com', 'P/161117/01/2023/025159', 'Health', 'Star Health and Allied Insurance Co Ltd', 'Star Health Assure', 'Renewal', '17/01/2023', '16/01/2024', 'January', '2024', '1 Year', '2A2C', '5L', '14168'],
+          ['6', 'Anandrao Nivrutti Metkari', 'Udaykumar Ganapati Yadav', '94232 29412', 'anand.metkari@gmail.com', 'P/161117/01/2023/023711', 'Health', 'Star Health and Allied Insurance Co Ltd', 'Young Star', 'Fresh', '05/01/2023', '04/01/2024', 'January', '2024', '1 Year', '1A2C', '5L', '8950'],
+          ['7', 'Pradip Bhaskar Patil', 'Udaykumar Ganapati Yadav', '77690 72755', 'pradipatil52@gmail.com', 'P/161117/01/2023/023835', 'Health', 'Star Health and Allied Insurance Co Ltd', 'Young Star', 'Renewal', '23/01/2023', '22/01/2024', 'January', '2024', '1 Year', '2A2C', '5L', '13315'],
+          ['8', 'Vinayak Maruti Kumbhar', 'Nikita Vinayak Kumbhar', '79724 25131', 'vinayakm.kumbhar3@gmail.com', 'P/161117/01/2023/025587', 'Health', 'Star Health and Allied Insurance Co Ltd', 'Young Star', 'Renewal', '21/01/2023', '20/01/2024', 'January', '2024', '1 Year', '2A1C', '5L', '11040'],
+          ['9', 'Gaurav Kumar', 'Ashwini Hitesh Tiwari', '76562 70402', 'gauravkumaree.55@gmail.com', 'P/161117/01/2023/025212', 'Health', 'Star Health and Allied Insurance Co Ltd', 'Star Health Assure', 'Fresh', '09/01/2023', '08/01/2024', 'January', '2024', '1 Year', '1A', '5L', '5840'],
+          ['10', 'Galave Sitaram Janardhan', 'Galave Sitaram Janardhan', '94052 86196', 'sgalave1580@gmail.com', 'P/161117/01/2022/024512', 'Health', 'Star Health and Allied Insurance Co Ltd', 'Young Star', 'Renewal', '16/01/2022', '15/01/2023', 'January', '2023', '1 Year', '1A1C', '10L', '12256'],
+        ]}
         fileFormats="CSV, XLS, and XLSX"
-        sampleFileName="policies-sample.csv"
+        sampleFileName="policies-sample.xlsx"
+        sampleFileType="xlsx"
+        sheetName="Policies"
       />
     </div>
   );

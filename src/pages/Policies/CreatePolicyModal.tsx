@@ -8,14 +8,33 @@ import { isFieldRequired as isFieldRequiredHelper, COMPULSORY_RULES_UPDATED_EVEN
 import { DatePicker } from '@comps/common/DatePicker';
 import { insuranceService, policiesService, documentsService, contactsService } from '@api/index';
 import toast from 'react-hot-toast';
-import { Shield, CreditCard, Users, Activity, FileText, Plus, Trash2, ChevronDown, UserCircle2, Pencil, RotateCw, History, CheckCircle2, AlertTriangle, Info, CalendarDays, Eye, Download, MessageCircle } from 'lucide-react';
+import { Shield, CreditCard, Users, Activity, FileText, Plus, Trash2, ChevronDown, UserCircle2, Pencil, RotateCw, History, CheckCircle2, AlertTriangle, Info, CalendarDays, Eye, Download, MessageCircle, Search, User, FileCheck2 } from 'lucide-react';
 import { format } from 'date-fns';
 import clsx from 'clsx';
 import { useLookupStore } from '@store/lookup.store';
+import { useAuthStore } from '@store/auth.store';
 import { getPolicyStatusDisplay, calculateLastInstallmentDate } from '../../utils/policyStatusUtils';
 import { formatIndianNumber } from '../../utils/numberUtils';
 import ActivityTimeline from '@comps/common/ActivityTimeline';
-import { INSTALLMENT_DATE_OPTIONS, PHC_STAGE_OPTIONS, POLICY_DOCUMENT_TYPE_OPTIONS, SUM_INSURED_OPTIONS, cleanConnectedPhone, parseExtraNotes, normalizeInstallmentDay } from './index';
+import {
+  INSTALLMENT_DATE_OPTIONS,
+  PHC_STAGE_OPTIONS,
+  POLICY_DOCUMENT_TYPE_OPTIONS,
+  SUM_INSURED_OPTIONS,
+  cleanConnectedPhone,
+  parseExtraNotes,
+  normalizeInstallmentDay,
+  POLICY_TYPE_OPTIONS,
+  DEFAULT_CUSTOMER_CATEGORY_OPTIONS,
+  DEFAULT_INSURANCE_COMPANY_CATEGORY_OPTIONS,
+  DEFAULT_INSURANCE_PLAN_CATEGORY_OPTIONS,
+  POLICY_STATUS_OPTIONS,
+  normalizeStatusVal,
+  DEFAULT_COMPANIES_BY_TYPE,
+  PRIMARY_DEFAULT_COMPANIES,
+  COMPANY_PRIMARY_CATEGORY,
+  isCompanyMatch,
+} from './index';
 
 const formatBytes = (bytes?: number | null) => {
   if (bytes == null) return '';
@@ -50,6 +69,72 @@ const STATUS_OPTIONS = [
   { value: 'CANCELLED', label: 'Cancelled' },
 ];
 
+export const POLICY_RELATIONSHIP_MAP: Record<string, string> = {
+  SPOUSE: 'Spouse',
+  HUSBAND: 'Husband',
+  WIFE: 'Wife',
+  SON: 'Son',
+  DAUGHTER: 'Daughter',
+  FATHER: 'Father',
+  MOTHER: 'Mother',
+  BROTHER: 'Brother',
+  SISTER: 'Sister',
+  GRANDFATHER: 'Grandfather',
+  GRANDMOTHER: 'Grandmother',
+  GRANDSON: 'Grandson',
+  GRANDDAUGHTER: 'Granddaughter',
+  GRANDPARENT: 'Grandparent',
+  GRANDCHILD: 'Grandchild',
+  UNCLE: 'Uncle',
+  AUNT: 'Aunt / Unty',
+  NEPHEW: 'Nephew',
+  NIECE: 'Niece',
+  CHILD: 'Child',
+  PARENT: 'Parent',
+  IN_LAW: 'In-Law',
+  OTHER: 'Other',
+};
+
+export function formatPolicyRelationship(
+  rawRel?: string | null,
+  gender?: string | null,
+  isDirect: boolean = true,
+): string {
+  if (!rawRel) return 'Spouse';
+  const clean = String(rawRel).trim();
+  const upper = clean.toUpperCase().replace(/\s+/g, '_');
+
+  let label = POLICY_RELATIONSHIP_MAP[upper];
+  const isFemale = String(gender).toUpperCase() === 'FEMALE';
+  const isMale = String(gender).toUpperCase() === 'MALE';
+
+  if (upper === 'SPOUSE') {
+    if (isFemale) label = 'Wife';
+    else if (isMale) label = 'Husband';
+    else label = 'Spouse';
+  }
+
+  if (!isDirect && upper) {
+    if (['CHILD', 'SON', 'DAUGHTER'].includes(upper)) {
+      label = isFemale ? 'Mother' : 'Father';
+    } else if (['PARENT', 'FATHER', 'MOTHER'].includes(upper)) {
+      label = isFemale ? 'Daughter' : 'Son';
+    } else if (['NEPHEW', 'NIECE'].includes(upper)) {
+      label = isFemale ? 'Aunt / Unty' : 'Uncle';
+    } else if (['UNCLE', 'AUNT'].includes(upper)) {
+      label = isFemale ? 'Niece' : 'Nephew';
+    } else if (['GRANDCHILD', 'GRANDSON', 'GRANDDAUGHTER'].includes(upper)) {
+      label = isFemale ? 'Grandmother' : 'Grandfather';
+    } else if (['GRANDPARENT', 'GRANDFATHER', 'GRANDMOTHER'].includes(upper)) {
+      label = isFemale ? 'Granddaughter' : 'Grandson';
+    }
+  }
+
+  if (label) return label;
+  if (upper === 'DEPENDENT') return 'Other';
+  return clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase().replace(/_/g, ' ');
+}
+
 export default function CreatePolicyModal({
   open,
   onClose,
@@ -64,30 +149,75 @@ export default function CreatePolicyModal({
 }: Props) {
   const qc = useQueryClient();
 
+  const targetFetchId = policyId || directPolicyToEdit?.id;
   const { data: fetchedPolicyRes, isLoading: isPolicyLoading } = useQuery({
-    queryKey: ['policy-detail-create-modal', policyId],
-    queryFn: () => policiesService.get(policyId!),
-    enabled: open && !!policyId && !directPolicyToEdit,
+    queryKey: ['policy-detail-create-modal', targetFetchId],
+    queryFn: () => policiesService.get(targetFetchId!),
+    enabled: open && !!targetFetchId && (!directPolicyToEdit || !directPolicyToEdit.members || directPolicyToEdit.members.length === 0),
   });
-  const policyToEdit = directPolicyToEdit || (fetchedPolicyRes?.data || fetchedPolicyRes);
+  const policyToEdit = (fetchedPolicyRes?.data || fetchedPolicyRes) || directPolicyToEdit;
+  const user = useAuthStore(s => s.user);
   const { employees, loadEmployees } = useLookupStore();
   const [isViewOnly, setIsViewOnly] = useState(false);
   const [isManualSumAssured, setIsManualSumAssured] = useState(false);
   const [selectedContactId, setSelectedContactId] = useState(contactId || policyToEdit?.contactId || '');
+  const [selectedContact, setSelectedContact] = useState<any>(null);
+  const [contactSearch, setContactSearch] = useState('');
+  const [contactDropdown, setContactDropdown] = useState(false);
 
   const { dropdownMenus, getOptions, getCustomDropdowns } = useMasterDropdowns();
 
-  const productCategoryOptions = useMemo(() => {
-    return getOptions('Policy', 'Company Categories', DEFAULT_RAW_CATEGORIES).map(o => o.value);
+  const planCategoryOptions = useMemo(() => {
+    return getOptions('Plan', 'Plan Categories', DEFAULT_INSURANCE_PLAN_CATEGORY_OPTIONS);
+  }, [getOptions, dropdownMenus]);
+
+  const companyCategoryOptions = useMemo(() => {
+    return getOptions('Insurance Company', 'Company Categories', DEFAULT_INSURANCE_COMPANY_CATEGORY_OPTIONS);
   }, [getOptions, dropdownMenus]);
 
   const customerCategoryOptions = useMemo(() => {
-    return getOptions('Policy', 'Customer Categories', [
-      { value: 'FRESH', label: 'Fresh' },
-      { value: 'PORT', label: 'Port' },
-      { value: 'RENEWAL', label: 'Renewal' },
-    ]);
+    return getOptions('Policy', 'Customer Categories', DEFAULT_CUSTOMER_CATEGORY_OPTIONS);
   }, [getOptions, dropdownMenus]);
+
+  const policyTypeOptions = useMemo(() => {
+    return getOptions('Policy', 'Policy Types', POLICY_TYPE_OPTIONS);
+  }, [getOptions, dropdownMenus]);
+
+  const policyStatusOptions = useMemo(() => {
+    const rawOptions = getOptions('Policy', 'Policy Statuses', POLICY_STATUS_OPTIONS);
+    return rawOptions.map(opt => {
+      const v = typeof opt === 'string' ? opt : opt.value;
+      const l = typeof opt === 'string' ? opt : opt.label;
+      const norm = normalizeStatusVal(v);
+      return {
+        value: norm,
+        label: l || v,
+      };
+    }).filter((opt, idx, arr) => arr.findIndex(x => x.value === opt.value) === idx);
+  }, [getOptions, dropdownMenus]);
+
+  const agentOptions = useMemo(() => {
+    const list: { value: string; label: string; empId?: string; agentCode?: string }[] = [];
+
+    if (user) {
+      const selfName = `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email || 'Current User';
+      list.push({ value: selfName, label: `${selfName} (Current User)`, empId: user.id });
+    }
+
+    (employees || []).forEach((emp: any) => {
+      const name = `${emp.firstName || emp.employeeProfile?.firstName || ''} ${emp.lastName || emp.employeeProfile?.lastName || ''}`.trim();
+      if (name && !list.some(x => x.value.toLowerCase() === name.toLowerCase())) {
+        list.push({ value: name, label: name, empId: emp.userId || emp.id });
+      }
+    });
+
+    if (list.length === 0) {
+      list.push({ value: 'Rahul Mehta', label: 'Rahul Mehta' });
+      list.push({ value: 'Priya Sharma', label: 'Priya Sharma' });
+    }
+
+    return list;
+  }, [user, employees]);
 
   const paymentFrequencyOptions = useMemo(() => {
     return getOptions('Policy', 'Payment Frequency', [
@@ -110,6 +240,15 @@ export default function CreatePolicyModal({
     enabled: open,
   });
   const contactsList: any[] = Array.isArray(contactsRes?.data) ? contactsRes.data : Array.isArray(contactsRes) ? contactsRes : [];
+
+  const filteredContacts = useMemo(() => {
+    if (!contactSearch.trim()) return contactsList.slice(0, 50);
+    const q = contactSearch.toLowerCase();
+    return contactsList.filter((c: any) =>
+      `${c.firstName || ''} ${c.lastName || ''}`.toLowerCase().includes(q) ||
+      (c.phone && c.phone.includes(q))
+    ).slice(0, 50);
+  }, [contactsList, contactSearch]);
 
   const { data: compulsoryRulesRes } = useQuery({
     queryKey: ['compulsory-rules'],
@@ -138,16 +277,31 @@ export default function CreatePolicyModal({
       loadEmployees();
       if (policyToEdit) {
         setIsViewOnly(false);
-        setSelectedContactId(policyToEdit.contactId || policyToEdit.contact?.id || contactId || '');
-        const matchProdCat = (policyToEdit.notes || '').match(/(?:Product Category|Policy Type):\s*(.*)/i);
-          const initialCat = matchProdCat ? matchProdCat[1].trim() : (policyToEdit.plan?.category || '').toUpperCase();
-          setSelectedCategory(initialCat);
-        setSelectedCompanyId(policyToEdit.plan?.companyId || policyToEdit.plan?.company?.id || policyToEdit.plan?.company?.name || '');
-        setSelectedPlanId(policyToEdit.planId || policyToEdit.plan?.id || '');
-        setBusinessType(policyToEdit.businessType || '');
         const extra = parseExtraNotes(policyToEdit.notes);
-        const matchCustCat = (policyToEdit.notes || '').match(/Customer Category:\s*(.*)/i);
-        setCustomerCategory(policyToEdit.customerCategory || extra.customerCategory || (matchCustCat ? matchCustCat[1].trim() : ''));
+        setSelectedContactId(policyToEdit.contactId || policyToEdit.contact?.id || contactId || '');
+        const polType = extra.policyType || policyToEdit.type || policyToEdit.policyType || 'Retail Floater';
+        setSelectedPolicyType(polType);
+        const compCat = extra.companyCategory || policyToEdit.plan?.company?.category || policyToEdit.plan?.category || '';
+        setSelectedCompanyCategory(compCat);
+        setSelectedCategory(compCat || polType);
+        const compName = extra.companyName || policyToEdit.plan?.company?.name || '';
+        setSelectedCompany(compName);
+        setSelectedCompanyId(policyToEdit.plan?.companyId || policyToEdit.plan?.company?.id || policyToEdit.plan?.company?.name || '');
+        const planCat = extra.planCategory || policyToEdit.plan?.category || '';
+        setSelectedPlanCategory(planCat);
+        setSelectedPlanId(policyToEdit.planId || policyToEdit.plan?.id || '');
+        setBusinessType(policyToEdit.businessType || (extra.customerCategory ? (extra.customerCategory === 'Port' ? 'PORT' : extra.customerCategory === 'Renewal' ? 'RENEWAL' : 'FRESH') : 'FRESH'));
+        setCustomerCategory(policyToEdit.customerCategory || extra.customerCategory || (policyToEdit.businessType ? (policyToEdit.businessType === 'FRESH' ? 'Fresh' : policyToEdit.businessType === 'PORT' ? 'Port' : policyToEdit.businessType === 'RENEWAL' ? 'Renewal' : policyToEdit.businessType) : 'Fresh'));
+        setSelectedAgentName(extra.agentName || (user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() : ''));
+        setSelectedFamilySize(extra.familySize || '1');
+        setSelectedZoneTier(extra.policyZoneLocationTier || 'ZONE_1');
+        setPolicyZonePincode(extra.policyZoneLocationPincode || '');
+        setDeductible(extra.deductible || '');
+        setRiders(extra.riders || []);
+        const matchBonus1 = (policyToEdit.notes || '').match(/Bonus 1(?:\s*\(No Claim Bonus\))?:\s*(.*)/i);
+        if (matchBonus1) setBonus1(matchBonus1[1].trim());
+        const matchBonus2 = (policyToEdit.notes || '').match(/Bonus 2(?:\s*\(Super \/ Cumulative\))?:\s*(.*)/i);
+        if (matchBonus2) setBonus2(matchBonus2[1].trim());
         const matchPeriod = (policyToEdit.notes || '').match(/Policy Period:\s*(.*)/i);
         setPolicyPeriod(policyToEdit.policyPeriod || (matchPeriod ? matchPeriod[1].trim() : (extra.policyTenure ? `${extra.policyTenure} Yr` : '')));
         if (extra.policyTenure) {
@@ -234,21 +388,24 @@ export default function CreatePolicyModal({
               const isSelf = String(m.relationship || '').toLowerCase() === 'self';
               return !isSelf && (!proposerNameLower || mName !== proposerNameLower);
             })
-            .map((m: any, idx: number) => ({
-              id: m.id || `member-${idx}`,
-              name: m.name || `${m.firstName || ''} ${m.lastName || ''}`.trim(),
-              relationship: m.relationship || 'Spouse',
-              contactNo: cleanConnectedPhone(m.phone || m.contactNo),
-              dob: m.dateOfBirth ? m.dateOfBirth.slice(0, 10) : (m.dob || ''),
-              gender: m.gender || 'MALE',
-              isCovered: m.isCovered !== false,
-              isNominee: !!m.isNominee,
-              nomineeName: m.nomineeName || '',
-              nomineeRelation: m.nomineeRelation || 'Spouse',
-              nomineeContact: m.nomineeContact || '',
-              nomineeDob: m.nomineeDob || '',
-              nomineePercentage: m.nomineePercentage && Number(m.nomineePercentage) > 0 ? m.nomineePercentage : '',
-            }));
+            .map((m: any, idx: number) => {
+              const formattedRel = formatPolicyRelationship(m.relationship, m.gender, true);
+              return {
+                id: m.id || `member-${idx}`,
+                name: m.name || `${m.firstName || ''} ${m.lastName || ''}`.trim(),
+                relationship: formattedRel,
+                contactNo: cleanConnectedPhone(m.phone || m.contactNo),
+                dob: m.dateOfBirth ? m.dateOfBirth.slice(0, 10) : (m.dob || ''),
+                gender: m.gender || 'MALE',
+                isCovered: m.isCovered !== false,
+                isNominee: !!m.isNominee,
+                nomineeName: m.nomineeName || '',
+                nomineeRelation: formatPolicyRelationship(m.nomineeRelation || m.relationship, m.gender, true),
+                nomineeContact: m.nomineeContact || '',
+                nomineeDob: m.nomineeDob || '',
+                nomineePercentage: m.nomineePercentage && Number(m.nomineePercentage) > 0 ? m.nomineePercentage : '',
+              };
+            });
         }
 
         const noteLines = (policyToEdit.notes || '').split('\n');
@@ -264,7 +421,8 @@ export default function CreatePolicyModal({
               const genderM = line.match(/Gender:\s*([^,]+)/);
               if (nameM) {
                 const parsedName = nameM[1].trim();
-                const rel = relM ? relM[1].trim() : 'Spouse';
+                const parsedGender = genderM ? genderM[1].trim() : 'MALE';
+                const rel = formatPolicyRelationship(relM ? relM[1].trim() : '', parsedGender, true);
                 const isSelf = rel.toLowerCase() === 'self';
                 const isProposer = proposerNameLower && parsedName.toLowerCase() === proposerNameLower;
                 if (isSelf || isProposer) return;
@@ -287,6 +445,55 @@ export default function CreatePolicyModal({
                   });
                 }
               }
+            }
+          });
+        }
+
+        // If members was still empty, check initialData familyMembers or relationships
+        if (initialMembers.length === 0 && Array.isArray(initialData?.familyMembers) && initialData.familyMembers.length > 0) {
+          initialData.familyMembers.forEach((fm: any, idx: number) => {
+            const fmName = (fm.name || `${fm.firstName || ''} ${fm.lastName || ''}`).trim();
+            const isSelf = String(fm.relation || fm.relationship || '').toLowerCase() === 'self';
+            if (fmName && !isSelf && (!proposerNameLower || fmName.toLowerCase() !== proposerNameLower)) {
+              initialMembers.push({
+                id: fm.id || fm.contactId ? `contact-${fm.id || fm.contactId}` : `member-${idx}`,
+                name: fmName,
+                relationship: formatPolicyRelationship(fm.relation || fm.relationship, fm.gender, true),
+                contactNo: cleanConnectedPhone(fm.phone || fm.contactNo || fm.whatsapp),
+                dob: fm.dob ? String(fm.dob).slice(0, 10) : '',
+                gender: ['MALE', 'FEMALE', 'OTHER'].includes(String(fm.gender).toUpperCase()) ? String(fm.gender).toUpperCase() : 'MALE',
+                isCovered: true,
+                isNominee: false,
+                nomineeName: '',
+                nomineeRelation: formatPolicyRelationship(fm.relation || fm.relationship, fm.gender, true) || 'Spouse',
+                nomineeContact: '',
+                nomineeDob: '',
+                nomineePercentage: '',
+              });
+            }
+          });
+        }
+        if (initialMembers.length === 0 && Array.isArray(initialData?.relationships) && initialData.relationships.length > 0) {
+          initialData.relationships.forEach((rel: any, idx: number) => {
+            const rc = rel.relatedContact || rel.contact || rel;
+            const rcName = (rc?.name || `${rc?.firstName || ''} ${rc?.lastName || ''}`).trim();
+            const isSelf = String(rel.relationshipType || rel.relation || '').toLowerCase() === 'self';
+            if (rcName && !isSelf && (!proposerNameLower || rcName.toLowerCase() !== proposerNameLower)) {
+              initialMembers.push({
+                id: rc.id ? `contact-${rc.id}` : `member-${idx}`,
+                name: rcName,
+                relationship: formatPolicyRelationship(rel.relationshipType || rel.relation || rc.relation, rc.gender, true),
+                contactNo: cleanConnectedPhone(rc.phone || rc.alternatePhone || rc.mobile || rc.whatsappNumber || rc.whatsapp || rc.contactNo),
+                dob: rc.dateOfBirth ? String(rc.dateOfBirth).slice(0, 10) : (rc.dob ? String(rc.dob).slice(0, 10) : ''),
+                gender: ['MALE', 'FEMALE', 'OTHER'].includes(String(rc.gender).toUpperCase()) ? String(rc.gender).toUpperCase() : 'MALE',
+                isCovered: true,
+                isNominee: false,
+                nomineeName: '',
+                nomineeRelation: formatPolicyRelationship(rel.relationshipType || rel.relation || rc.relation, rc.gender, true) || 'Spouse',
+                nomineeContact: '',
+                nomineeDob: '',
+                nomineePercentage: '',
+              });
             }
           });
         }
@@ -368,39 +575,115 @@ export default function CreatePolicyModal({
             }
           });
         }
-        setMembers(initialMembers);
+        const seenMemberNames = new Set<string>();
+        const dedupedMembers = initialMembers.filter(m => {
+          const k = (m.name || '').trim().toLowerCase();
+          if (!k || seenMemberNames.has(k)) return false;
+          seenMemberNames.add(k);
+          return true;
+        });
+        setMembers(dedupedMembers);
         const matchPhc = (policyToEdit.notes || '').match(/Preventive Health Checkup:\s*([^\n]+)/i);
-        if (matchPhc) {
+        if (extra.phcRequired !== undefined) {
+          setPhcRequired(extra.phcRequired);
+        } else if (matchPhc) {
           const v = matchPhc[1].trim().toLowerCase();
           setPhcRequired(!v.startsWith('no') && !v.startsWith('false'));
-          const amountMatch = matchPhc[1].match(/Amount:\s*₹?([\d,.]+)/i);
-          const statusMatch = matchPhc[1].match(/Status:\s*([^,)]+)/i);
-          const settledMatch = matchPhc[1].match(/(?:Claim Settled|Settled):\s*([^,)]+)/i);
-          if (amountMatch) setPhcAmount(amountMatch[1].replace(/,/g, ''));
-          if (statusMatch) setPhcStatus(statusMatch[1].trim());
-          if (settledMatch) setPhcClaimSettled(settledMatch[1].trim().toLowerCase() === 'yes');
         } else if ((policyToEdit.notes || '').includes('PHC Required: No')) {
           setPhcRequired(false);
         } else if ((policyToEdit.plan as any)?.hasPhcBenefit) {
           setPhcRequired(true);
         }
+
+        if (extra.phcAmount !== undefined && extra.phcAmount !== null) {
+          setPhcAmount(String(extra.phcAmount));
+        } else if (matchPhc) {
+          const amountMatch = matchPhc[1].match(/Amount:\s*₹?([\d,.]+)/i);
+          if (amountMatch) setPhcAmount(amountMatch[1].replace(/,/g, ''));
+        }
+
+        if (extra.phcStatus) {
+          setPhcStatus(extra.phcStatus);
+        } else if (matchPhc) {
+          const statusMatch = matchPhc[1].match(/Status:\s*([^,)]+)/i);
+          if (statusMatch) setPhcStatus(statusMatch[1].trim());
+        }
+
+        if (extra.phcClaimSettled !== undefined) {
+          setPhcClaimSettled(extra.phcClaimSettled);
+        } else if (matchPhc) {
+          const settledMatch = matchPhc[1].match(/(?:Claim Settled|Settled):\s*([^,)]+)/i);
+          if (settledMatch) setPhcClaimSettled(settledMatch[1].trim().toLowerCase() === 'yes');
+        }
+
         const matchPhcPerson = (policyToEdit.notes || '').match(/PHC Insured Person:\s*(.*)/i) || (policyToEdit.notes || '').match(/Preventive Health Checkup:.*Insured Person:\s*([^,)\n]+)/i);
-        setPhcInsuredPerson(matchPhcPerson ? matchPhcPerson[1].trim() : '');
+        const resolvedPhcPerson = extra.phcInsuredPerson || (matchPhcPerson ? matchPhcPerson[1].trim() : '');
+        setPhcInsuredPerson(resolvedPhcPerson);
+
         const matchPhcStage = (policyToEdit.notes || '').match(/PHC Stage:\s*(.*)/i);
-        setPhcStage(matchPhcStage ? matchPhcStage[1].trim() : 'TO_CONTACT');
+        const resolvedPhcStage = extra.phcStage || (matchPhcStage ? matchPhcStage[1].trim() : '') || 'TO_CONTACT';
+        setPhcStage(resolvedPhcStage);
+
+        setPhcExtraDetails({
+          eligibilityStartDate: extra.phcEligibilityStartDate || '',
+          frequency: extra.phcFrequency || 'ANNUAL',
+          followUpDate: extra.phcFollowUpDate || '',
+          insuredPersonName: resolvedPhcPerson,
+          bookingDate: extra.phcBookingDate || '',
+          appointmentDate: extra.phcAppointmentDate || '',
+          centreName: extra.phcCentreName || '',
+          centreCity: extra.phcCentreCity || '',
+          utilizedAmount: extra.phcUtilizedAmount !== undefined && extra.phcUtilizedAmount !== null ? String(extra.phcUtilizedAmount) : '',
+          reimbursementCashless: extra.phcReimbursementCashless || 'CASHLESS',
+          reportReceivedDate: extra.phcReportReceivedDate || '',
+          reportBillReceivedDate: extra.phcReportBillReceivedDate || '',
+          reportBillSubmittedDate: extra.phcReportBillSubmittedDate || '',
+          settlementDate: extra.phcSettlementDate || '',
+          phcStage: resolvedPhcStage,
+          comment: extra.phcComment || '',
+        });
       } else {
         setIsViewOnly(false);
-        setSelectedContactId(contactId || initialData?.contactId || initialData?.contact?.id || '');
-        setSelectedCategory(initialData?.plan?.category ? String(initialData.plan.category).toUpperCase() : (initialData?.category ? String(initialData.category).toUpperCase() : ''));
-        setSelectedCompanyId(initialData?.plan?.companyId || initialData?.plan?.company?.id || initialData?.plan?.company?.name || initialData?.companyId || '');
+        const targetCId = contactId || initialData?.contactId || initialData?.contact?.id || '';
+        setSelectedContactId(targetCId);
+
+        const initLeadType = initialData?.leadType || initialData?.businessType || 'FRESH';
+        const initCustCat = initialData?.customerCategory || (initLeadType === 'PORT' ? 'Port' : initLeadType === 'RENEWAL' ? 'Renewal' : 'Fresh');
+        setBusinessType(initLeadType);
+        setCustomerCategory(initCustCat);
+
+        const initPolType = initialData?.policyType || 'Retail Floater';
+        setSelectedPolicyType(initPolType);
+
+        const initCompCat = initialData?.plan?.company?.category || initialData?.plan?.category || initialData?.category || 'Health';
+        setSelectedCompanyCategory(initCompCat);
+        setSelectedCategory(initCompCat);
+
+        const initCompName = initialData?.plan?.company?.name || initialData?.companyName || '';
+        setSelectedCompany(initCompName);
+        setSelectedCompanyId(initialData?.plan?.companyId || initialData?.plan?.company?.id || initialData?.companyId || '');
+
+        const initPlanCat = initialData?.plan?.category || initialData?.category || '';
+        setSelectedPlanCategory(initPlanCat);
         setSelectedPlanId(initialData?.planId || initialData?.plan?.id || '');
-        setBusinessType(initialData?.businessType || '');
-        setCustomerCategory(initialData?.customerCategory || '');
+
+        const agentNameFromLead = initialData?.assignedEmployee ? `${initialData.assignedEmployee.firstName || ''} ${initialData.assignedEmployee.lastName || ''}`.trim() : '';
+        const defaultAgent = agentNameFromLead || (user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'Rahul Mehta' : 'Rahul Mehta');
+        setSelectedAgentName(defaultAgent);
+        setAssignedEmployeeId(initialData?.assignedEmployeeId || initialData?.assignedTo || user?.id || '');
+
+        setSelectedFamilySize('1');
+        setSelectedZoneTier('ZONE_1');
+        setPolicyZonePincode('');
+        setDeductible('');
+        setBonus1('');
+        setBonus2('');
+        setRiders([]);
+
         setPolicyPeriod(initialData?.policyPeriod || '');
         setPolicyNumber(initialData?.policyNumber || '');
         setAgentCode(initialData?.agentCode || '');
         setStatus(initialData?.status || 'INFORCE');
-        setAssignedEmployeeId(initialData?.assignedEmployeeId || '');
         setSumAssured(initialData?.sumAssured != null ? String(initialData.sumAssured) : (initialData?.sumAssuredRequired != null ? String(initialData.sumAssuredRequired) : ''));
         setPremiumAmount(initialData?.premiumAmount != null ? String(initialData.premiumAmount) : (initialData?.premiumBudget != null ? String(initialData.premiumBudget) : ''));
         setPaymentFrequency(initialData?.paymentFrequency || 'YEARLY');
@@ -418,8 +701,18 @@ export default function CreatePolicyModal({
         setEndDate(initialData?.endDate ? String(initialData.endDate).split('T')[0] : endStr);
         setNextDueDate(initialData?.nextDueDate ? String(initialData.nextDueDate).split('T')[0] : maturityStr);
         setMaturityDate(initialData?.maturityDate ? String(initialData.maturityDate).split('T')[0] : maturityStr);
-        setNotes(initialData?.notes || '');
-        setPolicyZoneCity('');
+
+        let initNotes = initialData?.notes || '';
+        try {
+          if (initNotes.startsWith('{') && initNotes.endsWith('}')) {
+            const parsed = JSON.parse(initNotes);
+            initNotes = parsed.cleanNotes || parsed.notes || '';
+          }
+        } catch {}
+        setNotes(initNotes);
+
+        const initCity = initialData?.contact?.addresses?.find((a: any) => a.isPrimary)?.city || initialData?.contact?.addresses?.[0]?.city || initialData?.contact?.city || '';
+        setPolicyZoneCity(initCity !== 'N/A' ? initCity : '');
         setDurationYears(1);
         setPolicyTerm('1 Year');
         setFirstYearPremium('');
@@ -458,9 +751,32 @@ export default function CreatePolicyModal({
 
         const clientFullName = (contactName || (initialData?.contact ? `${initialData.contact.firstName || ''} ${initialData.contact.lastName || ''}` : '')).trim();
         setInsuredPerson(clientFullName);
+        setPhcRequired(false);
+        setPhcAmount('');
+        setPhcAmountError('');
+        setPhcStatus('');
+        setPhcClaimSettled(false);
         setPhcInsuredPerson(clientFullName);
         setPhcStage('TO_CONTACT');
         setIsManualPhcPerson(false);
+        setPhcExtraDetails({
+          eligibilityStartDate: '',
+          frequency: 'ANNUAL',
+          followUpDate: '',
+          insuredPersonName: clientFullName,
+          bookingDate: '',
+          appointmentDate: '',
+          centreName: '',
+          centreCity: '',
+          utilizedAmount: '',
+          reimbursementCashless: 'CASHLESS',
+          reportReceivedDate: '',
+          reportBillReceivedDate: '',
+          reportBillSubmittedDate: '',
+          settlementDate: '',
+          phcStage: 'TO_CONTACT',
+          comment: '',
+        });
         setMembers([]);
         setPendingDocs([]);
       }
@@ -486,17 +802,29 @@ export default function CreatePolicyModal({
 
   // Tab 1: Policy & Plan Details
   const [insuredPerson, setInsuredPerson] = useState('');
+  const [selectedPolicyType, setSelectedPolicyType] = useState('Retail Floater');
   const [selectedCategory, setSelectedCategory] = useState('');
-  const [businessType, setBusinessType] = useState<string>('');
+  const [selectedCompanyCategory, setSelectedCompanyCategory] = useState('');
+  const [selectedCompany, setSelectedCompany] = useState('');
   const [selectedCompanyId, setSelectedCompanyId] = useState('');
+  const [selectedPlanCategory, setSelectedPlanCategory] = useState('');
   const [selectedPlanId, setSelectedPlanId] = useState('');
+  const [selectedAgentName, setSelectedAgentName] = useState('');
+  const [customerCategory, setCustomerCategory] = useState('Fresh');
+  const [businessType, setBusinessType] = useState<string>('FRESH');
   const [policyPeriod, setPolicyPeriod] = useState('');
   const [policyNumber, setPolicyNumber] = useState('');
   const [agentCode, setAgentCode] = useState('');
   const [status, setStatus] = useState('INFORCE');
   const [assignedEmployeeId, setAssignedEmployeeId] = useState('');
-  const [customerCategory, setCustomerCategory] = useState('');
   const [policyZoneCity, setPolicyZoneCity] = useState('');
+  const [policyZonePincode, setPolicyZonePincode] = useState('');
+  const [selectedZoneTier, setSelectedZoneTier] = useState('ZONE_1');
+  const [selectedFamilySize, setSelectedFamilySize] = useState('1');
+  const [deductible, setDeductible] = useState('');
+  const [bonus1, setBonus1] = useState('');
+  const [bonus2, setBonus2] = useState('');
+  const [riders, setRiders] = useState<string[]>([]);
   const [previousPolicyId, setPreviousPolicyId] = useState('');
   const [copyPreviousDetails, setCopyPreviousDetails] = useState(false);
   const [loadingCopy, setLoadingCopy] = useState(false);
@@ -831,11 +1159,22 @@ export default function CreatePolicyModal({
     );
   };
 
+  const displayedMembers = useMemo(() => {
+    const seen = new Set<string>();
+    return members.filter(p => {
+      const k = (p.name || '').trim().toLowerCase();
+      if (!k) return true;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }, [members]);
+
   const totalNomineePercentage = useMemo(() => {
-    return members
+    return displayedMembers
       .filter(p => p.isNominee)
       .reduce((sum, p) => sum + (Number(p.nomineePercentage) || 0), 0);
-  }, [members]);
+  }, [displayedMembers]);
 
   const syncContactFamilyMembers = useCallback((contact: any) => {
     if (!contact) return;
@@ -844,32 +1183,6 @@ export default function CreatePolicyModal({
       .join(' ')
       .trim()
       .toLowerCase();
-
-    const relationshipTypes: Record<string, string> = {
-      SPOUSE: 'Spouse',
-      HUSBAND: 'Husband',
-      WIFE: 'Wife',
-      SON: 'Son',
-      DAUGHTER: 'Daughter',
-      FATHER: 'Father',
-      MOTHER: 'Mother',
-      BROTHER: 'Brother',
-      SISTER: 'Sister',
-      GRANDFATHER: 'Grandfather',
-      GRANDMOTHER: 'Grandmother',
-      GRANDSON: 'Grandson',
-      GRANDDAUGHTER: 'Granddaughter',
-      GRANDPARENT: 'Grandparent',
-      GRANDCHILD: 'Grandchild',
-      UNCLE: 'Uncle',
-      AUNT: 'Aunt / Unty',
-      NEPHEW: 'Nephew',
-      NIECE: 'Niece',
-      CHILD: 'Child',
-      IN_LAW: 'In-Law',
-      DEPENDENT: 'Dependent',
-      OTHER: 'Other',
-    };
 
     const seenMemberIds = new Set<string>();
     const seenNames = new Set<string>();
@@ -880,10 +1193,10 @@ export default function CreatePolicyModal({
     const familyMembers: ConnectedPersonItem[] = [];
 
     const processRelationshipItem = (rel: any, isDirect: boolean) => {
-      const member = isDirect ? (rel.relatedContact || rel.contact) : (rel.primaryContact || rel.contact);
+      const member = isDirect ? (rel.relatedContact || rel.contact || rel) : (rel.primaryContact || rel.contact || rel);
       if (!member) return;
 
-      const memberId = String(member.id || member._id || '');
+      const memberId = String(member.id || member._id || member.contactId || '');
       if (memberId && seenMemberIds.has(memberId)) return;
 
       const name = [member.firstName, member.middleName, member.lastName]
@@ -898,25 +1211,15 @@ export default function CreatePolicyModal({
       if (memberId) seenMemberIds.add(memberId);
       seenNames.add(lowerName);
 
-      const rawRelType = String(rel.relationshipType || rel.relation || rel.relType || '').toUpperCase();
-      let relationshipLabel = relationshipTypes[rawRelType] || 'Dependent';
-
-      if (!isDirect && rawRelType) {
-        if (rawRelType === 'CHILD' || rawRelType === 'SON' || rawRelType === 'DAUGHTER') {
-          relationshipLabel = String(member.gender).toUpperCase() === 'FEMALE' ? 'Mother' : 'Father';
-        } else if (rawRelType === 'PARENT' || rawRelType === 'FATHER' || rawRelType === 'MOTHER') {
-          relationshipLabel = String(member.gender).toUpperCase() === 'FEMALE' ? 'Daughter' : 'Son';
-        } else if (rawRelType === 'NEPHEW' || rawRelType === 'NIECE') {
-          relationshipLabel = String(member.gender).toUpperCase() === 'FEMALE' ? 'Aunt / Unty' : 'Uncle';
-        }
-      }
+      const rawRelType = String(rel.relationshipType || rel.relation || rel.relType || rel.relationship || member.relationshipType || member.relation || '');
+      const relationshipLabel = formatPolicyRelationship(rawRelType, member.gender, isDirect);
 
       familyMembers.push({
         id: memberId ? `contact-${memberId}` : `member-${Math.random().toString(36).substring(2, 9)}`,
         addedAt: rel.createdAt || member.createdAt || new Date().toISOString(),
         name,
         relationship: relationshipLabel,
-        contactNo: cleanConnectedPhone(member.phone || member.alternatePhone || member.mobile || member.whatsappNumber || member.whatsapp),
+        contactNo: cleanConnectedPhone(member.phone || member.alternatePhone || member.mobile || member.whatsappNumber || member.whatsapp || member.contactNo),
         dob: member.dateOfBirth ? String(member.dateOfBirth).slice(0, 10) : (member.dob ? String(member.dob).slice(0, 10) : ''),
         gender: ['MALE', 'FEMALE', 'OTHER'].includes(String(member.gender).toUpperCase())
           ? String(member.gender).toUpperCase()
@@ -924,7 +1227,7 @@ export default function CreatePolicyModal({
         isCovered: true,
         isNominee: false,
         nomineeName: '',
-        nomineeRelation: 'Spouse',
+        nomineeRelation: relationshipLabel || 'Spouse',
         nomineeContact: '',
         nomineeDob: '',
         nomineePercentage: '',
@@ -937,6 +1240,9 @@ export default function CreatePolicyModal({
     // 2. Process reverse relationships (relatedTo) only for members not already seen
     (contact?.relatedTo || []).forEach((rel: any) => processRelationshipItem(rel, false));
 
+    // 3. Process family members array if present (e.g. from Contacts details state or initialData)
+    (contact?.familyMembers || []).forEach((rel: any) => processRelationshipItem(rel, true));
+
     setMembers(previous => {
       // Remove any previously auto-populated contact members, self entries, or matching contact's name
       const manualPrevious = previous.filter(p =>
@@ -946,30 +1252,62 @@ export default function CreatePolicyModal({
       );
       const manualNames = new Set(manualPrevious.map(p => p.name.trim().toLowerCase()));
       const uniqueFamily = familyMembers.filter(p => !manualNames.has(p.name.trim().toLowerCase()));
-      return [
-        ...manualPrevious,
-        ...uniqueFamily,
-      ];
+      const combined = [...manualPrevious, ...uniqueFamily];
+      const seen = new Set<string>();
+      return combined.filter(p => {
+        const k = p.name.trim().toLowerCase();
+        if (!k || seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
     });
   }, []);
 
   useEffect(() => {
-    if (!open || policyToEdit) return;
-    const cId = selectedContactId || contactId || initialData?.contactId || initialData?.contact?.id;
-    if (!cId) return;
-    contactsService.get(cId)
-      .then((res: any) => {
-        const c = res?.data?.data || res?.data || res;
-        if (c) {
-          syncContactFamilyMembers(c);
-          const cCity = c?.addresses?.find((a: any) => a.isPrimary)?.city || c?.addresses?.[0]?.city || c?.city || '';
-          if (cCity && cCity !== 'N/A') {
-            setPolicyZoneCity(prev => prev || cCity);
+    if (!open) return;
+    const cId = selectedContactId || contactId || initialData?.contactId || initialData?.contact?.id || policyToEdit?.contactId || policyToEdit?.contact?.id;
+
+    if (initialData && (initialData.relationships?.length || initialData.familyMembers?.length)) {
+      syncContactFamilyMembers(initialData);
+    }
+
+    if (!cId) {
+      if (initialData?.contact) {
+        setSelectedContact(initialData.contact);
+        if (initialData.contact.id) setSelectedContactId(initialData.contact.id);
+      }
+      return;
+    }
+    const found = contactsList.find((c: any) => c.id === cId);
+    if (found) {
+      setSelectedContact(found);
+      if (!selectedContactId) setSelectedContactId(found.id);
+      if (found.relationships?.length || found.familyMembers?.length) {
+        syncContactFamilyMembers(found);
+      }
+      const cCity = found?.addresses?.find((a: any) => a.isPrimary)?.city || found?.addresses?.[0]?.city || found?.city || '';
+      if (cCity && cCity !== 'N/A') {
+        setPolicyZoneCity(prev => prev || cCity);
+      }
+    }
+
+    if (!initialData?.relationships?.length && !initialData?.familyMembers?.length && !found?.relationships?.length && !found?.familyMembers?.length) {
+      contactsService.get(cId)
+        .then((res: any) => {
+          const c = res?.data?.data || res?.data || res;
+          if (c) {
+            setSelectedContact((prev: any) => prev ? { ...prev, ...c } : c);
+            if (!selectedContactId) setSelectedContactId(c.id || cId);
+            syncContactFamilyMembers(c);
+            const cCity = c?.addresses?.find((a: any) => a.isPrimary)?.city || c?.addresses?.[0]?.city || c?.city || '';
+            if (cCity && cCity !== 'N/A') {
+              setPolicyZoneCity(prev => prev || cCity);
+            }
           }
-        }
-      })
-      .catch(() => {});
-  }, [open, selectedContactId, contactId, initialData, policyToEdit, syncContactFamilyMembers]);
+        })
+        .catch(() => {});
+    }
+  }, [open, selectedContactId, contactId, initialData, policyToEdit, syncContactFamilyMembers, contactsList]);
 
   // Tab 4: PHC Details
   const [phcRequired, setPhcRequired] = useState(false);
@@ -977,9 +1315,29 @@ export default function CreatePolicyModal({
   const [isManualPhcPerson, setIsManualPhcPerson] = useState(false);
   const [phcAmount, setPhcAmount] = useState('');
   const [phcAmountError, setPhcAmountError] = useState('');
-  const [phcStatus, setPhcStatus] = useState('PENDING');
+  const [phcStatus, setPhcStatus] = useState('');
   const [phcStage, setPhcStage] = useState('TO_CONTACT');
   const [phcClaimSettled, setPhcClaimSettled] = useState(false);
+  const [phcExtraDetails, setPhcExtraDetails] = useState({
+    eligibilityStartDate: '',
+    frequency: 'ANNUAL',
+    followUpDate: '',
+    insuredPersonName: '',
+    bookingDate: '',
+    appointmentDate: '',
+    centreName: '',
+    centreCity: '',
+    utilizedAmount: '',
+    reimbursementCashless: 'CASHLESS',
+    reportReceivedDate: '',
+    reportBillReceivedDate: '',
+    reportBillSubmittedDate: '',
+    settlementDate: '',
+    phcStage: 'TO_CONTACT',
+    comment: '',
+  });
+  const [isPhcBookingCollapsed, setIsPhcBookingCollapsed] = useState(false);
+  const [isPhcSettlementCollapsed, setIsPhcSettlementCollapsed] = useState(false);
   const [notes, setNotes] = useState('');
   const [extraPolicyNotes, setExtraPolicyNotes] = useState<Record<string, string>>({});
 
@@ -1058,114 +1416,140 @@ export default function CreatePolicyModal({
     };
   }, [qc]);
 
-  const DEFAULT_COMPANIES_FOR_MODAL: Record<string, string[]> = {
-    HEALTH: ['Star Health', 'Niva Bupa', 'Care', 'Manipal Cigna', 'HDFC Ergo', 'ICICI Lombard', 'Bajaj General', 'TATA AIG'],
-    GENERAL: ['HDFC Ergo', 'ICICI Lombard', 'Bajaj General', 'TATA AIG', 'Star Health', 'Niva Bupa', 'Care', 'Manipal Cigna'],
-    LIFE: ['HDFC Life', 'ICICI Pru Life', 'Bajaj Life', 'TATA AIA'],
-    TERM: ['HDFC Life', 'ICICI Pru Life', 'Bajaj Life', 'TATA AIA'],
+  const handleCompanyCategoryChange = (newCat: string) => {
+    setSelectedCompanyCategory(newCat);
+    setSelectedCategory(newCat);
+
+    if (selectedCompany && newCat) {
+      const catKey = newCat.toUpperCase();
+      const isCompanyInType = plansList.some(
+        (p: any) => (p.company?.name || '').toLowerCase() === selectedCompany.toLowerCase() &&
+                    ((p.company?.category || '').toUpperCase().includes(catKey) || 
+                     (p.category || '').toUpperCase().includes(catKey))
+      ) || (DEFAULT_COMPANIES_BY_TYPE[catKey] || []).some(
+        (c: string) => c.toLowerCase() === selectedCompany.toLowerCase()
+      );
+      if (!isCompanyInType && catKey !== 'OTHER') {
+        setSelectedCompany('');
+        setSelectedPlanId('');
+      }
+    }
   };
-  const ALL_DEFAULT_COMPANIES = [
-    'Star Health', 'Niva Bupa', 'Care', 'Manipal Cigna',
-    'HDFC Ergo', 'ICICI Lombard', 'Bajaj General', 'TATA AIG',
-    'HDFC Life', 'ICICI Pru Life', 'Bajaj Life', 'TATA AIA',
-  ];
 
-  // Filter unique companies for selected Category
-  const availableCompanies = useMemo(() => {
-    const categoryPlans = selectedCategory
-      ? plansList.filter((p: any) => isCategoryMatch(p.category || 'OTHER', selectedCategory))
-      : plansList;
+  const handlePlanCategoryChange = (newCat: string) => {
+    setSelectedPlanCategory(newCat);
+    if (selectedPlanId && newCat && newCat !== 'Other') {
+      const selectedPlanObj = plansList.find((p: any) => p.id === selectedPlanId);
+      const pCat = (selectedPlanObj?.category || '').toLowerCase();
+      if (!pCat.includes(newCat.toLowerCase()) && !newCat.toLowerCase().includes(pCat)) {
+        setSelectedPlanId('');
+      }
+    }
+  };
 
-    const map = new Map<string, { id: string; name: string }>();
+  const handleCompanyChange = (compName: string) => {
+    setSelectedCompany(compName);
+    setSelectedPlanId('');
 
-    const catKey = (selectedCategory || '').toUpperCase();
-    let defaultKey = catKey;
-    if (catKey.includes('HEALTH') || catKey.includes('RETAIL') || catKey.includes('FLOATER') || catKey.includes('CORPORATE') || catKey.includes('INDIVIDUAL')) {
-      defaultKey = 'HEALTH';
-    } else if (catKey.includes('LIFE')) {
-      defaultKey = 'LIFE';
-    } else if (catKey.includes('TERM')) {
-      defaultKey = 'TERM';
-    } else if (catKey.includes('MOTOR') || catKey.includes('AUTO')) {
-      defaultKey = 'MOTOR';
-    } else if (catKey.includes('GENERAL')) {
-      defaultKey = 'GENERAL';
+    const matchCompInPlans = plansList.find((p: any) => (p.company?.name || '').toLowerCase() === compName.toLowerCase() || isCompanyMatch(p.company?.name || '', compName));
+    if (matchCompInPlans?.company?.id) {
+      setSelectedCompanyId(matchCompInPlans.company.id);
+    } else {
+      const matchCompInDb = dbCompaniesList.find((c: any) => (c.name || '').toLowerCase() === compName.toLowerCase() || isCompanyMatch(c.name || '', compName));
+      if (matchCompInDb?.id) {
+        setSelectedCompanyId(matchCompInDb.id);
+      }
     }
 
-    const defaults = defaultKey && DEFAULT_COMPANIES_FOR_MODAL[defaultKey]
-      ? DEFAULT_COMPANIES_FOR_MODAL[defaultKey]
-      : (catKey && DEFAULT_COMPANIES_FOR_MODAL[catKey] ? DEFAULT_COMPANIES_FOR_MODAL[catKey] : ALL_DEFAULT_COMPANIES);
-
-    defaults.forEach(d => {
-      const matchingPlan = plansList.find((p: any) => (p.company?.name || '').toLowerCase() === d.toLowerCase());
-      const idKey = matchingPlan?.company?.id || d;
-      map.set(idKey, { id: idKey, name: d });
-    });
-
-    categoryPlans.forEach((p: any) => {
-      const co = p.company;
-      if (co && (co.id || co.name)) {
-        const idKey = co.id || co.name;
-        if (!map.has(idKey)) {
-          map.set(idKey, { id: idKey, name: co.name });
-        }
-      }
-    });
-
-    dbCompaniesList.forEach((c: any) => {
-      if (c && (c.id || c.name)) {
-        if (c.isActive === false) return;
-        if (selectedCategory) {
-          let compCat = '';
-          try {
-            if (c.notes) {
-              const parsed = JSON.parse(c.notes);
-              compCat = (parsed.category || '').toUpperCase();
+    if (compName && !selectedCompanyCategory) {
+      if (COMPANY_PRIMARY_CATEGORY[compName]) {
+        const cat = COMPANY_PRIMARY_CATEGORY[compName];
+        setSelectedCompanyCategory(cat);
+        setSelectedCategory(cat);
+      } else {
+        const plan = plansList.find((p: any) => (p.company?.name || '').toLowerCase() === compName.toLowerCase() || isCompanyMatch(p.company?.name || '', compName));
+        if (plan?.company?.category) {
+          const cat = plan.company.category;
+          const matchingCat = companyCategoryOptions.find((o: any) => o.value.toLowerCase() === cat.toLowerCase());
+          if (matchingCat) {
+            setSelectedCompanyCategory(matchingCat.value);
+            setSelectedCategory(matchingCat.value);
+          }
+        } else {
+          for (const [type, companies] of Object.entries(DEFAULT_COMPANIES_BY_TYPE)) {
+            if ((companies as string[]).some((c: string) => c.toLowerCase() === compName.toLowerCase() || isCompanyMatch(c, compName))) {
+              const matchingCat = companyCategoryOptions.find((o: any) => o.value.toUpperCase() === type.toUpperCase());
+              if (matchingCat) {
+                setSelectedCompanyCategory(matchingCat.value);
+                setSelectedCategory(matchingCat.value);
+              }
+              break;
             }
-          } catch {}
-          if (!compCat && c.category) compCat = (c.category || '').toUpperCase();
-          if (compCat) {
-            const match = isCategoryMatch(compCat, selectedCategory);
-            if (!match) return;
           }
         }
-        const idKey = c.id || c.name;
-        if (!map.has(idKey)) {
-          map.set(idKey, { id: idKey, name: c.name });
-        }
       }
-    });
+    }
+  };
 
-    return Array.from(map.values());
-  }, [plansList, dbCompaniesList, selectedCategory]);
+  const availableCompanies = useMemo(() => {
+    const filterCat = (selectedCompanyCategory || selectedCategory || '').toUpperCase();
 
-  // Filter plans for selected Category and selected Company
+    const listFromPlans = filterCat && filterCat !== 'OTHER'
+      ? plansList
+          .filter((p: any) => {
+            const compCat = (p.company?.category || '').toUpperCase();
+            const planCat = (p.category || '').toUpperCase();
+            return compCat.includes(filterCat) || planCat.includes(filterCat);
+          })
+          .map((p: any) => p.company?.name)
+          .filter(Boolean)
+      : plansList.map((p: any) => p.company?.name).filter(Boolean);
+
+    const defaultsForType = filterCat && DEFAULT_COMPANIES_BY_TYPE[filterCat]
+      ? DEFAULT_COMPANIES_BY_TYPE[filterCat]
+      : PRIMARY_DEFAULT_COMPANIES;
+
+    const allDbCompanies = Array.from(new Set(plansList.map((p: any) => p.company?.name).filter(Boolean)));
+
+    return Array.from(
+      new Set([
+        ...defaultsForType,
+        ...listFromPlans,
+        ...(!filterCat || filterCat === 'OTHER' ? allDbCompanies : []),
+      ])
+    ).filter(Boolean) as string[];
+  }, [plansList, selectedCompanyCategory, selectedCategory]);
+
   const availablePlans = useMemo(() => {
-    // 1. Filter by company if selected
-    const coFiltered = plansList.filter((p: any) => {
+    if (!selectedCompany) return [];
+    const directMatches = plansList.filter((p: any) => {
       const coName = p.company?.name || '';
-      const coMatch = !selectedCompanyId ||
-        p.companyId === selectedCompanyId ||
-        p.company?.id === selectedCompanyId ||
-        coName.toLowerCase() === selectedCompanyId.toLowerCase() ||
-        coName.toLowerCase().includes(selectedCompanyId.toLowerCase()) ||
-        selectedCompanyId.toLowerCase().includes(coName.toLowerCase());
-      return coMatch;
+      const coMatch = (coName || '').toLowerCase() === selectedCompany.toLowerCase() ||
+                      (p.company?.shortCode || '').toLowerCase() === selectedCompany.toLowerCase() ||
+                      isCompanyMatch(coName, selectedCompany);
+      const filterCat = (selectedPlanCategory || selectedCompanyCategory || selectedCategory || '').toUpperCase();
+      const typeMatch = !filterCat || filterCat === 'OTHER' || isCategoryMatch(p.category || '', filterCat);
+      return coMatch && typeMatch;
     });
 
-    if (!selectedCategory) {
-      return coFiltered;
+    if (directMatches.length > 0) return directMatches;
+
+    const companyMatches = plansList.filter((p: any) => {
+      const coName = p.company?.name || '';
+      return (coName || '').toLowerCase() === selectedCompany.toLowerCase() ||
+             (p.company?.shortCode || '').toLowerCase() === selectedCompany.toLowerCase() ||
+             isCompanyMatch(coName, selectedCompany);
+    });
+    if (companyMatches.length > 0) return companyMatches;
+
+    if (selectedPlanCategory || selectedCategory) {
+      const targetCat = (selectedPlanCategory || selectedCategory).toUpperCase();
+      const catMatches = plansList.filter((p: any) => (p.category || '').toUpperCase().includes(targetCat) || targetCat.includes((p.category || '').toUpperCase()));
+      if (catMatches.length > 0) return catMatches;
     }
 
-    // 2. Filter by category
-    const catMatches = coFiltered.filter((p: any) => {
-      return isCategoryMatch(p.category || 'OTHER', selectedCategory);
-    });
-
-    // 3. Fallback: If matching plans exist for this category, return them.
-    // If not, gracefully return coFiltered so dropdown never gets empty (0 available).
-    return catMatches.length > 0 ? catMatches : coFiltered;
-  }, [plansList, selectedCategory, selectedCompanyId]);
+    return plansList;
+  }, [plansList, selectedCompany, selectedPlanCategory, selectedCompanyCategory, selectedCategory]);
 
   const handleAddDoc = (file: File) => {
     if (!file) return;
@@ -1188,13 +1572,16 @@ export default function CreatePolicyModal({
     }
     setPhcAmountError('');
 
-    const finalContactId = selectedContactId || contactId || policyToEdit?.contactId;
+    const finalContactId = selectedContactId || selectedContact?.id || contactId || policyToEdit?.contactId;
     if (isFieldRequired('contactId', true) && !finalContactId) {
-      toast.error('Target Contact / Client Name is required');
+      toast.error('Customer is required');
       setActiveTab('policyPlan');
       return;
     }
-    if (isFieldRequired('planId', true) && !selectedPlanId) {
+    let finalPlanId = selectedPlanId;
+    if (!finalPlanId && availablePlans.length > 0) finalPlanId = availablePlans[0].id;
+    if (!finalPlanId && plansList.length > 0) finalPlanId = plansList[0].id;
+    if (isFieldRequired('planId', true) && !finalPlanId) {
       toast.error('Please select an Insurance Plan');
       setActiveTab('policyPlan');
       return;
@@ -1356,12 +1743,25 @@ export default function CreatePolicyModal({
     try {
       // Build notes text combining extras if present
       let cleanNotes = notes.trim();
+      if (selectedPolicyType) cleanNotes += `\nPolicy Type: ${selectedPolicyType}`;
+      const custCat = customerCategory || 'Fresh';
+      if (custCat) cleanNotes += `\nCustomer Category: ${custCat}`;
+      if (selectedCompanyCategory) cleanNotes += `\nInsurance Company Category: ${selectedCompanyCategory}`;
+      if (selectedCompany) cleanNotes += `\nInsurance Company: ${selectedCompany}`;
+      if (selectedPlanCategory) cleanNotes += `\nInsurance Plan Category: ${selectedPlanCategory}`;
+      if (selectedAgentName) cleanNotes += `\nAgent Name: ${selectedAgentName}`;
       if (policyZoneCity) {
         cleanNotes += `\nPolicy Zone City: ${policyZoneCity}`;
         cleanNotes += `\nPolicy Zone Location City: ${policyZoneCity}`;
       }
+      if (policyZonePincode) cleanNotes += `\nPolicy Zone Location Pincode: ${policyZonePincode}`;
+      if (selectedZoneTier) cleanNotes += `\nPolicy Zone Location Tier: ${selectedZoneTier}`;
+      if (selectedFamilySize) cleanNotes += `\nFamily Size: ${selectedFamilySize}`;
       if (insuredPerson) cleanNotes += `\nInsured Person: ${insuredPerson}`;
-      if (customerCategory) cleanNotes += `\nCustomer Category: ${customerCategory}`;
+      if (deductible) cleanNotes += `\nDeductible: ${deductible}`;
+      if (bonus1) cleanNotes += `\nBonus 1 (No Claim Bonus): ${bonus1}`;
+      if (bonus2) cleanNotes += `\nBonus 2 (Super / Cumulative): ${bonus2}`;
+      if (riders && riders.length > 0) cleanNotes += `\nRiders/Addons: ${riders.join(', ')}`;
       Object.entries(extraPolicyNotes).forEach(([key, val]) => {
         if (val) cleanNotes += `\n${key}: ${val}`;
       });
@@ -1448,18 +1848,61 @@ export default function CreatePolicyModal({
         cleanNotes += `\nGST Details: Applicable: Yes (${gstPercentage}%), GST Amount: ₹${gstAmount || '0'}`;
       }
       if (phcRequired) {
-        cleanNotes += `\nPreventive Health Checkup: Yes (Amount: ₹${phcAmount || '0'}, Status: ${phcStatus}, Settled: ${phcClaimSettled ? 'Yes' : 'No'}${phcInsuredPerson ? `, Insured Person: ${phcInsuredPerson}` : ''})`;
-        if (phcStatus) cleanNotes += `\nPHC Status: ${phcStatus}`;
-        if (phcInsuredPerson) cleanNotes += `\nPHC Insured Person: ${phcInsuredPerson}`;
-        cleanNotes += `\nPHC Stage: ${phcStage || 'TO_CONTACT'}`;
+        const isCompleted = phcExtraDetails.phcStage === 'PROCESS_COMPLETED' ||
+          phcExtraDetails.phcStage === 'Process Completed' ||
+          phcExtraDetails.phcStage?.toUpperCase().includes('COMPLET') ||
+          phcStage === 'PROCESS_COMPLETED' ||
+          phcStage === 'Process Completed' ||
+          phcStatus === 'COMPLETED' ||
+          phcStatus === 'Completed' ||
+          phcStatus === 'FULLY_UTILISED';
+        const effectivePhcStatus = isCompleted ? 'Completed' : (phcStatus || 'N/A');
+        const phcAmountNum = Number(phcAmount || 0);
+        const utilizedNum = Number(phcExtraDetails.utilizedAmount || 0);
+        const balanceNum = Math.max(0, phcAmountNum - utilizedNum);
+        const activePhcPerson = phcExtraDetails.insuredPersonName || phcInsuredPerson;
+
+        cleanNotes += `\nPreventive Health Checkup: Yes (Amount: ₹${phcAmountNum}, Status: ${effectivePhcStatus}, Claim Settled: ${phcClaimSettled ? 'Yes' : 'No'}${activePhcPerson ? `, Insured Person: ${activePhcPerson}` : ''})`;
+        cleanNotes += `\nPHC Required: Yes`;
+        if (activePhcPerson) {
+          cleanNotes += `\nPHC Insured Person: ${activePhcPerson}`;
+        }
+        if (phcExtraDetails.phcStage || phcStage) {
+          cleanNotes += `\nPHC Stage: ${phcExtraDetails.phcStage || phcStage}`;
+        }
+        if (isCompleted) {
+          cleanNotes += `\nPHC Status: Completed`;
+        }
+        if (phcExtraDetails.utilizedAmount !== '' && phcExtraDetails.utilizedAmount !== undefined && phcExtraDetails.utilizedAmount !== null) {
+          cleanNotes += `\nPHC Utilized Amount: ₹${utilizedNum}`;
+        }
+        cleanNotes += `\nPHC Balance Amount: ₹${balanceNum}`;
+        if (phcExtraDetails.bookingDate) cleanNotes += `\nPHC Booking Date: ${phcExtraDetails.bookingDate}`;
+        if (phcExtraDetails.appointmentDate) cleanNotes += `\nPHC Appointment Date: ${phcExtraDetails.appointmentDate}`;
+        if (phcExtraDetails.centreName) cleanNotes += `\nPHC Centre / Lab Name: ${phcExtraDetails.centreName}`;
+        if (phcExtraDetails.centreCity) cleanNotes += `\nPHC Centre City: ${phcExtraDetails.centreCity}`;
+        if (phcExtraDetails.reimbursementCashless) cleanNotes += `\nPHC Reimbursement Type: ${phcExtraDetails.reimbursementCashless}`;
+        if (phcExtraDetails.reportReceivedDate) cleanNotes += `\nPHC Report Received Date: ${phcExtraDetails.reportReceivedDate}`;
+        if (phcExtraDetails.reportBillReceivedDate) cleanNotes += `\nPHC Report & Bill Received Date: ${phcExtraDetails.reportBillReceivedDate}`;
+        if (phcExtraDetails.reportBillSubmittedDate) cleanNotes += `\nPHC Report & Bill Submitted Date: ${phcExtraDetails.reportBillSubmittedDate}`;
+        if (phcExtraDetails.settlementDate) cleanNotes += `\nPHC Settlement Date: ${phcExtraDetails.settlementDate}`;
+        if (phcExtraDetails.eligibilityStartDate) cleanNotes += `\nPHC Eligibility Start Date: ${phcExtraDetails.eligibilityStartDate}`;
+        if (phcExtraDetails.frequency) cleanNotes += `\nPHC Frequency: ${phcExtraDetails.frequency}`;
+        if (phcExtraDetails.followUpDate) cleanNotes += `\nPHC Follow-up Date: ${phcExtraDetails.followUpDate}`;
+        if (phcExtraDetails.comment) cleanNotes += `\nPHC Comment: ${phcExtraDetails.comment}`;
       } else {
-        cleanNotes += `\nPreventive Health Checkup: No`;
+        cleanNotes += `\nPreventive Health Checkup: No\nPHC Required: No`;
       }
       const proposerClean = (insuredPerson || contactName || '').trim().toLowerCase();
-      const validMembers = members.filter(p => 
-        p.relationship?.toLowerCase() !== 'self' && 
-        (!proposerClean || p.name.trim().toLowerCase() !== proposerClean)
-      );
+      const seenMemberNames = new Set<string>();
+      const validMembers = members.filter(p => {
+        const k = p.name.trim().toLowerCase();
+        if (!k || seenMemberNames.has(k)) return false;
+        if (p.relationship?.toLowerCase() === 'self') return false;
+        if (proposerClean && k === proposerClean) return false;
+        seenMemberNames.add(k);
+        return true;
+      });
       if (validMembers.length > 0) {
         validMembers.forEach((p, idx) => {
           if (p.name.trim()) {
@@ -1478,9 +1921,18 @@ export default function CreatePolicyModal({
       const cleanPremium = Number(String(rawPrem).replace(/,/g, '')) || 0;
       const cleanSum = Number(String(sumAssured || 0).replace(/,/g, '')) || 0;
 
+      const resolvedBusinessType = (customerCategory === 'Renewal' || customerCategory === 'RENEWAL' || businessType === 'RENEWAL')
+        ? 'RENEWAL'
+        : (customerCategory === 'Port' || customerCategory === 'PORT' || businessType === 'PORT')
+        ? 'PORT'
+        : 'FRESH';
+
+      const matchedAgent = agentOptions.find(o => o.value === selectedAgentName);
+      const finalAssignedEmployeeId = assignedEmployeeId || matchedAgent?.empId || undefined;
+
       const payload: any = {
         contactId: finalContactId,
-        planId: selectedPlanId,
+        planId: finalPlanId,
         policyNumber: policyNumber.trim(),
         sumAssured: cleanSum,
         premiumAmount: cleanPremium,
@@ -1489,9 +1941,9 @@ export default function CreatePolicyModal({
         endDate: isoEnd,
         nextDueDate: safeIsoDate(nextDueDate),
         maturityDate: safeIsoDate(maturityDate),
-        businessType,
-        renewedFromPolicyId: (businessType === 'RENEWAL' && previousPolicyId) ? previousPolicyId : undefined,
-        assignedEmployeeId: assignedEmployeeId || undefined,
+        businessType: resolvedBusinessType,
+        renewedFromPolicyId: (resolvedBusinessType === 'RENEWAL' && previousPolicyId) ? previousPolicyId : undefined,
+        assignedEmployeeId: finalAssignedEmployeeId,
         status: normalizePolicyStatus(status) as any,
         notes: cleanNotes || undefined,
       };
@@ -1521,8 +1973,8 @@ export default function CreatePolicyModal({
       }
 
       const targetPolicyId = policyToEdit?.id || savedPolicy?.id;
-      if (targetPolicyId && members.length > 0) {
-        for (const person of members) {
+      if (targetPolicyId && validMembers.length > 0) {
+        for (const person of validMembers) {
           if (person.name.trim()) {
             try {
               await policiesService.addMember(targetPolicyId, {
@@ -1595,10 +2047,9 @@ export default function CreatePolicyModal({
       open={open}
       onClose={onClose}
       closeOnEscapeAndBackdrop={false}
-      title={title || (policyToEdit ? (isViewOnly ? 'Policy Details' : 'Edit Policy') : (isViewOnly ? 'View Policy Profile' : 'Add New Policy'))}
-      subtitle={subtitle || (isViewOnly ? 'View policy details and plan information.' : (contactName ? (policyToEdit ? `Update policy profile for ${contactName}` : `Attach policy profile for ${contactName}`) : (policyToEdit ? 'Update policy details matching client standards.' : 'Enter policy details matching client standards.')))}
+      title={title || (isViewOnly ? 'View Policy Profile' : (policyToEdit ? 'Edit Policy Profile' : 'Add New Policy'))}
+      subtitle={subtitle || (isViewOnly ? 'View policy details and plan information.' : (policyToEdit ? 'Update policy details and plan information.' : 'Enter policy details matching client profile standards.'))}
       size="2xl"
-      icon={<Shield className="text-blue-600" size={20} />}
       actions={
         <div className="flex flex-wrap items-center gap-2.5 mr-1">
           {isViewOnly ? (
@@ -1672,7 +2123,7 @@ export default function CreatePolicyModal({
             )}
           >
             <Users size={14} />
-            Connected Persons ({members.length})
+            Connected Persons ({displayedMembers.length})
           </button>
 
           <button
@@ -1726,71 +2177,18 @@ export default function CreatePolicyModal({
           {/* ════════ TAB 1: Policy & Plan Details ════════ */}
           {activeTab === 'policyPlan' && (
             <div className="space-y-4 animate-fadeIn">
-              {/* Target Contact / Client Name Selection & Banner */}
-              <div className="p-3 bg-blue-50/70 border border-blue-100 rounded-xl space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <UserCircle2 className="text-blue-600" size={18} />
-                    <div>
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-blue-500">Target Contact / Client Name <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span></p>
-                      <p className="text-xs font-extrabold text-blue-950">
-                        {contactName || (contactsList.find(c => c.id === selectedContactId)?.firstName
-                          ? `${contactsList.find(c => c.id === selectedContactId)?.firstName} ${contactsList.find(c => c.id === selectedContactId)?.lastName || ''}`
-                          : 'Select Target Contact')}
-                      </p>
-                    </div>
-                  </div>
-                  <span className="px-2.5 py-0.5 rounded-full bg-blue-600 text-white font-mono text-[10px] font-bold">Attached</span>
-                </div>
-
-                <div>
-                  <CustomSelect
-                    value={selectedContactId}
-                    onChange={val => {
-                      setSelectedContactId(val);
-                      if (!val) {
-                        setMembers(prev => prev.filter(p => !p.id.startsWith('contact-')));
-                        setInsuredPerson('');
-                        return;
-                      }
-                      contactsService.get(val).then((res: any) => {
-                        const fullC = res?.data?.data || res?.data || res;
-                        if (fullC) {
-                          syncContactFamilyMembers(fullC);
-                          const fullName = `${fullC.firstName || fullC.name || ''} ${fullC.lastName || ''}`.trim();
-                          setInsuredPerson(fullName);
-                          const cCity = fullC.addresses?.find((a: any) => a.isPrimary)?.city || fullC.addresses?.[0]?.city || fullC.city || '';
-                          if (cCity && cCity !== 'N/A') {
-                            setPolicyZoneCity(cCity);
-                          }
-                        }
-                      }).catch(() => {});
-                    }}
-                    placeholder="-- Select Target Contact / Client Name --"
-                    searchable
-                    options={[
-                      { value: '', label: '-- Select Target Contact / Client Name --' },
-                      ...contactsList.map((c: any) => ({
-                        value: c.id,
-                        label: `${c.firstName || c.name || ''} ${c.lastName || ''} ${c.phone ? `(${c.phone})` : ''}`.trim()
-                      }))
-                    ]}
-                  />
-                </div>
-              </div>
-
-              {/* Section 1 Card: Policy Details */}
+              {/* Section 1: Policy Details */}
               <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-visible">
                 <div
                   className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none rounded-t-2xl"
                   onClick={() => setIsPolicyDetailsCollapsed(prev => !prev)}
                 >
-                  <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                  <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider flex flex-wrap items-center gap-2">
                     <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">1</span>
                     Policy Details
                   </h4>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-slate-400 font-semibold">Base Policy Configuration</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[10px] text-slate-700 font-bold">Base Policy Configuration</span>
                     <ChevronDown
                       size={16}
                       className={`text-slate-500 transition-transform duration-200 ${isPolicyDetailsCollapsed ? 'rotate-180' : ''}`}
@@ -1800,79 +2198,180 @@ export default function CreatePolicyModal({
 
                 {!isPolicyDetailsCollapsed && (
                   <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3.5">
-                    
-                    {/* Custom Dropdowns Configured for Policy in Operations */}
-                    {getModuleCustomDropdowns('Policy').map(customDrop => {
-                      const currentVal = (extraPolicyNotes as any)[customDrop.name] || '';
-                      return (
-                        <div key={customDrop.id}>
-                          <label className="label text-[11px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
-                            {customDrop.name}
-                          </label>
-                          <CustomSelect
-                            value={currentVal}
-                            onChange={val => {
-                              setExtraPolicyNotes((prev: Record<string, string>) => ({
-                                ...prev,
-                                [customDrop.name]: val,
-                              }));
-                            }}
-                            placeholder={`Select ${customDrop.name}`}
-                            options={[
-                              { value: '', label: `Select ${customDrop.name}` },
-                              ...(customDrop.options || []).map((opt: string) => ({ value: opt, label: opt }))
-                            ]}
-                          />
-                        </div>
-                      );
-                    })}
+                    {/* Customer Picker */}
+                    <div className="relative flex flex-col gap-1">
+                      <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-0.5">
+                        Customer <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>
+                      </label>
+                      <div className="relative">
+                        <input
+                          value={selectedContact ? `${selectedContact.firstName || ''} ${selectedContact.lastName || ''} (${selectedContact.phone || ''})`.trim() : contactSearch}
+                          onChange={e => {
+                            if (selectedContact) {
+                              setSelectedContact(null);
+                              setSelectedContactId('');
+                              setMembers(prev => prev.filter(p => !p.id.startsWith('contact-')));
+                            }
+                            setContactSearch(e.target.value);
+                            setContactDropdown(true);
+                          }}
+                          onFocus={() => setContactDropdown(true)}
+                          onBlur={() => setTimeout(() => setContactDropdown(false), 200)}
+                          placeholder="Search and select a customer..."
+                          className="input w-full pr-10 h-10 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                        />
+                        <Search size={16} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                      </div>
+                      {contactDropdown && !selectedContact && (
+                        <ul className="absolute z-50 mt-12 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-44 overflow-y-auto">
+                          {filteredContacts.length === 0 && (
+                            <li className="px-3 py-2 text-sm text-gray-400">No contacts found</li>
+                          )}
+                          {filteredContacts.map((c: any) => (
+                            <li
+                              key={c.id}
+                              onMouseDown={() => {
+                                setSelectedContact(c);
+                                setSelectedContactId(c.id);
+                                const fullName = `${c.firstName || ''} ${c.lastName || ''}`.trim();
+                                setInsuredPerson(fullName);
+                                setContactDropdown(false);
+                                setContactSearch('');
 
-                    {/* Product Category */}
+                                // Automatically load this contact's interconnected family members into Connected Persons
+                                contactsService.get(c.id).then((res: any) => {
+                                  const fullContact = res?.data?.data || res?.data || res;
+                                  if (fullContact) {
+                                    syncContactFamilyMembers(fullContact);
+                                  }
+                                }).catch(() => {});
+                              }}
+                              className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm hover:bg-blue-50 cursor-pointer"
+                            >
+                              <User size={13} className="text-gray-400" />
+                              <span className="font-medium">{c.firstName} {c.lastName}</span>
+                              <span className="text-gray-400 text-xs ml-auto">{c.phone}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+
+                    {/* Proposer Name */}
                     <div>
-                      <label className="label text-[11px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
-                        Product Category <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>
+                      <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                        Proposer Name
+                      </label>
+                      <input
+                        type="text"
+                        value={insuredPerson}
+                        onChange={e => setInsuredPerson(e.target.value)}
+                        className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-bold text-slate-800"
+                        placeholder="Enter proposer name"
+                      />
+                    </div>
+
+                    {/* Policy Type */}
+                    <div>
+                      <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                        Policy Type <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>
                       </label>
                       <CustomSelect
-                        value={selectedCategory}
-                        onChange={val => {
-                          setSelectedCategory(val);
-                          if (selectedPlanId && val) {
-                            const curPlan = plansList.find((p: any) => p.id === selectedPlanId);
-                            if (curPlan && !isCategoryMatch(curPlan.category || '', val)) {
-                              setSelectedPlanId('');
-                            }
-                          }
-                        }}
-                        placeholder="Select Product Category"
+                        value={selectedPolicyType}
+                        onChange={val => setSelectedPolicyType(val)}
+                        placeholder="Select Policy Type"
                         options={[
-                          { value: '', label: 'Select Product Category' },
-                          ...productCategoryOptions.map(cat => ({ value: cat, label: cat.replace('_', ' ') }))
+                          { value: '', label: 'Select Policy Type' },
+                          ...policyTypeOptions
                         ]}
                       />
                     </div>
 
-                    {/* Business Type */}
+                    {/* Insurance Company Category */}
                     <div>
-                      <label className="label text-[11px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
-                        Business Type <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>
+                      <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                        Insurance Company Category <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>
                       </label>
                       <CustomSelect
-                        value={businessType}
-                        onChange={val => setBusinessType(val as any)}
-                        placeholder="Select Business Type"
+                        value={selectedCompanyCategory}
+                        onChange={val => handleCompanyCategoryChange(val)}
+                        placeholder="Select Insurance Company Category *"
                         options={[
-                          { value: '', label: 'Select Business Type' },
-                          ...getActiveDropdownOptions('Policy', 'Customer Categories', [
-                            { value: 'FRESH', label: 'Fresh' },
-                            { value: 'PORT', label: 'Port' },
-                            { value: 'RENEWAL', label: 'Renewal' },
-                          ])
+                          { value: '', label: 'Select Insurance Company Category *' },
+                          ...companyCategoryOptions
+                        ]}
+                      />
+                    </div>
+
+                    {/* Insurance Company */}
+                    <div>
+                      <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                        Insurance Company <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>
+                      </label>
+                      <CustomSelect
+                        value={selectedCompany}
+                        onChange={val => handleCompanyChange(val)}
+                        placeholder="Select Insurance Company *"
+                        searchable
+                        options={[
+                          { value: '', label: 'Select Insurance Company *' },
+                          ...availableCompanies.map(c => ({ value: c, label: c }))
+                        ]}
+                      />
+                    </div>
+
+                    {/* Insurance Plan Category */}
+                    <div>
+                      <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                        Insurance Plan Category <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>
+                      </label>
+                      <CustomSelect
+                        value={selectedPlanCategory}
+                        onChange={val => handlePlanCategoryChange(val)}
+                        placeholder="Select Insurance Plan Category *"
+                        options={[
+                          { value: '', label: 'Select Insurance Plan Category *' },
+                          ...planCategoryOptions
+                        ]}
+                      />
+                    </div>
+
+                    {/* Plan Name */}
+                    <div>
+                      <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                        Plan Name <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>
+                      </label>
+                      <CustomSelect
+                        value={selectedPlanId}
+                        onChange={val => setSelectedPlanId(val)}
+                        disabled={!selectedCompany}
+                        placeholder={selectedCompany ? 'Select Plan Name' : 'Select Company First'}
+                        searchable
+                        options={[
+                          { value: '', label: selectedCompany ? 'Select Plan Name' : 'Select Company First' },
+                          ...availablePlans.map((p: any) => ({ value: p.id, label: p.name }))
+                        ]}
+                      />
+                    </div>
+
+                    {/* Customer Category */}
+                    <div>
+                      <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                        Customer Category
+                      </label>
+                      <CustomSelect
+                        value={customerCategory}
+                        onChange={val => setCustomerCategory(val)}
+                        placeholder="Select Customer Category"
+                        options={[
+                          { value: '', label: 'Select Customer Category' },
+                          ...customerCategoryOptions
                         ]}
                       />
                     </div>
 
                     {/* Renewal Selection & Copy Details */}
-                    {businessType === 'RENEWAL' && (
+                    {(customerCategory === 'Renewal' || businessType === 'RENEWAL') && (
                       <div className="col-span-1 md:col-span-2 border border-amber-200 bg-amber-50/70 rounded-xl p-3 space-y-2">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                           <label className="text-[10px] font-extrabold text-amber-900 uppercase tracking-wider flex items-center gap-1.5">
@@ -1928,152 +2427,91 @@ export default function CreatePolicyModal({
                       </div>
                     )}
 
-                    {/* Insurance Company */}
+                    {/* Agent Name */}
                     <div>
-                      <label className="label text-[11px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
-                        Insurance Company <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>
+                      <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                        Agent Name
                       </label>
                       <CustomSelect
-                        value={selectedCompanyId}
+                        value={selectedAgentName}
                         onChange={val => {
-                          setSelectedCompanyId(val);
-                          setSelectedPlanId('');
+                          setSelectedAgentName(val);
+                          const match = agentOptions.find(o => o.value === val);
+                          if (match?.empId) setAssignedEmployeeId(match.empId);
+                          if (match?.agentCode) setAgentCode(match.agentCode);
                         }}
-                        placeholder="All Insurance Companies"
+                        placeholder="Select Agent Name"
                         searchable
                         options={[
-                          { value: '', label: 'All Insurance Companies' },
-                          ...availableCompanies.map((c: any) => ({ value: c.id, label: c.name }))
+                          { value: '', label: 'Select Agent Name' },
+                          ...agentOptions.map(o => ({ value: o.value, label: o.label }))
                         ]}
                       />
                     </div>
 
-                    {/* Insurance Plan */}
+                    {/* Policy Status */}
                     <div>
-                      <label className="label text-[11px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
-                        Insurance Plan <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>
+                      <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                        Policy Status <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>
                       </label>
                       <CustomSelect
-                        value={selectedPlanId}
-                        onChange={val => {
-                          setSelectedPlanId(val);
-                          if (val) {
-                            const chosen = plansList.find((p: any) => p.id === val);
-                            if (chosen && !selectedCompanyId) {
-                              const compId = chosen.companyId || chosen.company?.id;
-                              if (compId) setSelectedCompanyId(compId);
-                            }
-                          }
-                        }}
-                        placeholder={`Select Plan (${availablePlans.length} available)`}
-                        searchable
-                        options={[
-                          { value: '', label: `Select Plan (${availablePlans.length} available)` },
-                          ...availablePlans.map((p: any) => ({
-                            value: p.id,
-                            label: `${p.name} ${p.company?.name ? `(${p.company.name})` : ''}`.trim()
-                          }))
-                        ]}
+                        value={normalizeStatusVal(status)}
+                        onChange={val => setStatus(normalizeStatusVal(val))}
+                        placeholder="Select Policy Status"
+                        options={policyStatusOptions}
                       />
                     </div>
 
-                    {/* Policy Period (Driven dynamically by backend scenario) */}
-                    <div>
-                      <label className="label text-[11px] font-extrabold text-slate-900 uppercase tracking-wider flex items-center gap-1 mb-1">
-                        Policy Period <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>
-                        {activeScenario && <span className="text-[9px] text-emerald-600 font-bold bg-emerald-50 px-1.5 py-0.5 rounded">✓ Dynamic</span>}
-                      </label>
-                      <CustomSelect
-                        value={policyPeriod}
-                        onChange={val => {
-                          setPolicyPeriod(val);
-                          if (startDate) {
-                            autoCalculateDates(startDate, val);
-                          }
-                        }}
-                        placeholder="Select Policy Period"
-                        options={[
-                          { value: '', label: 'Select Policy Period' },
-                          ...dynamicPolicyPeriods.map((period: string) => ({ value: period, label: period }))
-                        ]}
-                      />
-                    </div>
-
-                    {/* Customer Category */}
-                    <div>
-                      <label className="label text-[11px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">Customer Category</label>
-                      <CustomSelect
-                        value={customerCategory}
-                        onChange={val => setCustomerCategory(val)}
-                        placeholder="Select Customer Category"
-                        options={[
-                          { value: '', label: 'Select Customer Category' },
-                          { value: 'Fresh', label: 'Fresh' },
-                          { value: 'Port', label: 'Port' },
-                          { value: 'Renewal', label: 'Renewal' },
-                        ]}
-                      />
-                    </div>
-
-                    {/* Proposer Name */}
-                    <div>
-                      <label className="label text-[11px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
-                        Proposer Name
-                      </label>
-                      <input
-                        type="text"
-                        className="input text-xs w-full mt-1 font-bold text-slate-800"
-                        placeholder="Enter proposer name"
-                        value={insuredPerson}
-                        onChange={(e) => setInsuredPerson(e.target.value)}
-                      />
-                    </div>
-
-                    {/* Active Scenario Indicator Banner */}
-                    {activeScenario && (
-                      <div className="col-span-1 md:col-span-2 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-900 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Activity size={16} className="text-emerald-600 shrink-0" />
-                          <div>
-                            <p className="font-bold text-[11px]">Backend Scenario Rule Applied</p>
-                            <p className="text-[10px] text-emerald-700 font-medium">
-                              Configured for {activeScenario.company?.name || 'Company'} — {activeScenario.plan?.name || 'Plan'} ({activeScenario.businessType}). Valid periods & payment modes loaded from DB.
-                            </p>
-                          </div>
+                    {/* Custom Dropdown Menus configured in Operations */}
+                    {customPolicyDropdowns.map(customDrop => {
+                      const currentVal = extraPolicyNotes[customDrop.name] || '';
+                      return (
+                        <div key={customDrop.id}>
+                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                            {customDrop.name}
+                          </label>
+                          <CustomSelect
+                            value={currentVal}
+                            onChange={val => setExtraPolicyNotes(prev => ({ ...prev, [customDrop.name]: val }))}
+                            placeholder={`Select ${customDrop.name}`}
+                            options={[
+                              { value: '', label: `Select ${customDrop.name}` },
+                              ...(customDrop.options || []).map((opt: string) => ({ value: opt, label: opt }))
+                            ]}
+                          />
                         </div>
-                        <span className="bg-emerald-600 text-white font-mono text-[9px] font-bold px-2 py-0.5 rounded-full shrink-0">
-                          Active Rule
-                        </span>
-                      </div>
-                    )}
+                      );
+                    })}
 
-                    {/* Policy Remarks / Comment */}
+                    {/* Comment */}
                     <div className="col-span-1 md:col-span-2">
-                      <label className="label text-[11px] font-extrabold text-slate-900 uppercase tracking-wider">Comment / Notes</label>
+                      <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                        Comment
+                      </label>
                       <textarea
                         rows={2}
-                        className="input text-xs w-full mt-1 min-h-[50px]"
-                        placeholder="Add any internal comments or notes regarding this policy..."
                         value={notes}
-                        onChange={(e) => setNotes(e.target.value)}
+                        onChange={e => setNotes(e.target.value)}
+                        className="input w-full p-2.5 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                        placeholder="Add any internal comments or notes regarding this policy..."
                       />
                     </div>
                   </div>
                 )}
               </div>
 
-              {/* Section 2 Card: Plan Details */}
-              <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-hidden">
+              {/* Section 2: Plan Details */}
+              <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-visible">
                 <div
-                  className="bg-gradient-to-r from-indigo-50/80 via-slate-50 to-purple-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none"
+                  className="bg-gradient-to-r from-indigo-50/80 via-slate-50 to-purple-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none rounded-t-2xl"
                   onClick={() => setIsPlanDetailsCollapsed(prev => !prev)}
                 >
-                  <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                  <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider flex flex-wrap items-center gap-2">
                     <span className="w-5 h-5 rounded-full bg-gradient-to-br from-indigo-600 to-purple-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">2</span>
                     Plan Details
                   </h4>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-slate-400 font-semibold">Coverage & Plan Options</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[10px] text-slate-700 font-bold">Coverage & Plan Options</span>
                     <ChevronDown
                       size={16}
                       className={`text-slate-500 transition-transform duration-200 ${isPlanDetailsCollapsed ? 'rotate-180' : ''}`}
@@ -2082,132 +2520,257 @@ export default function CreatePolicyModal({
                 </div>
 
                 {!isPlanDetailsCollapsed && (
-                  <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3.5">
-                    {/* Policy Number */}
-                    <div>
-                      <label className="label text-[11px] font-extrabold text-slate-900 uppercase tracking-wider">
-                        Policy Number <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>
-                      </label>
-                      <input
-                        type="text"
-                        className="input text-xs w-full mt-1"
-                        placeholder="e.g. POL-1002938"
-                        value={policyNumber}
-                        onChange={(e) => setPolicyNumber(e.target.value)}
-                        required
-                      />
-                    </div>
-
-                    {/* Proposer Name */}
-                    <div>
-                      <label className="label text-[11px] font-extrabold text-slate-900 uppercase tracking-wider">
-                        Proposer Name
-                      </label>
-                      <input
-                        type="text"
-                        className="input text-xs w-full mt-1 font-bold text-slate-800"
-                        placeholder="Enter proposer name"
-                        value={insuredPerson}
-                        onChange={(e) => setInsuredPerson(e.target.value)}
-                      />
-                    </div>
-
-                    {/* Sum Assured */}
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="label text-[11px] font-extrabold text-slate-900 uppercase tracking-wider block">
-                          Sum Assured (₹) {isFieldRequired('sumAssured', false) && <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>}
+                  <div className="p-4 space-y-4 animate-fadeIn">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+                      {/* Policy Number */}
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                          Policy Number <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>
                         </label>
-                        <button
-                          type="button"
-                          onClick={() => setIsManualSumAssured(prev => !prev)}
-                          className="text-[10px] font-bold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer transition-colors"
-                        >
-                          {isManualSumAssured ? '← Select from list' : '+ Enter manually'}
-                        </button>
+                        <input
+                          type="text"
+                          value={policyNumber}
+                          onChange={e => setPolicyNumber(e.target.value)}
+                          className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                          placeholder="Enter policy number"
+                        />
                       </div>
-                      {isManualSumAssured ? (
-                        <div className="relative">
-                          <input
-                            type="number"
-                            min="0"
-                            step="any"
-                            value={sumAssured}
-                            onChange={(e) => setSumAssured(e.target.value)}
-                            placeholder="Enter sum assured (e.g. 500000)"
-                            className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 pr-16"
-                            required={isFieldRequired('sumAssured', false)}
-                          />
-                          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-slate-400 pointer-events-none">
-                            INR (₹)
-                          </span>
-                        </div>
-                      ) : (
+
+                      {/* Proposer Name */}
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                          Proposer Name
+                        </label>
+                        <input
+                          type="text"
+                          value={insuredPerson}
+                          onChange={e => setInsuredPerson(e.target.value)}
+                          className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-bold text-slate-800"
+                          placeholder="Enter proposer name"
+                        />
+                      </div>
+
+                      {/* Family Size */}
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                          Family Size
+                        </label>
                         <CustomSelect
-                          value={sumAssured}
-                          onChange={(val) => setSumAssured(val)}
-                          placeholder={`Select Sum Assured ${isFieldRequired('sumAssured', false) ? '*' : '(Optional)'}`}
+                          value={selectedFamilySize}
+                          onChange={val => setSelectedFamilySize(val)}
                           options={[
-                            { value: '', label: `Select Sum Assured ${isFieldRequired('sumAssured', false) ? '*' : '(Optional)'}` },
-                            ...SUM_INSURED_OPTIONS.map((opt: any) => ({ value: String(opt.value), label: opt.label })),
-                            ...(sumAssured && !SUM_INSURED_OPTIONS.some((opt: any) => String(opt.value) === String(sumAssured))
-                              ? [{ value: String(sumAssured), label: `₹${Number(sumAssured).toLocaleString('en-IN')} (Custom)` }]
-                              : [])
+                            { value: '1', label: '1 Adult (Individual)' },
+                            { value: '2', label: '2 Adults (1A + 1A)' },
+                            { value: '2_1', label: '2 Adults + 1 Child' },
+                            { value: '2_2', label: '2 Adults + 2 Children' },
+                            { value: '2_3', label: '2 Adults + 3 Children' },
+                            { value: '1_1', label: '1 Adult + 1 Child' },
+                            { value: '1_2', label: '1 Adult + 2 Children' },
                           ]}
                         />
+                      </div>
+
+                      {/* Policy Zone Location Tier */}
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                          Policy Zone Location Tier
+                        </label>
+                        <CustomSelect
+                          value={selectedZoneTier}
+                          onChange={val => setSelectedZoneTier(val)}
+                          options={[
+                            { value: 'ZONE_1', label: 'Zone 1 (Metro / Tier 1)' },
+                            { value: 'ZONE_2', label: 'Zone 2 (Tier 2)' },
+                            { value: 'ZONE_3', label: 'Zone 3 (Rest of India)' },
+                          ]}
+                        />
+                      </div>
+
+                      {/* Policy Zone City */}
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                          Policy Zone City
+                        </label>
+                        <input
+                          type="text"
+                          value={policyZoneCity}
+                          onChange={e => setPolicyZoneCity(e.target.value)}
+                          className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                          placeholder="Type policy zone city manually..."
+                        />
+                      </div>
+
+                      {/* Policy Zone Location Pincode */}
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                          Policy Zone Location Pincode
+                        </label>
+                        <input
+                          type="text"
+                          value={policyZonePincode}
+                          onChange={e => setPolicyZonePincode(e.target.value)}
+                          maxLength={6}
+                          className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                          placeholder="e.g. 400001"
+                        />
+                      </div>
+
+                      {/* Sum Insured */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block">
+                            Sum Insured (₹) {isFieldRequired('sumAssured', false) && <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>}
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => setIsManualSumAssured(prev => !prev)}
+                            className="text-[10px] font-bold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer transition-colors"
+                          >
+                            {isManualSumAssured ? '← Select from list' : '+ Enter manually'}
+                          </button>
+                        </div>
+                        {isManualSumAssured ? (
+                          <div className="relative">
+                            <input
+                              type="number"
+                              min="0"
+                              step="any"
+                              value={sumAssured ?? ''}
+                              onChange={e => setSumAssured(e.target.value)}
+                              placeholder="Enter sum insured (e.g. 250000)"
+                              className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 pr-16"
+                            />
+                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-slate-400 pointer-events-none">
+                              INR (₹)
+                            </span>
+                          </div>
+                        ) : (
+                          <CustomSelect
+                            value={sumAssured ? String(sumAssured) : ''}
+                            onChange={val => setSumAssured(val)}
+                            placeholder={`Select Sum Insured ${isFieldRequired('sumAssured', false) ? '*' : '(Optional)'}`}
+                            options={[
+                              { value: '', label: `Select Sum Insured ${isFieldRequired('sumAssured', false) ? '*' : '(Optional)'}` },
+                              ...SUM_INSURED_OPTIONS.map(opt => ({ value: String(opt.value), label: opt.label })),
+                              ...(sumAssured && !SUM_INSURED_OPTIONS.some(opt => String(opt.value) === String(sumAssured))
+                                ? [{ value: String(sumAssured), label: `₹${Number(sumAssured).toLocaleString('en-IN')} (Custom)` }]
+                                : [])
+                            ]}
+                          />
+                        )}
+                      </div>
+
+                      {/* Deductible */}
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                          Deductible
+                        </label>
+                        <input
+                          type="text"
+                          value={deductible}
+                          onChange={e => setDeductible(e.target.value)}
+                          className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                          placeholder="Enter deductible if any"
+                        />
+                      </div>
+
+                      {/* Bonus 1 */}
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                          Bonus 1 (No Claim Bonus)
+                        </label>
+                        <input
+                          type="text"
+                          value={bonus1}
+                          onChange={e => setBonus1(e.target.value)}
+                          className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                          placeholder="e.g. 50% NCB Bonus"
+                        />
+                      </div>
+
+                      {/* Bonus 2 */}
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                          Bonus 2 (Super / Cumulative)
+                        </label>
+                        <input
+                          type="text"
+                          value={bonus2}
+                          onChange={e => setBonus2(e.target.value)}
+                          className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                          placeholder="e.g. Cumulative Super Bonus"
+                        />
+                      </div>
+
+                      {/* Policy Status */}
+                      <div>
+                        <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                          Policy Status <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>
+                        </label>
+                        <CustomSelect
+                          value={normalizeStatusVal(status)}
+                          onChange={val => setStatus(normalizeStatusVal(val))}
+                          placeholder="Select Policy Status"
+                          options={policyStatusOptions}
+                        />
+                      </div>
+
+                      {/* Assigned To */}
+                      {user?.role !== 'EMPLOYEE' && (
+                        <div>
+                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                            Assigned To
+                          </label>
+                          <CustomSelect
+                            value={assignedEmployeeId || ''}
+                            onChange={val => setAssignedEmployeeId(val)}
+                            placeholder="Select Employee"
+                            options={[
+                              { value: '', label: 'Select Employee' },
+                              ...(employees || []).map((emp: any) => ({
+                                value: emp.userId || emp.id,
+                                label: `${emp.firstName || emp.employeeProfile?.firstName || ''} ${emp.lastName || emp.employeeProfile?.lastName || ''}`.trim()
+                              }))
+                            ]}
+                          />
+                        </div>
                       )}
                     </div>
 
-                    {/* Agent Code */}
-                    <div>
-                      <label className="label text-[11px] font-extrabold text-slate-900 uppercase tracking-wider">Agent Code</label>
-                      <input
-                        type="text"
-                        className="input text-xs w-full mt-1"
-                        placeholder="e.g. AG-8821"
-                        value={agentCode}
-                        onChange={(e) => setAgentCode(e.target.value)}
-                      />
-                    </div>
-
-                    {/* Policy Zone City */}
-                    <div>
-                      <label className="label text-[11px] font-extrabold text-slate-900 uppercase tracking-wider">Policy Zone City</label>
-                      <input
-                        type="text"
-                        className="input text-xs w-full mt-1"
-                        placeholder="Type policy zone city manually..."
-                        value={policyZoneCity}
-                        onChange={(e) => setPolicyZoneCity(e.target.value)}
-                      />
-                    </div>
-
-                    {/* Policy Status */}
-                    <div>
-                      <label className="label text-[11px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">Policy Status</label>
-                      <CustomSelect
-                        value={status === 'ACTIVE' ? 'INFORCE' : (status || 'INFORCE')}
-                        onChange={val => setStatus(val)}
-                        placeholder="Select Policy Status"
-                        options={STATUS_OPTIONS}
-                      />
-                    </div>
-
-                    {/* Assigned Employee */}
-                    <div>
-                      <label className="label text-[11px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">Assigned Employee</label>
-                      <CustomSelect
-                        value={assignedEmployeeId}
-                        onChange={val => setAssignedEmployeeId(val)}
-                        placeholder="Unassigned"
-                        options={[
-                          { value: '', label: 'Unassigned' },
-                          ...(employees || []).map((emp: any) => ({
-                            value: emp.id,
-                            label: `${emp.firstName || emp.name} ${emp.lastName || ''}`.trim()
-                          }))
-                        ]}
-                      />
+                    {/* Riders / Addons */}
+                    <div className="flex flex-col gap-1 pt-2">
+                      <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                        Riders / Addons
+                      </label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 sm:grid-cols-3 gap-2 p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs">
+                        {[
+                          { id: 'CRITICAL_ILLNESS', label: 'Critical Illness' },
+                          { id: 'ACCIDENTAL_DEATH', label: 'Accidental Death Rider' },
+                          { id: 'ROOM_RENT_WAIVER', label: 'Room Rent Limit Waiver' },
+                          { id: 'MATERNITY_COVER', label: 'Maternity Cover Option' },
+                          { id: 'OPD_BENEFIT', label: 'OPD Benefit Rider' },
+                          { id: 'WAIVER_OF_PREMIUM', label: 'Waiver of Premium' },
+                        ].map(rider => {
+                          const isChecked = riders.includes(rider.id);
+                          return (
+                            <label key={rider.id} className="flex flex-wrap items-center gap-2 cursor-pointer text-gray-700 hover:text-blue-600 transition-colors">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={e => {
+                                  setRiders(prev =>
+                                    e.target.checked
+                                      ? [...prev.filter(id => id !== rider.id), rider.id]
+                                      : prev.filter(id => id !== rider.id)
+                                  );
+                                }}
+                                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                              />
+                              <span className="text-[11px] font-medium">{rider.label}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
                     </div>
                   </div>
                 )}
@@ -2297,25 +2860,6 @@ export default function CreatePolicyModal({
                         />
                       </div>
                     )}
-
-                    <div>
-                      <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
-                        Installment Frequency <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>
-                      </label>
-                      <CustomSelect
-                        value={paymentFrequency || 'YEARLY'}
-                        onChange={val => {
-                          setPaymentFrequency(val);
-                          if (val === 'SINGLE') {
-                            setNoOfInstallments('1');
-                            recalculateLastInstallment({ freq: 'SINGLE', noOfInst: 1 });
-                          } else {
-                            recalculateLastInstallment({ freq: val });
-                          }
-                        }}
-                        options={paymentFrequencyOptions}
-                      />
-                    </div>
 
                     {isLifeCategory && (
                       <div>
@@ -2535,13 +3079,40 @@ export default function CreatePolicyModal({
                         </label>
                         <CustomSelect
                           value={emiCase ? 'yes' : 'no'}
-                          onChange={val => setEmiCase(val === 'yes')}
+                          onChange={val => {
+                            const isYes = val === 'yes';
+                            setEmiCase(isYes);
+                            if (!isYes) {
+                              setPaymentFrequency('YEARLY');
+                            }
+                          }}
                           options={[
                             { value: 'no', label: 'No' },
                             { value: 'yes', label: 'Yes' },
                           ]}
                         />
                       </div>
+
+                      {emiCase && (
+                        <div className="animate-fadeIn">
+                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                            Installment Frequency <span className="text-red-600 font-black text-sm ml-0.5" style={{ color: '#dc2626' }}>*</span>
+                          </label>
+                          <CustomSelect
+                            value={paymentFrequency || 'YEARLY'}
+                            onChange={val => {
+                              setPaymentFrequency(val);
+                              if (val === 'SINGLE') {
+                                setNoOfInstallments('1');
+                                recalculateLastInstallment({ freq: 'SINGLE', noOfInst: 1 });
+                              } else {
+                                recalculateLastInstallment({ freq: val });
+                              }
+                            }}
+                            options={paymentFrequencyOptions}
+                          />
+                        </div>
+                      )}
                     </div>
 
                     {emiCase && (
@@ -3175,7 +3746,7 @@ export default function CreatePolicyModal({
               )}
 
               {/* Connected Persons List */}
-              {members.length === 0 ? (
+              {displayedMembers.length === 0 ? (
                 <div className="p-8 text-center border-2 border-dashed border-slate-200 rounded-2xl bg-slate-50/50 space-y-3">
                   <div className="w-12 h-12 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center mx-auto">
                     <Users size={20} />
@@ -3194,7 +3765,7 @@ export default function CreatePolicyModal({
                 </div>
               ) : (
                 <div className="space-y-3.5">
-                  {members.map((person, idx) => (
+                  {displayedMembers.map((person, idx) => (
                     <div
                       key={person.id}
                       className="border border-slate-200 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all p-4 space-y-3.5"
@@ -3441,127 +4012,393 @@ export default function CreatePolicyModal({
             </div>
           )}
 
-          {/* ════════ TAB 4: Health Check & Notes ════════ */}
+          {/* ════════ TAB 4: Preventive Health Checkup ════════ */}
           {activeTab === 'phcDetails' && (
             <div className="space-y-4 animate-fadeIn">
-              <div className="p-4 border border-slate-200/90 rounded-2xl bg-white shadow-2xs space-y-3.5">
-                <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-2">
-                  <span className="w-5 h-5 rounded-full bg-blue-600 text-white text-[10px] font-black flex items-center justify-center">4</span>
-                  Preventive Health Checkup & Notes
-                </h4>
-
-                <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={phcRequired}
-                    onChange={(e) => {
-                      setPhcRequired(e.target.checked);
-                      if (!e.target.checked) setPhcAmountError('');
+              {/* PHC Info Header Banner */}
+              <div className="bg-gradient-to-r from-teal-50 via-slate-50 to-blue-50 border border-teal-200/80 rounded-2xl p-3 sm:p-4 flex flex-wrap items-center justify-between gap-3 shadow-2xs">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-teal-600 to-emerald-600 text-white flex items-center justify-center shadow-2xs shrink-0">
+                    <Activity size={18} />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                      Preventive Health Checkup (PHC)
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-teal-100 text-teal-800">Health Benefit</span>
+                    </h4>
+                    <p className="text-[11px] text-slate-500">Configure health checkup allowance, lab booking, appointments and claim settlements.</p>
+                  </div>
+                </div>
+                {selectedCategory?.toUpperCase() !== 'HEALTH' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedCategory('Health');
+                      setSelectedCompanyCategory('Health');
+                      setPhcRequired(true);
+                      toast.success('Insurance Company Category set to Health');
                     }}
-                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  <span className="text-xs font-bold text-slate-700">Preventive Health Checkup Required</span>
-                </label>
+                    className="text-[11px] font-bold px-3 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white transition-all shadow-2xs cursor-pointer flex items-center gap-1.5"
+                  >
+                    <CheckCircle2 size={13} />
+                    <span>Set Policy as Health</span>
+                  </button>
+                )}
+              </div>
 
-                {phcRequired && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 p-3 bg-slate-50 rounded-xl border border-slate-200/80">
-                    <div>
-                      <div className="flex items-center justify-between mb-0.5">
-                        <label className="label text-[10px] font-bold text-slate-600">Insured Person Name for PHC</label>
-                        <button
-                          type="button"
-                          onClick={() => setIsManualPhcPerson(prev => !prev)}
-                          className="text-[10px] font-bold text-blue-600 hover:text-blue-800 underline cursor-pointer"
-                        >
-                          {isManualPhcPerson ? 'Select list' : '+ Other'}
-                        </button>
+              <div className="space-y-4">
+                {/* Card 1A: PHC Configuration & Eligibility */}
+                <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-visible">
+                  <div
+                    className="bg-gradient-to-r from-teal-50/80 via-slate-50 to-emerald-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none rounded-t-2xl"
+                    onClick={() => setIsPhcCollapsed(prev => !prev)}
+                  >
+                    <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider flex flex-wrap items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-gradient-to-br from-teal-600 to-emerald-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">1</span>
+                      PHC Configuration & Eligibility
+                    </h4>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] text-slate-700 font-bold">PHC Benefits & Eligibility</span>
+                      <ChevronDown
+                        size={16}
+                        className={`text-slate-500 transition-transform duration-200 ${isPhcCollapsed ? 'rotate-180' : ''}`}
+                      />
+                    </div>
+                  </div>
+
+                  {!isPhcCollapsed && (
+                    <div className="p-4 space-y-3.5 animate-fadeIn">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+                        <div>
+                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">
+                            Preventive Health Checkup?
+                          </label>
+                          <CustomSelect
+                            value={phcRequired ? 'yes' : 'no'}
+                            onChange={val => {
+                              const isYes = val === 'yes';
+                              setPhcRequired(isYes);
+                              if (isYes && selectedCategory?.toUpperCase() !== 'HEALTH') {
+                                setSelectedCategory('Health');
+                                setSelectedCompanyCategory('Health');
+                              }
+                              if (!isYes) setPhcAmountError('');
+                            }}
+                            placeholder="Select Option"
+                            options={[
+                              { value: 'yes', label: 'Yes' },
+                              { value: 'no', label: 'No' },
+                            ]}
+                          />
+                        </div>
+
+                        {phcRequired && (
+                          <>
+                            <div>
+                              <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">PHC Amount (₹)</label>
+                              <input
+                                type="number"
+                                value={phcAmount}
+                                onChange={e => {
+                                  setPhcAmount(e.target.value);
+                                  if (e.target.value.trim()) setPhcAmountError('');
+                                }}
+                                className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                                placeholder="e.g. 5000"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">PHC Balance Amount (₹)</label>
+                              <input
+                                type="text"
+                                value={`₹${Math.max(0, (Number(phcAmount) || 0) - (Number(phcExtraDetails.utilizedAmount) || 0))}`}
+                                readOnly
+                                className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-bold text-slate-800"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">PHC Eligibility Start Date</label>
+                              <DatePicker
+                                value={phcExtraDetails.eligibilityStartDate}
+                                onDateChange={(val: string) => setPhcExtraDetails(p => ({ ...p, eligibilityStartDate: val }))}
+                                className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">PHC Frequency</label>
+                              <CustomSelect
+                                value={phcExtraDetails.frequency || 'ANNUAL'}
+                                onChange={val => setPhcExtraDetails(p => ({ ...p, frequency: val }))}
+                                placeholder="Select Frequency"
+                                options={[
+                                  { value: 'ANNUAL', label: 'Annual' },
+                                  { value: 'BI_ANNUAL', label: 'Bi-Annual' },
+                                  { value: 'ONCE_TENURE', label: 'Once Per Tenure' },
+                                ]}
+                              />
+                            </div>
+
+                            <div>
+                              <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">PHC Status</label>
+                              <CustomSelect
+                                value={phcStatus || ''}
+                                onChange={val => setPhcStatus(val)}
+                                placeholder="Select Status"
+                                options={[
+                                  { value: '', label: 'Select Status' },
+                                  { value: 'NOT_INTERESTED', label: 'Not Interested' },
+                                  { value: 'INTERESTED', label: 'Interested' },
+                                  { value: 'REMIND_LATER', label: 'Remind Later' },
+                                  { value: 'FULLY_UTILISED', label: 'Fully Utilised' },
+                                  { value: 'PARTIAL_UTILISED', label: 'Partial Utilised' },
+                                ]}
+                              />
+                            </div>
+
+                            <div>
+                              <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">Follow-up Date</label>
+                              <DatePicker
+                                value={phcExtraDetails.followUpDate}
+                                onDateChange={(val: string) => setPhcExtraDetails(p => ({ ...p, followUpDate: val }))}
+                                className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                              />
+                            </div>
+
+                            <div className="col-span-1 md:col-span-3">
+                              <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">Comment</label>
+                              <textarea
+                                rows={2}
+                                value={phcExtraDetails.comment || ''}
+                                onChange={e => setPhcExtraDetails(p => ({ ...p, comment: e.target.value }))}
+                                className="input w-full p-2.5 text-xs rounded-xl bg-white border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                                placeholder="Add any comment regarding preventive health checkup..."
+                              />
+                            </div>
+                          </>
+                        )}
                       </div>
-                      {isManualPhcPerson ? (
-                        <input
-                          type="text"
-                          className="input text-xs w-full mt-0.5"
-                          placeholder={insuredPerson ? `e.g. ${insuredPerson}` : 'e.g. Ramesh Kumar'}
-                          value={phcInsuredPerson}
-                          onChange={(e) => setPhcInsuredPerson(e.target.value)}
+                    </div>
+                  )}
+                </div>
+
+                {/* Card 1B: PHC Booking & Centre Details */}
+                {phcRequired && (
+                  <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-visible">
+                    <div
+                      className="bg-gradient-to-r from-blue-50/80 via-slate-50 to-indigo-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none rounded-t-2xl"
+                      onClick={() => setIsPhcBookingCollapsed(prev => !prev)}
+                    >
+                      <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider flex flex-wrap items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">2</span>
+                        PHC Booking & Centre Details
+                      </h4>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[10px] text-slate-700 font-bold">Appointment & Lab Information</span>
+                        <ChevronDown
+                          size={16}
+                          className={`text-slate-500 transition-transform duration-200 ${isPhcBookingCollapsed ? 'rotate-180' : ''}`}
                         />
-                      ) : (
-                        <CustomSelect
-                          value={phcInsuredPerson}
-                          onChange={(val) => setPhcInsuredPerson(val)}
-                          placeholder="Select Insured Person..."
-                          options={phcInsuredPersonOptions.length > 0 ? phcInsuredPersonOptions : [{ value: '', label: 'No persons added yet' }]}
-                          searchable
-                        />
-                      )}
+                      </div>
                     </div>
-                    <div>
-                      <label className="label text-[10px] font-bold text-slate-600 mb-0.5 block">PHC Stage</label>
-                      <CustomSelect
-                        value={phcStage || 'TO_CONTACT'}
-                        onChange={val => setPhcStage(val)}
-                        placeholder="Select PHC Stage"
-                        options={PHC_STAGE_OPTIONS}
-                      />
-                    </div>
-                    <div>
-                      <label className="label text-[10px] font-bold text-slate-500">PHC Amount (₹)</label>
-                      {phcRequired && <span className="text-red-600 ml-1">*</span>}
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        aria-invalid={!!phcAmountError}
-                        aria-describedby={phcAmountError ? 'phc-amount-error' : undefined}
-                        className={`input text-xs w-full mt-0.5 ${phcAmountError ? 'border-red-500 focus:border-red-500 focus:ring-red-500/20' : ''}`}
-                        placeholder="e.g. 2500"
-                        value={phcAmount}
-                        onChange={(e) => {
-                          setPhcAmount(e.target.value);
-                          if (e.target.value.trim()) setPhcAmountError('');
-                        }}
-                      />
-                      {phcAmountError && (
-                        <p id="phc-amount-error" className="mt-1 text-[10px] font-semibold text-red-600">
-                          {phcAmountError}
-                        </p>
-                      )}
-                    </div>
-                    <div>
-                      <label className="label text-[10px] font-bold text-slate-500 mb-0.5 block">Status</label>
-                      <CustomSelect
-                        value={phcStatus}
-                        onChange={val => setPhcStatus(val)}
-                        placeholder="Select Status"
-                        options={[
-                          { value: 'PENDING', label: 'Pending' },
-                          { value: 'COMPLETED', label: 'Completed' },
-                          { value: 'CLAIMED', label: 'Claimed' },
-                        ]}
-                      />
-                    </div>
-                    <div className="flex items-end pb-2">
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={phcClaimSettled}
-                          onChange={(e) => setPhcClaimSettled(e.target.checked)}
-                          className="rounded text-blue-600"
-                        />
-                        <span className="text-xs font-bold text-slate-700">Claim Settled</span>
-                      </label>
-                    </div>
+
+                    {!isPhcBookingCollapsed && (
+                      <div className="p-4 grid grid-cols-1 md:grid-cols-3 gap-3.5 animate-fadeIn">
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block">
+                              Insured Person Name for PHC
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => setIsManualPhcPerson(prev => !prev)}
+                              className="text-[10px] font-bold text-blue-600 hover:text-blue-800 underline cursor-pointer"
+                            >
+                              {isManualPhcPerson ? 'Select from list' : '+ Enter other name'}
+                            </button>
+                          </div>
+                          {isManualPhcPerson ? (
+                            <input
+                              type="text"
+                              value={phcExtraDetails.insuredPersonName || phcInsuredPerson}
+                              onChange={e => {
+                                setPhcInsuredPerson(e.target.value);
+                                setPhcExtraDetails(p => ({ ...p, insuredPersonName: e.target.value }));
+                              }}
+                              className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200"
+                              placeholder="Type insured person name"
+                            />
+                          ) : (
+                            <CustomSelect
+                              value={phcExtraDetails.insuredPersonName || phcInsuredPerson}
+                              onChange={val => {
+                                setPhcInsuredPerson(val);
+                                setPhcExtraDetails(p => ({ ...p, insuredPersonName: val }));
+                              }}
+                              placeholder="Select Insured Person..."
+                              options={phcInsuredPersonOptions.length > 0 ? phcInsuredPersonOptions : [{ value: '', label: 'No persons added yet' }]}
+                              searchable
+                            />
+                          )}
+                        </div>
+
+                        <div>
+                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">PHC Booking Date</label>
+                          <DatePicker
+                            value={phcExtraDetails.bookingDate}
+                            onDateChange={(val: string) => setPhcExtraDetails(p => ({ ...p, bookingDate: val }))}
+                            className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">PHC Appointment Date</label>
+                          <DatePicker
+                            value={phcExtraDetails.appointmentDate}
+                            onDateChange={(val: string) => setPhcExtraDetails(p => ({ ...p, appointmentDate: val }))}
+                            className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">PHC Centre / Lab Name</label>
+                          <input
+                            type="text"
+                            value={phcExtraDetails.centreName}
+                            onChange={e => setPhcExtraDetails(p => ({ ...p, centreName: e.target.value }))}
+                            className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200"
+                            placeholder="e.g. Dr. Lal PathLabs / SRL Diagnostic"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">PHC Centre / Lab City</label>
+                          <input
+                            type="text"
+                            value={phcExtraDetails.centreCity}
+                            onChange={e => setPhcExtraDetails(p => ({ ...p, centreCity: e.target.value }))}
+                            className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200"
+                            placeholder="e.g. Mumbai / Delhi"
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
-                <div>
-                  <label className="label text-[11px] font-extrabold text-slate-900 uppercase tracking-wider">Policy Notes / Remarks</label>
-                  <textarea
-                    className="input text-xs w-full mt-1 min-h-[80px]"
-                    placeholder="Enter additional policy details or terms..."
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                  />
-                </div>
+                {/* Card 1C: PHC Claim & Settlement Details */}
+                {phcRequired && (
+                  <div className="border border-slate-200/90 rounded-2xl bg-white shadow-2xs hover:shadow-xs transition-all overflow-visible">
+                    <div
+                      className="bg-gradient-to-r from-emerald-50/80 via-slate-50 to-teal-50/30 px-4 py-2.5 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none rounded-t-2xl"
+                      onClick={() => setIsPhcSettlementCollapsed(prev => !prev)}
+                    >
+                      <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider flex flex-wrap items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-gradient-to-br from-emerald-600 to-teal-600 text-white text-[10px] font-black flex items-center justify-center shadow-2xs">3</span>
+                        PHC Claim & Settlement Details
+                      </h4>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[10px] text-slate-700 font-bold">Reports, Submissions & Stage</span>
+                        <ChevronDown
+                          size={16}
+                          className={`text-slate-500 transition-transform duration-200 ${isPhcSettlementCollapsed ? 'rotate-180' : ''}`}
+                        />
+                      </div>
+                    </div>
+
+                    {!isPhcSettlementCollapsed && (
+                      <div className="p-4 grid grid-cols-1 md:grid-cols-3 gap-3.5 animate-fadeIn">
+                        <div>
+                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">PHC Utilized Amount (₹)</label>
+                          <input
+                            type="number"
+                            value={phcExtraDetails.utilizedAmount}
+                            onChange={e => setPhcExtraDetails(p => ({ ...p, utilizedAmount: e.target.value }))}
+                            className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200"
+                            placeholder="Utilized Amount"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">Reimbursement / Cashless</label>
+                          <CustomSelect
+                            value={phcExtraDetails.reimbursementCashless || 'CASHLESS'}
+                            onChange={val => setPhcExtraDetails(p => ({ ...p, reimbursementCashless: val }))}
+                            placeholder="Select Reimbursement / Cashless"
+                            options={[
+                              { value: 'CASHLESS', label: 'Cashless Checkup' },
+                              { value: 'REIMBURSEMENT', label: 'Reimbursement Claim' },
+                            ]}
+                          />
+                        </div>
+
+                        <div>
+                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">Report Received Date</label>
+                          <DatePicker
+                            value={phcExtraDetails.reportReceivedDate}
+                            onDateChange={(val: string) => setPhcExtraDetails(p => ({ ...p, reportReceivedDate: val }))}
+                            className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">Report & Bill Received Date</label>
+                          <DatePicker
+                            value={phcExtraDetails.reportBillReceivedDate}
+                            onDateChange={(val: string) => setPhcExtraDetails(p => ({ ...p, reportBillReceivedDate: val }))}
+                            className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">Report & Bill Submitted Date</label>
+                          <DatePicker
+                            value={phcExtraDetails.reportBillSubmittedDate}
+                            onDateChange={(val: string) => setPhcExtraDetails(p => ({ ...p, reportBillSubmittedDate: val }))}
+                            className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">Settlement Date</label>
+                          <DatePicker
+                            value={phcExtraDetails.settlementDate}
+                            onDateChange={(val: string) => setPhcExtraDetails(p => ({ ...p, settlementDate: val }))}
+                            className="input w-full h-10 text-xs rounded-xl bg-white border border-slate-200"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">PHC Stage</label>
+                          <CustomSelect
+                            value={phcExtraDetails.phcStage || phcStage || 'TO_CONTACT'}
+                            onChange={val => {
+                              setPhcStage(val);
+                              setPhcExtraDetails(p => ({ ...p, phcStage: val }));
+                            }}
+                            placeholder="Select Stage"
+                            options={PHC_STAGE_OPTIONS}
+                          />
+                        </div>
+
+                        <div>
+                          <label className="label text-[10px] font-extrabold text-slate-900 uppercase tracking-wider block mb-1">PHC Claim Settled?</label>
+                          <CustomSelect
+                            value={phcClaimSettled ? 'yes' : 'no'}
+                            onChange={val => setPhcClaimSettled(val === 'yes')}
+                            placeholder="Select Option"
+                            options={[
+                              { value: 'no', label: 'No' },
+                              { value: 'yes', label: 'Yes' },
+                            ]}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}

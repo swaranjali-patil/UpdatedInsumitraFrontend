@@ -31,6 +31,18 @@ export const authService = {
     return data;
   },
 
+  async getMe() {
+    try {
+      const { data } = await api.get('/auth/me');
+      if (data?.data) {
+        useAuthStore.getState().setUser(data.data);
+      }
+      return data?.data;
+    } catch {
+      return null;
+    }
+  },
+
   async logout() {
     try { await api.post('/auth/logout'); } catch {}
     useAuthStore.getState().logout();

@@ -2,9 +2,11 @@ import { isFieldRequired as isFieldRequiredHelper, COMPULSORY_RULES_UPDATED_EVEN
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useLeadKanban, useMoveLeadStage, useCreateLead, useUpdateLead, useDeleteLead } from '@hooks/useLeads';
+import { useClaims } from '@hooks/useClaims';
 import Modal from '@comps/common/Modal';
 import CreatePolicyModal from '../Policies/CreatePolicyModal';
 import PolicyDetailModal from '../Policies/PolicyDetailModal';
+import ClaimDetailModal from '../Claims/ClaimDetailModal';
 import {
   Plus, Search, Pencil, Trash2, Shield, Upload, Phone, Calendar,
   MessageCircle, LayoutGrid, List, Filter, X, UserPlus, Users,
@@ -434,6 +436,15 @@ const MEDICAL_CONDITIONS_LIST = [
   'Others'
 ];
 
+const autoResizeTextarea = (el: HTMLTextAreaElement | null) => {
+  if (!el) return;
+  el.style.height = 'auto';
+  const scrollH = el.scrollHeight;
+  const newHeight = Math.max(56, Math.min(scrollH, 360));
+  el.style.height = `${newHeight}px`;
+  el.style.overflowY = scrollH > 360 ? 'auto' : 'hidden';
+};
+
 function MultiSelectBox({
   label,
   selectedValues,
@@ -764,6 +775,7 @@ export default function Leads() {
   const [leadDocUploadOpen, setLeadDocUploadOpen] = useState(false);
   const [docPreviewModal, setDocPreviewModal] = useState<{ open: boolean; title: string; url: string }>({ open: false, title: '', url: '' });
   const [viewConnectedPolicyId, setViewConnectedPolicyId] = useState<string | null>(null);
+  const [selectedClaimDetail, setSelectedClaimDetail] = useState<any | null>(null);
 
   const handleOpenConnectedPolicy = async (leadOrCard: any) => {
     if (!leadOrCard) return;
@@ -809,6 +821,66 @@ export default function Leads() {
     const raw = contactsPickerRes?.data ?? contactsPickerRes ?? [];
     return Array.isArray(raw) ? raw : [];
   }, [contactsPickerRes]);
+
+  // Fetch policies & claims for Leads Claims tab and policy enrichment (sync with contacts)
+  const { data: policiesRes } = useQuery({
+    queryKey: ['leads-policies-list'],
+    queryFn: () => policiesService.list({ limit: 2000, sortBy: 'createdAt', sortOrder: 'desc' }),
+    enabled: true,
+    staleTime: 0,
+  });
+
+  const { data: claimsRes } = useClaims({ page: 1, limit: 500 });
+
+  const claimListArray = useMemo(() => {
+    if (!claimsRes) return [];
+    if (Array.isArray(claimsRes.data)) return claimsRes.data;
+    if (Array.isArray(claimsRes.data?.data)) return claimsRes.data.data;
+    if (Array.isArray(claimsRes)) return claimsRes;
+    return [];
+  }, [claimsRes]);
+
+  const claimMap = useMemo(() => {
+    const map: Record<string, any[]> = {};
+    claimListArray.forEach((c: any) => {
+      const keys = [
+        c.contactId,
+        c.contact?.id,
+        c.contact?.contactId,
+        c.policyId,
+        c.policy?.id,
+        c.contact?.phone,
+        c.phone,
+      ].filter(Boolean);
+      keys.forEach(k => {
+        if (!map[k]) map[k] = [];
+        if (!map[k].some((existing: any) => existing.id === c.id)) {
+          map[k].push(c);
+        }
+      });
+    });
+    return map;
+  }, [claimListArray]);
+
+  const policyListArray = useMemo(() => {
+    if (!policiesRes) return [];
+    if (Array.isArray(policiesRes.data)) return policiesRes.data;
+    if (Array.isArray(policiesRes.data?.data)) return policiesRes.data.data;
+    if (Array.isArray(policiesRes)) return policiesRes;
+    return [];
+  }, [policiesRes]);
+
+  const policyMap = useMemo(() => {
+    const map: Record<string, any[]> = {};
+    policyListArray.forEach((p: any) => {
+      const cId = p.contactId || p.contact?.id;
+      if (cId) {
+        if (!map[cId]) map[cId] = [];
+        map[cId].push(p);
+      }
+    });
+    return map;
+  }, [policyListArray]);
 
   const loadContactById = async (contactId: string) => {
     if (!contactId) return;
@@ -884,8 +956,11 @@ export default function Leads() {
         })));
       }
 
-      if (Array.isArray(contact.policies)) {
-        setPolicies(contact.policies.map((p: any) => ({
+      const contactPolicies = (Array.isArray(contact.policies) && contact.policies.length > 0)
+        ? contact.policies
+        : (policyMap[contactId] || []);
+      if (Array.isArray(contactPolicies) && contactPolicies.length > 0) {
+        setPolicies(contactPolicies.map((p: any) => ({
           id: p.id,
           policyType: p.plan?.category || 'Health',
           entries: [{
@@ -2247,6 +2322,10 @@ export default function Leads() {
       await Promise.all([
         qc.invalidateQueries({ queryKey: ['contacts'] }),
         qc.invalidateQueries({ queryKey: ['leads'] }),
+        qc.invalidateQueries({ queryKey: ['claims'] }),
+        qc.invalidateQueries({ queryKey: ['policies'] }),
+        qc.invalidateQueries({ queryKey: ['leads-policies-list'] }),
+        qc.invalidateQueries({ queryKey: ['contacts-policies-list'] }),
       ]);
 
       if (shouldClose) {
@@ -2458,7 +2537,10 @@ export default function Leads() {
 
       const healthEntries: any[] = [];
       const lifeEntries: any[] = [];
-      (Array.isArray(contact.policies) ? contact.policies : []).forEach((p: any) => {
+      const contactPolicies = (Array.isArray(contact.policies) && contact.policies.length > 0)
+        ? contact.policies
+        : (policyMap[contact.id || contactId] || []);
+      contactPolicies.forEach((p: any) => {
         const sDate = toDateOnly(p.startDate);
         const eDate = toDateOnly(p.endDate);
         const mDate = toDateOnly(p.maturityDate);
@@ -3686,7 +3768,7 @@ export default function Leads() {
 
           {/* Modal sub-navigation tabs */}
           <div className="flex bg-slate-200/60 p-1.5 rounded-2xl mt-0 mb-3 gap-2 border border-slate-200/80 overflow-x-auto shadow-2xs">
-            {['Product Interest', 'Personal', 'Family', 'Policy', 'Documents', 'WA Campaign', 'History'].map(tab => (
+            {['Product Interest', 'Personal', 'Family', 'Policy', 'Claims', 'Documents', 'WA Campaign', 'History'].map(tab => (
               <button
                 key={tab}
                 type="button"
@@ -4735,10 +4817,13 @@ export default function Leads() {
                       <div>
                         <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Details of Medical History</label>
                         <textarea
-                          className="input w-full resize-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
-                          rows={2}
+                          ref={el => autoResizeTextarea(el)}
+                          className="input w-full text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all leading-relaxed py-2 resize-y"
+                          style={{ height: 'auto', minHeight: '56px' }}
+                          rows={Math.max(2, (personalFields.medicalHistoryDetails || '').split('\n').length)}
                           placeholder="Add any additional medical history details..."
                           value={personalFields.medicalHistoryDetails}
+                          onInput={e => autoResizeTextarea(e.currentTarget)}
                           onChange={e => setPersonalFields(p => ({ ...p, medicalHistoryDetails: e.target.value }))}
                         />
                       </div>
@@ -4757,10 +4842,13 @@ export default function Leads() {
                     <div className="p-4">
                       <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Surgery Details / History</label>
                       <textarea
-                        className="input w-full text-xs resize-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
-                        rows={2}
+                        ref={el => autoResizeTextarea(el)}
+                        className="input w-full text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all leading-relaxed py-2 resize-y"
+                        style={{ height: 'auto', minHeight: '56px' }}
+                        rows={Math.max(2, (personalFields.surgeryDetails || '').split('\n').length)}
                         placeholder="Specify any surgeries done or advised..."
                         value={personalFields.surgeryDetails || ''}
+                        onInput={e => autoResizeTextarea(e.currentTarget)}
                         onChange={e => setPersonalFields(p => ({ ...p, surgeryDetails: e.target.value }))}
                       />
                     </div>
@@ -4778,10 +4866,13 @@ export default function Leads() {
                     <div className="p-4">
                       <label className="label text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Prescription &amp; Medication Details</label>
                       <textarea
-                        className="input w-full text-xs resize-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
-                        rows={2}
+                        ref={el => autoResizeTextarea(el)}
+                        className="input w-full text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all leading-relaxed py-2 resize-y"
+                        style={{ height: 'auto', minHeight: '56px' }}
+                        rows={Math.max(2, (personalFields.prescriptionDetails || '').split('\n').length)}
                         placeholder="List current ongoing medicines or prescriptions..."
                         value={personalFields.prescriptionDetails || ''}
+                        onInput={e => autoResizeTextarea(e.currentTarget)}
                         onChange={e => setPersonalFields(p => ({ ...p, prescriptionDetails: e.target.value }))}
                       />
                     </div>
@@ -5440,6 +5531,136 @@ export default function Leads() {
               </div>
             )}
 
+            {activeLeadTab === 'Claims' && (() => {
+              // 1. Gather all policy IDs for current contact
+              const directPolicies = loadedContact?.policies || [];
+              const mapPol1 = loadedContact?.id ? (policyMap[loadedContact.id] || []) : [];
+              const mapPol2 = loadedContact?.contactId ? (policyMap[loadedContact.contactId] || []) : [];
+              const mapPol3 = editContactId ? (policyMap[editContactId] || []) : [];
+              const contactPolicyIds = new Set(
+                [...directPolicies, ...mapPol1, ...mapPol2, ...mapPol3]
+                  .map((p: any) => p?.id)
+                  .filter(Boolean)
+              );
+
+              const contactPhone = (
+                loadedContact?.phone ||
+                personalFields?.callingNumber ||
+                personalFields?.whatsappNumber ||
+                ''
+              ).trim();
+
+              const contactFullName = `${loadedContact?.firstName || personalFields?.firstName || ''} ${loadedContact?.lastName || personalFields?.lastName || ''}`.trim().toLowerCase();
+
+              // 2. Direct contact claims & mapped claims
+              const directClaims = loadedContact?.claims || [];
+              const mapClaim1 = loadedContact?.id ? (claimMap[loadedContact.id] || []) : [];
+              const mapClaim2 = loadedContact?.contactId ? (claimMap[loadedContact.contactId] || []) : [];
+              const mapClaim3 = editContactId ? (claimMap[editContactId] || []) : [];
+
+              // 3. Additional policy, phone & name matching across all loaded claims
+              const matchedByPolicyOrPhone = claimListArray.filter((c: any) => {
+                if (c?.policyId && contactPolicyIds.has(c.policyId)) return true;
+                if (c?.policy?.id && contactPolicyIds.has(c.policy.id)) return true;
+                if (contactPhone && (c?.contact?.phone === contactPhone || c?.phone === contactPhone)) return true;
+
+                const claimFullName = `${c?.contact?.firstName || ''} ${c?.contact?.lastName || ''}`.trim().toLowerCase();
+                if (contactFullName && claimFullName && (contactFullName === claimFullName || contactFullName.includes(claimFullName) || claimFullName.includes(contactFullName))) return true;
+
+                if (contactFullName && c?.notes && typeof c.notes === 'string' && c.notes.toLowerCase().includes(contactFullName)) return true;
+
+                return false;
+              });
+
+              const uniqueClaimsMap = new Map();
+              [...directClaims, ...mapClaim1, ...mapClaim2, ...mapClaim3, ...matchedByPolicyOrPhone].forEach(c => {
+                if (c && c.id) uniqueClaimsMap.set(c.id, c);
+              });
+              const displayedContactClaims = Array.from(uniqueClaimsMap.values());
+
+              return (
+                <div className="space-y-4 animate-fadeIn">
+                  {/* Claims Tab Header */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="w-6 h-6 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
+                        <FileText size={13} />
+                      </div>
+                      <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider">
+                        Claims History & Log
+                      </h3>
+                    </div>
+                    {editContactId && (
+                      <span className="text-[10px] font-extrabold bg-blue-50 text-blue-700 border border-blue-100 px-2.5 py-0.5 rounded-full">
+                        {displayedContactClaims.length} {displayedContactClaims.length === 1 ? 'Claim' : 'Claims'}
+                      </span>
+                    )}
+                  </div>
+
+                  {!editContactId ? (
+                    <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-6 py-10 text-center">
+                      <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mb-3">
+                        <FileText size={18} />
+                      </div>
+                      <p className="text-sm font-bold text-slate-700">Save Contact First</p>
+                      <p className="text-[11px] text-slate-500 mt-1 max-w-[280px]">
+                        Please save or select a contact first to view and manage claims associated with this contact.
+                      </p>
+                    </div>
+                  ) : displayedContactClaims.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-6 py-10 text-center">
+                      <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mb-3">
+                        <FileText size={18} />
+                      </div>
+                      <p className="text-sm font-bold text-slate-700">No Claims Found</p>
+                      <p className="text-[11px] text-slate-500 mt-1 max-w-[280px]">
+                        No active or historical claims filed for this contact yet.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1 custom-scrollbar">
+                      {displayedContactClaims.map((cl: any) => (
+                        <div
+                          key={cl.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setSelectedClaimDetail(cl)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              setSelectedClaimDetail(cl);
+                            }
+                          }}
+                          className="w-full text-left p-3.5 bg-white rounded-2xl border border-blue-300 shadow-2xs space-y-2 hover:border-blue-400 hover:shadow-sm transition-all cursor-pointer pointer-events-auto select-none group"
+                          aria-label={`View claim ${cl.claimNumber || ''}`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <span className="text-[9px] font-black uppercase text-blue-600 tracking-wider bg-blue-50 px-1.5 py-0.5 rounded">
+                                {cl.claimType}
+                              </span>
+                              <h4 className="text-xs font-bold text-slate-900 mt-1 group-hover:text-blue-600 transition-colors">{cl.claimNumber}</h4>
+                              <p className="text-[10px] text-slate-400">Policy: {cl.policy?.policyNumber || 'N/A'}</p>
+                            </div>
+                            <div className="text-right">
+                              <span className="px-2 py-0.5 rounded text-[9px] font-extrabold uppercase bg-blue-50 text-blue-700 border border-blue-200">
+                                {cl.status}
+                              </span>
+                              <p className="text-xs font-extrabold text-slate-800 mt-1">₹{Number(cl.claimAmount || 0).toLocaleString('en-IN')}</p>
+                            </div>
+                          </div>
+                          <p className="text-[10px] text-slate-400 border-t border-slate-100 pt-1.5 flex justify-between">
+                            <span>Intimated: {cl.intimatedAt ? format(new Date(cl.intimatedAt), 'dd MMM yyyy') : '—'}</span>
+                            <span>Approved: ₹{Number(cl.approvedAmount || 0).toLocaleString('en-IN')}</span>
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             {activeLeadTab === 'Documents' && (
               <div className="space-y-4 animate-fadeIn">
                 <div className="flex items-center justify-between bg-gradient-to-r from-slate-100/80 via-slate-50 to-slate-100/50 p-4 border border-slate-200/90 rounded-2xl shadow-2xs">
@@ -6001,6 +6222,12 @@ export default function Leads() {
         open={!!viewConnectedPolicyId}
         policyId={viewConnectedPolicyId}
         onClose={() => setViewConnectedPolicyId(null)}
+      />
+
+      <ClaimDetailModal
+        open={!!selectedClaimDetail}
+        claim={selectedClaimDetail}
+        onClose={() => setSelectedClaimDetail(null)}
       />
 
     </div>

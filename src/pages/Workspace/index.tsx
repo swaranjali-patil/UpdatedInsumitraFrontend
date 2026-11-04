@@ -355,6 +355,7 @@ export default function Workspace() {
           <Calendar className="w-4 h-4" /> Today
         </button>
 
+        {/* Commented out My Tasks tab
         <button
           onClick={() => setActiveTab('my_tasks')}
           className={`shrink-0 whitespace-nowrap flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-xl font-extrabold text-xs transition-all cursor-pointer ${
@@ -365,6 +366,7 @@ export default function Workspace() {
         >
           <ListTodo className="w-4 h-4" /> My Tasks
         </button>
+        */}
 
         <button
           onClick={() => setActiveTab('commissions')}
@@ -412,7 +414,7 @@ export default function Workspace() {
             isViewOnly={!!selectedEmployeeUserId}
           />
 
-          {/* 3 Sub-Tabs: Overdue, Today's Queue, Today's Timeline */}
+          {/* 3 Sub-Tabs: Overdue, Today's Queue, Today's Timeline (Commented out)
           <UnifiedTaskActivityLog 
             tasks={filteredTasksList} 
             employeesList={employeesList}
@@ -420,10 +422,12 @@ export default function Workspace() {
             onAddTask={(payload) => createTaskMutation.mutate(payload, { onSuccess: () => refetch() })}
             isViewOnly={!!selectedEmployeeUserId}
           />
+          */}
         </div>
       )}
 
-      {/* TAB 2: MY TASKS (TABLE & KANBAN) */}
+      {/* TAB 2: MY TASKS (TABLE & KANBAN) (Commented out) */}
+      {/*
       {activeTab === 'my_tasks' && (
         <MyTasksPanel
           tasks={filteredTasksList}
@@ -433,6 +437,7 @@ export default function Workspace() {
           isViewOnly={!!selectedEmployeeUserId}
         />
       )}
+      */}
 
       {/* TAB 3: COMMISSIONS */}
       {activeTab === 'commissions' && (
@@ -470,7 +475,12 @@ export default function Workspace() {
 
           {/* Commissions List */}
           {(() => {
-            const commList: any[] = commRes?.data ?? [];
+            const rawList: any[] = commRes?.data ?? [];
+            const commList = rawList.filter((c: any) => {
+              const notes = c.notes || '';
+              if (notes.includes('[Saved as Draft]')) return false;
+              return notes.includes('[Published to Workspace]');
+            });
             const totalCommission = commList.reduce((sum: number, c: any) => sum + Number(c.amount ?? 0), 0);
             const paidCommission  = commList.filter((c: any) => c.isPaid).reduce((sum: number, c: any) => sum + Number(c.amount ?? 0), 0);
             return (

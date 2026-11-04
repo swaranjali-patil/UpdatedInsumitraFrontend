@@ -101,7 +101,7 @@ export default function UnifiedTaskActivityLog({
           </button>
         </div>
 
-        {/* Single Unified Action Button */}
+        {/* Single Unified Action Button (Commented out Schedule / Log)
         {!isViewOnly && (
           <div className="flex items-center gap-2.5 shrink-0 self-end sm:self-auto">
             <button
@@ -114,6 +114,7 @@ export default function UnifiedTaskActivityLog({
             </button>
           </div>
         )}
+        */}
       </div>
 
       {/* View 1: Overdue Tasks */}

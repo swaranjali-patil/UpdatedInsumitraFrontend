@@ -39,7 +39,7 @@ const EmployeeEod      = lazy(() => import('@pages/Employees/EodReports'));
 const EmployeeAccess   = lazy(() => import('@pages/Employees/AccessControl'));
 const EmployeeDetail   = lazy(() => import('@pages/Employees/EmployeeDetail'));
 const Commissions    = lazy(() => import('@pages/Commissions'));
-const Calendar       = lazy(() => import('@pages/Calendar'));
+// const Calendar       = lazy(() => import('@pages/Calendar'));
 const Settings       = lazy(() => import('@pages/Settings'));
 const Insurance      = lazy(() => import('@pages/Insurance'));
 const Documents      = lazy(() => import('@pages/Documents'));
@@ -54,11 +54,44 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function getEmployeeDefaultPath(user: any): string {
+  const perms: string[] = user?.permissions || [];
+  if (perms.length === 0) return '/workspace';
+  if (perms.includes('dashboard')) return '/dashboard';
+  if (perms.includes('workspace')) return '/workspace';
+  const first = perms[0];
+  // if (first === 'calendar') return '/calendar';
+  if (first === 'employees' || first === 'manage_employees') return '/employees';
+  return `/${first}`;
+}
+
+function PermissionRoute({ children, permission }: { children: React.ReactNode; permission: string }) {
+  const user = useAuthStore(s => s.user);
+  if (!user) return <Navigate to="/login" replace />;
+  if (user.role === 'CONTACT') return <Navigate to="/client/dashboard" replace />;
+  if (user.role === 'OWNER' || user.role === 'SUPERADMIN') return <>{children}</>;
+  if (user.role === 'EMPLOYEE') {
+    const perms: string[] = (user as any)?.permissions || [];
+    // If employee has no perms set at all (legacy), allow workspace fallback
+    if (perms.length === 0 && permission === 'workspace') {
+      return <>{children}</>;
+    }
+    if (perms.includes(permission)) {
+      return <>{children}</>;
+    }
+    if (permission === 'employees' && (perms.includes('employees') || perms.includes('manage_employees') || perms.includes('view_employees'))) {
+      return <>{children}</>;
+    }
+    return <Navigate to={getEmployeeDefaultPath(user)} replace />;
+  }
+  return <Navigate to="/login" replace />;
+}
+
 function OwnerRoute({ children }: { children: React.ReactNode }) {
   const user = useAuthStore(s => s.user);
   if (!user) return <Navigate to="/login" replace />;
   if (user.role === 'CONTACT') return <Navigate to="/client/dashboard" replace />;
-  if (user.role === 'EMPLOYEE') return <Navigate to="/workspace" replace />;
+  if (user.role === 'EMPLOYEE') return <Navigate to={getEmployeeDefaultPath(user)} replace />;
   if (user.role !== 'OWNER' && user.role !== 'SUPERADMIN') return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
@@ -70,11 +103,11 @@ function AdminOrAuthorizedRoute({ children, permission }: { children: React.Reac
   if (user.role === 'OWNER' || user.role === 'SUPERADMIN') return <>{children}</>;
   if (user.role === 'EMPLOYEE') {
     const perms: string[] = (user as any)?.permissions || [];
-    if (!permission || perms.includes(permission) || perms.includes('manage_employees') || perms.includes('view_employees')) {
+    if (!permission || perms.includes(permission) || perms.includes('employees') || perms.includes('manage_employees') || perms.includes('view_employees')) {
       return <>{children}</>;
     }
   }
-  return <Navigate to="/workspace" replace />;
+  return <Navigate to={getEmployeeDefaultPath(user)} replace />;
 }
 
 function PlanProtectedRoute({ children }: { children: React.ReactNode; feature?: string }) {
@@ -117,7 +150,7 @@ function IndexRedirect() {
   }
 
   if (user.role === 'EMPLOYEE') {
-    return <Navigate to="/workspace" replace />;
+    return <Navigate to={getEmployeeDefaultPath(user)} replace />;
   }
 
   return <Navigate to="/workspace" replace />;
@@ -191,17 +224,17 @@ export default function App() {
         }
       >
         <Route index element={<IndexRedirect />} />
-        <Route path="dashboard"    element={<OwnerRoute><PlanProtectedRoute feature="dashboard"><Suspense fallback={<Loader />}><Dashboard /></Suspense></PlanProtectedRoute></OwnerRoute>} />
-        <Route path="workspace"    element={<PlanProtectedRoute feature="workspace"><Suspense fallback={<Loader />}><Workspace /></Suspense></PlanProtectedRoute>} />
-        <Route path="contacts"     element={<Suspense fallback={<Loader />}><Contacts /></Suspense>} />
-        <Route path="contacts/:id" element={<Suspense fallback={<Loader />}><ContactDetail /></Suspense>} />
-        <Route path="leads"        element={<PlanProtectedRoute feature="leads"><Suspense fallback={<Loader />}><Leads /></Suspense></PlanProtectedRoute>} />
-        <Route path="leads/:id"    element={<PlanProtectedRoute feature="leads"><Suspense fallback={<Loader />}><LeadDetail /></Suspense></PlanProtectedRoute>} />
-        <Route path="policies"     element={<Suspense fallback={<Loader />}><Policies /></Suspense>} />
-        <Route path="emi-tracking" element={<Suspense fallback={<Loader />}><Policies /></Suspense>} />
-        <Route path="policies/:id" element={<Suspense fallback={<Loader />}><PolicyDetail /></Suspense>} />
-        <Route path="claims"       element={<Suspense fallback={<Loader />}><Claims /></Suspense>} />
-        <Route path="claims/:id"   element={<Suspense fallback={<Loader />}><ClaimDetail /></Suspense>} />
+        <Route path="dashboard"    element={<PermissionRoute permission="dashboard"><PlanProtectedRoute feature="dashboard"><Suspense fallback={<Loader />}><Dashboard /></Suspense></PlanProtectedRoute></PermissionRoute>} />
+        <Route path="workspace"    element={<PermissionRoute permission="workspace"><PlanProtectedRoute feature="workspace"><Suspense fallback={<Loader />}><Workspace /></Suspense></PlanProtectedRoute></PermissionRoute>} />
+        <Route path="contacts"     element={<PermissionRoute permission="contacts"><Suspense fallback={<Loader />}><Contacts /></Suspense></PermissionRoute>} />
+        <Route path="contacts/:id" element={<PermissionRoute permission="contacts"><Suspense fallback={<Loader />}><ContactDetail /></Suspense></PermissionRoute>} />
+        <Route path="leads"        element={<PermissionRoute permission="leads"><PlanProtectedRoute feature="leads"><Suspense fallback={<Loader />}><Leads /></Suspense></PlanProtectedRoute></PermissionRoute>} />
+        <Route path="leads/:id"    element={<PermissionRoute permission="leads"><PlanProtectedRoute feature="leads"><Suspense fallback={<Loader />}><LeadDetail /></Suspense></PlanProtectedRoute></PermissionRoute>} />
+        <Route path="policies"     element={<PermissionRoute permission="policies"><Suspense fallback={<Loader />}><Policies /></Suspense></PermissionRoute>} />
+        <Route path="emi-tracking" element={<PermissionRoute permission="policies"><Suspense fallback={<Loader />}><Policies /></Suspense></PermissionRoute>} />
+        <Route path="policies/:id" element={<PermissionRoute permission="policies"><Suspense fallback={<Loader />}><PolicyDetail /></Suspense></PermissionRoute>} />
+        <Route path="claims"       element={<PermissionRoute permission="claims"><Suspense fallback={<Loader />}><Claims /></Suspense></PermissionRoute>} />
+        <Route path="claims/:id"   element={<PermissionRoute permission="claims"><Suspense fallback={<Loader />}><ClaimDetail /></Suspense></PermissionRoute>} />
         <Route
           path="employees/*"
           element={
@@ -220,12 +253,12 @@ export default function App() {
           <Route path="job-descriptions" element={<Navigate to="/employees" replace />} />
         </Route>
         <Route path="employees/:id" element={<AdminOrAuthorizedRoute permission="manage_employees"><PlanProtectedRoute feature="employees"><Suspense fallback={<Loader />}><EmployeeDetail /></Suspense></PlanProtectedRoute></AdminOrAuthorizedRoute>} />
-        <Route path="commissions"  element={<OwnerRoute><PlanProtectedRoute feature="commissions"><Suspense fallback={<Loader />}><Commissions /></Suspense></PlanProtectedRoute></OwnerRoute>} />
-        {/* <Route path="calendar"     element={<Suspense fallback={<Loader />}><Calendar /></Suspense>} /> */}
+        <Route path="commissions"  element={<PermissionRoute permission="commissions"><PlanProtectedRoute feature="commissions"><Suspense fallback={<Loader />}><Commissions /></Suspense></PlanProtectedRoute></PermissionRoute>} />
+        {/* <Route path="calendar" element={<PermissionRoute permission="calendar"><Suspense fallback={<Loader />}><Calendar /></Suspense></PermissionRoute>} /> */}
         <Route path="settings"     element={<OwnerRoute><Suspense fallback={<Loader />}><Settings /></Suspense></OwnerRoute>} />
         <Route path="firm-profile" element={<Navigate to="/dashboard" replace />} />
         <Route path="subscription" element={<Navigate to="/dashboard" replace />} />
-        <Route path="operations"   element={<OwnerRoute><PlanProtectedRoute feature="operations"><Suspense fallback={<Loader />}><Insurance /></Suspense></PlanProtectedRoute></OwnerRoute>} />
+        <Route path="operations"   element={<PermissionRoute permission="operations"><PlanProtectedRoute feature="operations"><Suspense fallback={<Loader />}><Insurance /></Suspense></PlanProtectedRoute></PermissionRoute>} />
         <Route path="documents"    element={<OwnerRoute><PlanProtectedRoute feature="documents"><Suspense fallback={<Loader />}><Documents /></Suspense></PlanProtectedRoute></OwnerRoute>} />
         <Route path="search"       element={<OwnerRoute><Suspense fallback={<Loader />}><GlobalSearch /></Suspense></OwnerRoute>} />
         <Route path="deletion-requests" element={<Navigate to="/operations?tab=delete_requests" replace />} />
@@ -236,6 +269,5 @@ export default function App() {
     </>
   );
 }
-
 
 

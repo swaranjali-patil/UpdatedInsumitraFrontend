@@ -742,66 +742,7 @@ export default function SettingsPanel({ initialSubTab = 'dashboard', onBack }: S
 
   return (
     <div className="w-full">
-      {/* ── Sub-navigation Header for Master Settings & Backups ── */}
-      <div className="bg-white border-b border-slate-200 px-6 py-2.5 flex items-center justify-between gap-3 overflow-x-auto select-none sticky top-0 z-10 shadow-3xs">
-        <div className="flex items-center gap-1.5 flex-nowrap">
-          <button
-            onClick={() => setActiveTab('dashboard')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-              activeTab === 'dashboard'
-                ? 'bg-primary-600 text-white shadow-sm'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-            }`}
-          >
-            <LayoutGrid size={13} />
-            <span>Overview Hub</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('master')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-              activeTab === 'master'
-                ? 'bg-primary-600 text-white shadow-sm'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-            }`}
-          >
-            <SlidersHorizontal size={13} />
-            <span>Dropdown Menus</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('compulsory')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-              activeTab === 'compulsory'
-                ? 'bg-primary-600 text-white shadow-sm'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-            }`}
-          >
-            <Settings2 size={13} />
-            <span>Compulsory Fields</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('columns')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-              activeTab === 'columns'
-                ? 'bg-primary-600 text-white shadow-sm'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-            }`}
-          >
-            <Database size={13} />
-            <span>Table Columns</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('backup')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-              activeTab === 'backup'
-                ? 'bg-primary-600 text-white shadow-sm'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-            }`}
-          >
-            <Download size={13} />
-            <span>Backup & Restore</span>
-          </button>
-        </div>
-      </div>
+      {/* ── Sub-navigation tabs hidden to avoid duplicate Operations tabs ── */}
 
       {/* 1. DASHBOARD */}
       {activeTab === 'dashboard' && (

@@ -372,6 +372,16 @@ aside .text-slate-600 { color: #64748b !important; }
   padding-bottom: 0 !important;
 }
 
+/* Allow textareas to auto-expand for multi-line content */
+textarea.input,
+textarea {
+  height: auto !important;
+  min-height: 3.5rem;
+  padding-top: 0.5rem !important;
+  padding-bottom: 0.5rem !important;
+  line-height: 1.4 !important;
+}
+
 
 /* ── Global Typography Scaling (Text Size Only) ── */
 body, button, input, select, textarea {

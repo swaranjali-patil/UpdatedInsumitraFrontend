@@ -349,7 +349,12 @@ function enrichPhcRecord(r: PhcPolicyRecord, polNotes?: string): PhcPolicyRecord
       notesUtilized = baseEligible - extra.phcBalanceAmount;
     }
   }
-  if (notesUtilized === 0 && (extra?.phcClaimSettled || extra?.phcStatus?.toUpperCase().includes('FULL'))) {
+  const isStageCompleted = extra?.phcStage === 'PROCESS_COMPLETED' ||
+    (extra?.phcStage && extra.phcStage.toUpperCase().includes('COMPLET')) ||
+    (extra?.phcStatus && extra.phcStatus.toUpperCase().includes('COMPLET')) ||
+    ((r as any).phcStage && ((r as any).phcStage === 'PROCESS_COMPLETED' || (r as any).phcStage.toUpperCase().includes('COMPLET')));
+
+  if (notesUtilized === 0 && (extra?.phcClaimSettled || extra?.phcStatus?.toUpperCase().includes('FULL') || isStageCompleted)) {
     notesUtilized = baseEligible;
   }
 
@@ -377,14 +382,18 @@ function enrichPhcRecord(r: PhcPolicyRecord, polNotes?: string): PhcPolicyRecord
     if (s === 'NOT_INTERESTED' || s === 'NOT INTERESTED' || s === 'LEAD_LOST') return 'Not Interested';
     if (s.includes('PARTIAL')) return 'Partial Utilized';
     if (s.includes('FULL')) return 'Fully Utilized';
-    if (s.includes('COMPLET')) return 'Completed';
+    if (s.includes('COMPLET') || s === 'PROCESS_COMPLETED') return 'Completed';
     if (s === 'REMIND_LATER' || s === 'REMIND LATER' || s === 'PENDING' || s === 'UPCOMING') return 'Upcoming';
     if (s === 'DUE THIS MONTH' || s === 'DUE_THIS_MONTH') return 'Due This Month';
     if (s === 'OVERDUE') return 'Overdue';
     return null;
   };
 
-  const explicitStatus = resolveStatusFromStr(extra?.phcStatus) || (r.phcStatus ? resolveStatusFromStr(r.phcStatus) : null);
+  const explicitStatus = resolveStatusFromStr(extra?.phcStatus)
+    || (isStageCompleted ? 'Completed' : null)
+    || resolveStatusFromStr(extra?.phcStage)
+    || (r.phcStatus ? resolveStatusFromStr(r.phcStatus) : null)
+    || resolveStatusFromStr((r as any).phcStage);
 
   // 2. Status resolution (never leave as "Not Applicable Yet" or "Not Applicable")
   let phcStatus: PhcStatus;
@@ -764,8 +773,8 @@ export default function PhcTrackingView() {
       });
     }
 
-    if (activeTab === 'due-this-month') list = list.filter(p => p.phcStatus === 'Due This Month' || (p.daysRemaining <= 30 && p.daysRemaining > 0));
-    else if (activeTab === 'upcoming') list = list.filter(p => p.phcStatus === 'Upcoming' || p.daysRemaining > 30);
+    if (activeTab === 'due-this-month') list = list.filter(p => p.phcStatus !== 'Completed' && p.phcStatus !== 'Fully Utilized' && (p.phcStatus === 'Due This Month' || (p.daysRemaining <= 30 && p.daysRemaining > 0)));
+    else if (activeTab === 'upcoming') list = list.filter(p => p.phcStatus !== 'Completed' && p.phcStatus !== 'Fully Utilized' && (p.phcStatus === 'Upcoming' || p.daysRemaining > 30));
     else if (activeTab === 'completed') list = list.filter(p => p.phcStatus === 'Completed' || p.phcStatus === 'Fully Utilized');
     
     if (policyTypeFilter !== 'All') {

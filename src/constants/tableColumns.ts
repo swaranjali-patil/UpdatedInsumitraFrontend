@@ -35,6 +35,9 @@ export const TABLE_COLUMNS_CONFIG = [
     "columns": [
       "Contact ID",
       "Name",
+      "Phone",
+      "Role",
+      "Status",
       "Lead Stage",
       "Lead Status",
       "Assigned Employee",

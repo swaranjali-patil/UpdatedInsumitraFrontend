@@ -104,6 +104,15 @@ const RELATION_OPTIONS = [
   { value: 'OTHER', label: 'Other' },
 ];
 
+const autoResizeTextarea = (el: HTMLTextAreaElement | null) => {
+  if (!el) return;
+  el.style.height = 'auto';
+  const scrollH = el.scrollHeight;
+  const newHeight = Math.max(56, Math.min(scrollH, 360));
+  el.style.height = `${newHeight}px`;
+  el.style.overflowY = scrollH > 360 ? 'auto' : 'hidden';
+};
+
 function MultiSelectBox({
   label,
   selectedValues,
@@ -267,9 +276,15 @@ const buildInitialFormData = (initialData: any, primaryContact: any) => {
   if (initialData) {
     const rawDob = initialData.dob || initialData.dateOfBirth || '';
     const computedAge = rawDob ? String(calculateAge(rawDob)) : (initialData.age || '');
+    let initialRel = initialData.relation || '';
+    if (initialRel.toUpperCase() === 'SPOUSE') {
+      const g = (initialData.gender || '').toUpperCase();
+      if (g === 'FEMALE') initialRel = 'WIFE';
+      else if (g === 'MALE') initialRel = 'HUSBAND';
+    }
     return {
       ...initialData,
-      relation: initialData.relation || '',
+      relation: initialRel,
       firstName: initialData.firstName || (initialData.name ? initialData.name.split(' ')[0] : ''),
       middleName: initialData.middleName || '',
       lastName: initialData.lastName || (initialData.name ? initialData.name.split(' ').slice(1).join(' ') : ''),
@@ -421,16 +436,14 @@ export default function FamilyMemberModal({
   const handleRelationChange = (val: string) => {
     const relUpper = val.toUpperCase();
     let inferredGender = formData.gender;
-    if (!formData.gender) {
-      if (['HUSBAND', 'SON', 'FATHER', 'BROTHER', 'GRANDFATHER', 'GRANDSON', 'UNCLE', 'NEPHEW'].includes(relUpper)) {
-        inferredGender = 'MALE';
-      } else if (['WIFE', 'DAUGHTER', 'MOTHER', 'SISTER', 'GRANDMOTHER', 'GRANDDAUGHTER', 'AUNT', 'NIECE'].includes(relUpper)) {
-        inferredGender = 'FEMALE';
-      } else if (relUpper === 'SPOUSE') {
-        const primGender = (primaryContact.gender || '').toUpperCase();
-        if (primGender === 'MALE') inferredGender = 'FEMALE';
-        else if (primGender === 'FEMALE') inferredGender = 'MALE';
-      }
+    if (['HUSBAND', 'SON', 'FATHER', 'BROTHER', 'GRANDFATHER', 'GRANDSON', 'UNCLE', 'NEPHEW'].includes(relUpper)) {
+      inferredGender = 'MALE';
+    } else if (['WIFE', 'DAUGHTER', 'MOTHER', 'SISTER', 'GRANDMOTHER', 'GRANDDAUGHTER', 'AUNT', 'NIECE'].includes(relUpper)) {
+      inferredGender = 'FEMALE';
+    } else if (relUpper === 'SPOUSE') {
+      const primGender = (primaryContact.gender || '').toUpperCase();
+      if (primGender === 'MALE') inferredGender = 'FEMALE';
+      else if (primGender === 'FEMALE') inferredGender = 'MALE';
     }
 
     const isChild = ['SON', 'DAUGHTER', 'CHILD'].includes(relUpper);
@@ -1331,10 +1344,13 @@ export default function FamilyMemberModal({
                       Details of Medical History
                     </label>
                     <textarea
-                      className="input w-full resize-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
-                      rows={2}
+                      ref={el => autoResizeTextarea(el)}
+                      className="input w-full text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all leading-relaxed py-2 resize-y"
+                      style={{ height: 'auto', minHeight: '56px' }}
+                      rows={Math.max(2, (formData.medicalHistoryDetails || '').split('\n').length)}
                       placeholder="Add any additional medical history details..."
                       value={formData.medicalHistoryDetails || ''}
+                      onInput={e => autoResizeTextarea(e.currentTarget)}
                       onChange={e => setFormData(p => ({ ...p, medicalHistoryDetails: e.target.value }))}
                     />
                   </div>
@@ -1366,10 +1382,13 @@ export default function FamilyMemberModal({
                     Surgery Details / History
                   </label>
                   <textarea
-                    className="input w-full text-xs resize-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
-                    rows={2}
+                    ref={el => autoResizeTextarea(el)}
+                    className="input w-full text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all leading-relaxed py-2 resize-y"
+                    style={{ height: 'auto', minHeight: '56px' }}
+                    rows={Math.max(2, (formData.surgeryDetails || '').split('\n').length)}
                     placeholder="Specify any surgeries done or advised..."
                     value={formData.surgeryDetails || ''}
+                    onInput={e => autoResizeTextarea(e.currentTarget)}
                     onChange={e => setFormData(p => ({ ...p, surgeryDetails: e.target.value }))}
                   />
                 </div>
@@ -1400,10 +1419,13 @@ export default function FamilyMemberModal({
                     Prescription &amp; Medication Details
                   </label>
                   <textarea
-                    className="input w-full text-xs resize-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"
-                    rows={2}
+                    ref={el => autoResizeTextarea(el)}
+                    className="input w-full text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all leading-relaxed py-2 resize-y"
+                    style={{ height: 'auto', minHeight: '56px' }}
+                    rows={Math.max(2, (formData.prescriptionDetails || '').split('\n').length)}
                     placeholder="List current ongoing medicines or prescriptions..."
                     value={formData.prescriptionDetails || ''}
+                    onInput={e => autoResizeTextarea(e.currentTarget)}
                     onChange={e => setFormData(p => ({ ...p, prescriptionDetails: e.target.value }))}
                   />
                 </div>

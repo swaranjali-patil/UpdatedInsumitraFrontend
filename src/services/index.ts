@@ -138,6 +138,8 @@ export const employeesService = {
   updateTaskStatus: (taskId: string, status: string) => api.patch(`/employees/tasks/${taskId}/status`, { status }).then(r => r.data),
   getDailyLogs:     (params?: any)            => api.get('/employees/logs/daily', { params }).then(r => r.data),
   upsertDailyLog:   (body: any)               => api.post('/employees/logs/daily', body).then(r => r.data),
+  getWorkforceReports: (params?: { employeeId?: string; department?: string; startDate?: string; endDate?: string }) =>
+    api.get('/employees/workforce-reports', { params }).then(r => r.data),
 };
 
 
@@ -148,7 +150,7 @@ export const commissionsService = {
   overview:   ()                             => api.get('/commissions/overview').then(r => r.data),
   summary:    (yearId: string)               => api.get(`/commissions/summary/${yearId}`).then(r => r.data),
   create:     (body: any)                    => api.post('/commissions', body).then(r => r.data),
-  markPaid:   (id: string)                   => api.patch(`/commissions/${id}/pay`).then(r => r.data),
+  markPaid:   (id: string, body?: any)       => api.patch(`/commissions/${id}/pay`, body).then(r => r.data),
   remove:     (id: string)                   => api.delete(`/commissions/${id}`).then(r => r.data),
   years:      ()                             => api.get('/commissions/years').then(r => r.data),
   createYear: (body: any)                    => api.post('/commissions/years', body).then(r => r.data),

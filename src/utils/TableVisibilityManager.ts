@@ -61,6 +61,10 @@ class TableVisibilityManager {
           this.rules[r.pageId][normKey] = r.isHidden;
         }
       }
+      const rawNorm = (r.colName || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+      if (rawNorm && rawNorm !== normKey) {
+        this.rules[r.pageId][rawNorm] = r.isHidden;
+      }
     });
 
     try {

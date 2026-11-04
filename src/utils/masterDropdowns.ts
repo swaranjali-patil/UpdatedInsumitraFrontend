@@ -396,9 +396,9 @@ export function getModuleCustomDropdowns(moduleName: string, providedMenus?: Dro
 
   const standardFields = new Set([
     'policytype', 'policytypes', 'customercategory', 'customercategories', 'businesstype',
-    'paymentfrequency', 'paymentfrequencies', 'policystatus', 'policystatuses',
+    'paymentfrequency', 'paymentfrequencies', 'policystatus', 'policystatuses', 'policystatuse', 'policystatu', 'status', 'statuses',
     'gender', 'maritalstatus', 'education', 'occupation', 'relationship', 'relationships', 'contactrole',
-    'claimtype', 'claimtypes', 'claimstatus', 'claimstatuses', 'hospitaltype', 'hospitaltypes',
+    'claimtype', 'claimtypes', 'claimstatus', 'claimstatuses', 'claimstatuse', 'claimstatu', 'hospitaltype', 'hospitaltypes',
     'companycategory', 'companycategories', 'insurancecompanycategory', 'insurancecompanycategories',
     'plancategory', 'plancategories', 'insuranceplancategory'
   ]);
@@ -409,7 +409,8 @@ export function getModuleCustomDropdowns(moduleName: string, providedMenus?: Dro
     const matchesModule = mod === targetModule || (isPolicyFamily(targetModule) && isPolicyFamily(mod));
     if (!matchesModule) return false;
     const nameKey = cleanKey(m.name);
-    return !standardFields.has(nameKey);
+    const rawKey = m.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+    return !standardFields.has(nameKey) && !standardFields.has(rawKey);
   });
 }
 

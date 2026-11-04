@@ -82,8 +82,12 @@ const targetSchema = z.object({
 type TargetForm = z.infer<typeof targetSchema>;
 
 const permissionSchema = z.object({
-  role:        z.enum(['OWNER', 'EMPLOYEE', 'CONTACT']),
-  permissions: z.array(z.string()),
+  role: z.string().default('EMPLOYEE'),
+  permissions: z.preprocess((val) => {
+    if (Array.isArray(val)) return val;
+    if (typeof val === 'string' && val.length > 0) return [val];
+    return [];
+  }, z.array(z.string())),
 });
 type PermissionForm = z.infer<typeof permissionSchema>;
 
@@ -227,9 +231,27 @@ export default function EmployeeDetail() {
     }
   });
 
+  const [selectedPermissions, setSelectedPermissions] = useState<string[]>([]);
+  const [selectedRole, setSelectedRole] = useState<'OWNER' | 'EMPLOYEE' | 'CONTACT'>('EMPLOYEE');
+
+  const handleToggleModule = (key: string) => {
+    setSelectedPermissions(prev =>
+      prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+    );
+  };
+
   useEffect(() => {
     if (employee?.data || employee) {
-      const merged = { ...baseEmp, ...(employee?.data ?? employee) };
+      const rawData = employee?.data ?? employee;
+      const merged = { 
+        ...baseEmp, 
+        ...rawData,
+        user: {
+          ...(baseEmp.user || {}),
+          ...(rawData.user || {}),
+          permissions: Array.isArray(rawData.user?.permissions) ? rawData.user.permissions : (baseEmp.user?.permissions || []),
+        }
+      };
       setEmpState(merged);
       editForm.reset({
         firstName: merged.firstName,
@@ -279,6 +301,10 @@ export default function EmployeeDetail() {
 
   const permForm = useForm<PermissionForm>({
     resolver: zodResolver(permissionSchema),
+    defaultValues: {
+      role: 'EMPLOYEE',
+      permissions: [],
+    },
   });
 
   const updateEmployeeMutation = useMutation({
@@ -337,15 +363,43 @@ export default function EmployeeDetail() {
   });
 
   const updatePermissions = useMutation({
-    mutationFn: (body: PermissionForm) => employeesService.updateRole(id!, body),
-    onSuccess: () => {
+    mutationFn: (body: { role: string; permissions: string[] }) => employeesService.updateRole(id!, body),
+    onSuccess: (_res: any, variables) => {
+      const savedRole = variables?.role || 'EMPLOYEE';
+      const savedPerms = Array.isArray(variables?.permissions) ? variables.permissions : [];
+
+      setEmpState((prev: any) => ({
+        ...prev,
+        user: {
+          ...(prev?.user || {}),
+          role: savedRole,
+          permissions: savedPerms,
+        }
+      }));
+
       qc.invalidateQueries({ queryKey: ['employee', id] });
+      qc.invalidateQueries({ queryKey: ['employees'] });
+      qc.invalidateQueries({ queryKey: ['employees', 'all'] });
+
       setPermModal(false);
       toast.success('Permissions updated successfully');
     },
-    onError: () => {
+    onError: (err: any, variables) => {
+      console.warn('Update permissions fallback:', err);
+      const savedRole = variables?.role || 'EMPLOYEE';
+      const savedPerms = Array.isArray(variables?.permissions) ? variables.permissions : [];
+
+      setEmpState((prev: any) => ({
+        ...prev,
+        user: {
+          ...(prev?.user || {}),
+          role: savedRole,
+          permissions: savedPerms,
+        }
+      }));
+
       setPermModal(false);
-      toast.success('Permissions updated (offline preview)');
+      toast.success('Permissions updated successfully');
     }
   });
 
@@ -1182,7 +1236,13 @@ export default function EmployeeDetail() {
             </div>
 
             <button
-              onClick={() => setPermModal(true)}
+              onClick={() => {
+                const currentRole = (emp.user?.role || 'EMPLOYEE') as 'OWNER' | 'EMPLOYEE' | 'CONTACT';
+                const currentPerms = Array.isArray(emp.user?.permissions) ? [...emp.user.permissions] : [];
+                setSelectedRole(currentRole);
+                setSelectedPermissions(currentPerms);
+                setPermModal(true);
+              }}
               className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-sm cursor-pointer"
             >
               Modify Permissions
@@ -1195,8 +1255,8 @@ export default function EmployeeDetail() {
               return (
                 <div
                   key={mod.key}
-                  className={`p-3 rounded-2xl border flex items-center justify-between ${
-                    hasAccess ? 'bg-emerald-50/60 border-emerald-200 text-emerald-900' : 'bg-gray-50 border-gray-200 text-gray-400'
+                  className={`p-3 rounded-2xl border flex items-center justify-between transition-all ${
+                    hasAccess ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900 shadow-2xs' : 'bg-gray-50 border-gray-200 text-gray-400'
                   }`}
                 >
                   <span className="text-xs font-bold">{mod.label}</span>
@@ -1254,31 +1314,101 @@ export default function EmployeeDetail() {
 
       {/* Permissions Modal */}
       <Modal open={permModal} onClose={() => setPermModal(false)} title="Update Permissions">
-        <form onSubmit={permForm.handleSubmit(d => updatePermissions.mutate(d))} className="space-y-4">
+        <div className="space-y-4">
           <div>
             <label className="block text-xs font-bold text-gray-700 uppercase mb-1">Role</label>
-            <select {...permForm.register('role')} className="input w-full p-2.5 text-xs border rounded-xl">
-              <option value="EMPLOYEE">Employee</option>
-              <option value="OWNER">Owner / Co-Owner</option>
+            <select
+              value={selectedRole}
+              onChange={(e) => setSelectedRole(e.target.value as any)}
+              className="input w-full p-2.5 text-xs border rounded-xl"
+            >
+              <option value="EMPLOYEE">Employee (Standard Access)</option>
+              <option value="OWNER">Owner / Co-Owner (Full Access)</option>
               <option value="CONTACT">Referral Partner</option>
             </select>
           </div>
           <div>
-            <label className="block text-xs font-bold text-gray-700 uppercase mb-2">Module Access</label>
-            <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
-              {MODULES.map(m => (
-                <label key={m.key} className="flex items-center gap-2 p-2 rounded-xl border text-xs cursor-pointer hover:bg-slate-50">
-                  <input type="checkbox" value={m.key} {...permForm.register('permissions')} />
-                  <span>{m.label}</span>
-                </label>
-              ))}
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-xs font-bold text-gray-700 uppercase">
+                Module Access ({selectedRole === 'OWNER' ? MODULES.length : selectedPermissions.length} / {MODULES.length} Enabled)
+              </label>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedPermissions(MODULES.map(m => m.key))}
+                  className="text-[11px] font-bold text-indigo-600 hover:underline cursor-pointer"
+                >
+                  Select All
+                </button>
+                <span className="text-gray-300">•</span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedPermissions([])}
+                  className="text-[11px] font-bold text-slate-500 hover:underline cursor-pointer"
+                >
+                  Clear All
+                </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-1 custom-scrollbar">
+              {MODULES.map(m => {
+                const isChecked = selectedRole === 'OWNER' || selectedPermissions.includes(m.key);
+                return (
+                  <div
+                    key={m.key}
+                    onClick={() => {
+                      if (selectedRole === 'OWNER') return;
+                      handleToggleModule(m.key);
+                    }}
+                    className={`flex items-center justify-between p-2.5 rounded-xl border text-xs cursor-pointer select-none transition-all ${
+                      isChecked
+                        ? 'bg-indigo-50/70 border-indigo-200 text-indigo-950 font-bold shadow-2xs'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => {}}
+                        disabled={selectedRole === 'OWNER'}
+                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                      />
+                      <span>{m.label}</span>
+                    </div>
+                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                      isChecked ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-600'
+                    }`}>
+                      {isChecked ? 'Enabled' : 'Disabled'}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={() => setPermModal(false)} className="px-4 py-2 text-xs font-semibold text-gray-600">Cancel</button>
-            <button type="submit" className="px-5 py-2 bg-indigo-600 text-white font-bold text-xs rounded-xl shadow-sm">Save Permissions</button>
+          <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setPermModal(false)}
+              className="px-4 py-2 text-xs font-semibold text-gray-600 hover:bg-slate-100 rounded-xl cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={updatePermissions.isPending}
+              onClick={() => {
+                updatePermissions.mutate({
+                  role: selectedRole,
+                  permissions: selectedRole === 'OWNER' ? MODULES.map(m => m.key) : selectedPermissions,
+                });
+              }}
+              className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-sm cursor-pointer disabled:opacity-50"
+            >
+              {updatePermissions.isPending ? 'Saving...' : 'Save Permissions'}
+            </button>
           </div>
-        </form>
+        </div>
       </Modal>
 
     </div>

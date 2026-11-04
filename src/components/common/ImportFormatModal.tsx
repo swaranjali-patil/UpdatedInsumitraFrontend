@@ -15,10 +15,12 @@ interface Props {
   description: string;
   warning: string;
   columns: ImportFormatColumn[];
-  sampleRow: string[];
+  sampleRow?: string[];
+  sampleRows?: string[][];
   fileFormats: string;
   sampleFileName: string;
   sampleFileType?: 'csv' | 'xlsx';
+  sheetName?: string;
 }
 
 export default function ImportFormatModal({
@@ -30,25 +32,28 @@ export default function ImportFormatModal({
   warning,
   columns,
   sampleRow,
+  sampleRows,
   fileFormats,
   sampleFileName,
   sampleFileType = 'csv',
+  sheetName,
 }: Props) {
   const downloadSample = () => {
+    const rowsToExport = sampleRows && sampleRows.length > 0 ? sampleRows : (sampleRow ? [sampleRow] : []);
     if (sampleFileType === 'xlsx') {
       const worksheet = XLSX.utils.aoa_to_sheet([
         columns.map(column => column.name),
-        sampleRow,
+        ...rowsToExport,
       ]);
       const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'Contacts');
+      XLSX.utils.book_append_sheet(workbook, worksheet, sheetName || 'Data');
       XLSX.writeFile(workbook, sampleFileName);
       return;
     }
-    const escapeCsvCell = (value: string) => `"${value.replace(/"/g, '""')}"`;
+    const escapeCsvCell = (value: string) => `"${(value || '').replace(/"/g, '""')}"`;
     const csv = [
       columns.map(column => column.name),
-      sampleRow,
+      ...rowsToExport,
     ].map(row => row.map(escapeCsvCell).join(',')).join('\r\n');
     const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }));
     const link = document.createElement('a');
@@ -85,23 +90,25 @@ export default function ImportFormatModal({
         </div>
 
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-          <div className="grid grid-cols-[minmax(120px,0.8fr)_minmax(0,1.6fr)] bg-slate-50 px-3 py-2 text-[9px] font-extrabold uppercase tracking-wider text-slate-500">
+          <div className="grid grid-cols-[minmax(140px,0.85fr)_minmax(0,1.55fr)] bg-slate-50 px-3 py-2 text-[9px] font-extrabold uppercase tracking-wider text-slate-500 border-b border-slate-200 sticky top-0 z-10">
             <span>Column</span>
             <span>Requirement and format</span>
           </div>
-          {columns.map(column => (
-            <div
-              key={column.name}
-              className="grid grid-cols-[minmax(120px,0.8fr)_minmax(0,1.6fr)] border-t border-slate-100 px-3 py-2 text-[11px] leading-relaxed"
-            >
-              <span className="font-bold text-slate-700">{column.name}</span>
-              <span className="text-slate-600">{column.requirement}</span>
-            </div>
-          ))}
+          <div className="max-h-[46vh] overflow-y-auto divide-y divide-slate-100">
+            {columns.map(column => (
+              <div
+                key={column.name}
+                className="grid grid-cols-[minmax(140px,0.85fr)_minmax(0,1.55fr)] px-3 py-2 text-[11px] leading-relaxed"
+              >
+                <span className="font-bold text-slate-700">{column.name}</span>
+                <span className="text-slate-600">{column.requirement}</span>
+              </div>
+            ))}
+          </div>
         </div>
 
         <p className="text-[10px] text-slate-500">
-          Supported format: {fileFormats}. Keep the column headers unchanged. Replace the sample row before importing.
+          Supported format: {fileFormats}. Keep the column headers unchanged. Replace the sample data before importing.
         </p>
 
         <div className="flex justify-end">

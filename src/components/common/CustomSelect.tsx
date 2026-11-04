@@ -45,7 +45,9 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
     return { ...opt, value: String(opt.value) };
   });
 
-  const selectedOption = normalizedOptions.find(o => String(o.value) === String(value));
+  const selectedOption =
+    normalizedOptions.find(o => String(o.value) === String(value)) ||
+    normalizedOptions.find(o => String(o.value).toLowerCase() === String(value).toLowerCase());
 
   const updateDropdownPosition = useCallback(() => {
     if (!containerRef.current) return;
@@ -158,7 +160,9 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
             <div className="px-3 py-2.5 text-xs text-slate-400 text-center">No options found</div>
           ) : (
             filteredOptions.map(opt => {
-              const isSelected = String(opt.value) === String(value);
+              const isSelected =
+                String(opt.value) === String(value) ||
+                (Boolean(value) && String(opt.value).toLowerCase() === String(value).toLowerCase());
               return (
                 <div
                   key={opt.value}
@@ -205,8 +209,8 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
           isOpen && 'ring-2 ring-blue-500/20 border-blue-500'
         )}
       >
-        <span className={clsx('truncate', !selectedOption || !selectedOption.value ? 'text-slate-400' : 'text-slate-800 font-medium')}>
-          {selectedOption ? selectedOption.label : placeholder}
+        <span className={clsx('truncate', (!selectedOption || !selectedOption.value) && !value ? 'text-slate-400' : 'text-slate-800 font-medium')}>
+          {selectedOption ? selectedOption.label : (value ? String(value) : placeholder)}
         </span>
         <ChevronDown
           size={14}

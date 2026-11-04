@@ -4,7 +4,7 @@ import {
   Users, Shield, FileText, TrendingUp, DollarSign, AlertCircle,
   RefreshCw, Plus, Calendar, ChevronRight, CheckCircle,
   Clock, UserPlus, Briefcase, PhoneCall, Star, Award, Settings,
-  BarChart2, Activity, RotateCcw
+  BarChart2, Activity, RotateCcw, FileCheck2
 } from 'lucide-react';
 import { format, isToday, isTomorrow, differenceInDays } from 'date-fns';
 import {
@@ -17,6 +17,8 @@ import { SkeletonCard, SkeletonChart, SkeletonTable } from '@comps/common/Skelet
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '@store/auth.store';
 import { claimsService, employeesService } from '@api/index';
+import { DatePicker } from '@comps/common/DatePicker';
+import { getClaimUiStatus, getClaimNotesData } from './Claims';
 import clsx from 'clsx';
 
 // ── Dashboard Mock Data ──────────────────────────────────────────────────────
@@ -241,21 +243,6 @@ function fmtINR(n?: number) {
   return `₹${n.toLocaleString('en-IN')}`;
 }
 
-function getClaimNotesData(notesField?: string | null) {
-  if (!notesField) return { hospital: '', diagnosis: '' };
-  try {
-    if (notesField.trim().startsWith('{')) {
-      const parsed = JSON.parse(notesField);
-      return {
-        hospital: parsed.hospital || '',
-        diagnosis: parsed.diagnosis || '',
-      };
-    }
-  } catch (e) {
-    // ignore
-  }
-  return { hospital: '', diagnosis: notesField || '' };
-}
 
 // ── Section header inside cards ──────────────────────────────────────────────
 function SectionHeader({ title, action, onAction }: { title: string; action?: string; onAction?: () => void }) {
@@ -797,17 +784,23 @@ function DatabaseSummary({ summaryData }: { summaryData: any }) {
   );
 }
 
-// ── Claims Reports Panel Component ───────────────────────────────────────────
+// ── Claims Reports & Analytics Panel Component ─────────────────────────────
 function ClaimsReportsTab() {
   const navigate = useNavigate();
   const { data: claimsRes, isLoading: claimsLoading } = useClaims({ page: 1, limit: 1000 });
   const rawClaims = claimsRes?.data ?? [];
   const claims = (rawClaims && rawClaims.length > 0) ? rawClaims : FALLBACK_CLAIMS_FOR_REPORTS;
+  const { data: employeesRes } = useQuery({ queryKey: ['employees-list'], queryFn: () => employeesService.list().catch(() => ({ data: [] })) });
+  const employees = employeesRes?.data ?? [];
 
+  // Filter States
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [duration, setDuration] = useState('ALL');
   const [selectedCompany, setSelectedCompany] = useState('ALL');
   const [hospitalQuery, setHospitalQuery] = useState('');
   const [claimType, setClaimType] = useState('ALL');
+  const [selectedAgent, setSelectedAgent] = useState('');
   const [graphCompanySelect, setGraphCompanySelect] = useState('ALL');
   const [pieChartMetric, setPieChartMetric] = useState<'count' | 'claimed' | 'settled'>('count');
   const [timeGraphMonths, setTimeGraphMonths] = useState<string>('12');
@@ -825,7 +818,9 @@ function ClaimsReportsTab() {
   // Filter claims
   const filteredClaims = useMemo(() => {
     return claims.filter((c: any) => {
-      // Filter by Type (Cashless vs Reimbursement vs others)
+      const notesData = getClaimNotesData(c.notes);
+
+      // Filter by Type
       if (claimType !== 'ALL') {
         const typeMatch = (c.claimType || '').toUpperCase() === claimType.toUpperCase();
         if (!typeMatch) return false;
@@ -833,15 +828,32 @@ function ClaimsReportsTab() {
 
       // Filter by Company
       if (selectedCompany !== 'ALL') {
-        const comp = c.policy?.plan?.company?.name;
-        if (comp !== selectedCompany) return false;
+        const comp = c.policy?.plan?.company?.name || '';
+        if (comp.toLowerCase() !== selectedCompany.toLowerCase()) return false;
       }
 
       // Filter by Hospital
       if (hospitalQuery.trim()) {
-        const notesData = getClaimNotesData(c.notes);
         const hospName = (notesData.hospital || '').toLowerCase();
         if (!hospName.includes(hospitalQuery.toLowerCase())) return false;
+      }
+
+      // Filter by Start Date
+      if (startDate) {
+        const start = new Date(startDate).setHours(0, 0, 0, 0);
+        const dStr = c.intimatedAt || c.createdAt;
+        if (!dStr) return false;
+        const d = new Date(dStr).getTime();
+        if (isNaN(d) || d < start) return false;
+      }
+
+      // Filter by End Date
+      if (endDate) {
+        const end = new Date(endDate).setHours(23, 59, 59, 999);
+        const dStr = c.intimatedAt || c.createdAt;
+        if (!dStr) return false;
+        const d = new Date(dStr).getTime();
+        if (isNaN(d) || d > end) return false;
       }
 
       // Filter by Duration
@@ -853,41 +865,145 @@ function ClaimsReportsTab() {
         if (duration === '365' && daysDiff > 365) return false;
       }
 
+      // Filter by Agent
+      if (selectedAgent && c.assignedEmployeeId !== selectedAgent) return false;
+
       return true;
     });
-  }, [claims, claimType, selectedCompany, hospitalQuery, duration]);
+  }, [claims, claimType, selectedCompany, hospitalQuery, startDate, endDate, duration, selectedAgent]);
 
-  // Compute stats
+  // Calculations for Advanced Analytics & KPIs
   const stats = useMemo(() => {
-    let totalCount = filteredClaims.length;
-    let claimedSum = 0;
-    let settledSum = 0;
-    let pendingCount = 0;
-    let rejectedCount = 0;
+    let totalClaimed = 0;
+    let totalSettled = 0;
+    let totalPending = 0;
+    const companyMap: Record<string, { count: number; claimed: number; settled: number }> = {};
+    const hospitalMap: Record<string, { count: number; claimed: number; settled: number }> = {};
+    const typeMap: Record<string, { count: number; claimed: number; settled: number }> = {};
+    const statusMap: Record<string, { count: number; claimed: number; settled: number }> = {
+      Pending: { count: 0, claimed: 0, settled: 0 },
+      'In Progress': { count: 0, claimed: 0, settled: 0 },
+      Approved: { count: 0, claimed: 0, settled: 0 },
+      Settled: { count: 0, claimed: 0, settled: 0 },
+      Rejected: { count: 0, claimed: 0, settled: 0 },
+    };
 
     filteredClaims.forEach((c: any) => {
-      claimedSum += Number(c.claimAmount || 0);
-      // APPROVED & SETTLED count as payouts
-      if (c.status === 'SETTLED' || c.status === 'APPROVED') {
-        settledSum += Number(c.approvedAmount || c.claimAmount || 0);
-      } else if (c.status === 'PENDING' || c.status === 'IN_PROGRESS') {
-        pendingCount += 1;
-      } else if (c.status === 'REJECTED') {
-        rejectedCount += 1;
-      }
+      const notes = getClaimNotesData(c.notes);
+      const claimed = Number(c.claimAmount || 0);
+      const approved = Number(c.approvedAmount || 0);
+      const notedSettlement = Number(notes.amtPayableToInsured || 0);
+      const statusStr = getClaimUiStatus(c);
+      const isSettled = statusStr === 'Settled';
+      const settled = approved > 0
+        ? approved
+        : notedSettlement > 0
+          ? notedSettlement
+          : isSettled ? claimed : (c.status === 'SETTLED' || c.status === 'APPROVED' ? (approved || claimed) : 0);
+
+      const company = c.policy?.plan?.company?.name || 'Unknown Company';
+      const hospital = notes.hospital || 'Outpatient / Other';
+      const type = c.claimType || 'Other';
+
+      totalClaimed += claimed;
+      totalSettled += settled;
+      totalPending += Math.max(0, claimed - settled);
+
+      // Company
+      if (!companyMap[company]) companyMap[company] = { count: 0, claimed: 0, settled: 0 };
+      companyMap[company].count++;
+      companyMap[company].claimed += claimed;
+      companyMap[company].settled += settled;
+
+      // Hospital
+      if (!hospitalMap[hospital]) hospitalMap[hospital] = { count: 0, claimed: 0, settled: 0 };
+      hospitalMap[hospital].count++;
+      hospitalMap[hospital].claimed += claimed;
+      hospitalMap[hospital].settled += settled;
+
+      // Type
+      if (!typeMap[type]) typeMap[type] = { count: 0, claimed: 0, settled: 0 };
+      typeMap[type].count++;
+      typeMap[type].claimed += claimed;
+      typeMap[type].settled += settled;
+
+      // Status
+      if (!statusMap[statusStr]) statusMap[statusStr] = { count: 0, claimed: 0, settled: 0 };
+      statusMap[statusStr].count++;
+      statusMap[statusStr].claimed += claimed;
+      statusMap[statusStr].settled += settled;
     });
 
-    const ratio = claimedSum > 0 ? (settledSum / claimedSum) * 100 : 0;
+    const pendingClaimed = totalPending;
+    const settlementRatio = totalClaimed > 0 ? (totalSettled / totalClaimed) * 100 : 0;
+    const avgClaim = filteredClaims.length > 0 ? totalClaimed / filteredClaims.length : 0;
 
     return {
-      totalCount,
-      claimedSum,
-      settledSum,
-      pendingCount,
-      rejectedCount,
-      ratio
+      totalClaims: filteredClaims.length,
+      totalClaimed,
+      totalSettled,
+      pendingClaimed,
+      settlementRatio,
+      avgClaim,
+      companies: Object.entries(companyMap).map(([name, v]) => ({ name, ...v })),
+      hospitals: Object.entries(hospitalMap).map(([name, v]) => ({ name, ...v })),
+      types: Object.entries(typeMap).map(([name, v]) => ({ name, ...v })),
+      statuses: Object.entries(statusMap).map(([name, v]) => ({ name, ...v })),
     };
   }, [filteredClaims]);
+
+  // Group claims by Month for Visual SVG Line Chart
+  const monthlyData = useMemo(() => {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const values = months.map(() => 0);
+    filteredClaims.forEach((c: any) => {
+      const dStr = c.intimatedAt || c.createdAt;
+      if (dStr) {
+        const m = new Date(dStr).getMonth();
+        if (m >= 0 && m < 12) {
+          values[m] += Number(c.claimAmount || 0);
+        }
+      }
+    });
+    return { months, values };
+  }, [filteredClaims]);
+
+  // Export Analytics CSV
+  const exportAnalytics = () => {
+    let csvContent = "data:text/csv;charset=utf-8,";
+    csvContent += "Category,Name,Total Claims,Claimed Amount,Settled Amount\n";
+
+    // Summary
+    csvContent += `Summary,All Filtered Claims,${stats.totalClaims},${stats.totalClaimed},${stats.totalSettled}\n\n`;
+
+    // Company wise
+    csvContent += "Company-wise Breakdown,,,\n";
+    stats.companies.forEach(item => {
+      csvContent += `Company,"${item.name.replace(/"/g, '""')}",${item.count},${item.claimed},${item.settled}\n`;
+    });
+    csvContent += "\n";
+
+    // Hospital wise
+    csvContent += "Hospital-wise Breakdown,,,\n";
+    stats.hospitals.forEach(item => {
+      csvContent += `Hospital,"${item.name.replace(/"/g, '""')}",${item.count},${item.claimed},${item.settled}\n`;
+    });
+    csvContent += "\n";
+
+    // Type wise
+    csvContent += "Type Breakdown,,,\n";
+    stats.types.forEach(item => {
+      csvContent += `Claim Type,"${item.name.replace(/"/g, '""')}",${item.count},${item.claimed},${item.settled}\n`;
+    });
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `claims_analytics_report_${format(new Date(), 'yyyyMMdd')}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   // Graph Data 1: Company wise (Claimed vs Settled)
   const companyGraphData = useMemo(() => {
@@ -896,7 +1012,7 @@ function ClaimsReportsTab() {
       const comp = c.policy?.plan?.company?.name || 'Other';
       const entry = map.get(comp) || { company: comp, claimed: 0, settled: 0 };
       entry.claimed += Number(c.claimAmount || 0);
-      if (c.status === 'SETTLED' || c.status === 'APPROVED') {
+      if (c.status === 'SETTLED' || c.status === 'APPROVED' || getClaimUiStatus(c) === 'Settled') {
         entry.settled += Number(c.approvedAmount || c.claimAmount || 0);
       }
       map.set(comp, entry);
@@ -904,7 +1020,7 @@ function ClaimsReportsTab() {
 
     const sorted = Array.from(map.values()).sort((a, b) => b.claimed - a.claimed);
     if (graphCompanySelect === 'ALL') {
-      return sorted.slice(0, 5); // Default top 5
+      return sorted.slice(0, 5);
     }
     return sorted.filter(c => c.company === graphCompanySelect);
   }, [filteredClaims, graphCompanySelect]);
@@ -917,7 +1033,7 @@ function ClaimsReportsTab() {
       const entry = map.get(type) || { count: 0, claimed: 0, settled: 0 };
       entry.count += 1;
       entry.claimed += Number(c.claimAmount || 0);
-      if (c.status === 'SETTLED' || c.status === 'APPROVED') {
+      if (c.status === 'SETTLED' || c.status === 'APPROVED' || getClaimUiStatus(c) === 'Settled') {
         entry.settled += Number(c.approvedAmount || c.claimAmount || 0);
       }
       map.set(type, entry);
@@ -936,7 +1052,7 @@ function ClaimsReportsTab() {
     return Array.from(map.entries())
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value)
-      .slice(0, 8); // Top 8 hospitals
+      .slice(0, 8);
   }, [filteredClaims]);
 
   // Graph Data 4: Duration / Timeline (Claimed vs Settled)
@@ -953,7 +1069,7 @@ function ClaimsReportsTab() {
       const key = format(date, 'MMM yyyy');
       const entry = map.get(key) || { month: key, claimed: 0, settled: 0 };
       entry.claimed += Number(c.claimAmount || 0);
-      if (c.status === 'SETTLED' || c.status === 'APPROVED') {
+      if (c.status === 'SETTLED' || c.status === 'APPROVED' || getClaimUiStatus(c) === 'Settled') {
         entry.settled += Number(c.approvedAmount || c.claimAmount || 0);
       }
       map.set(key, entry);
@@ -973,12 +1089,41 @@ function ClaimsReportsTab() {
     );
   }
 
-  const hasActiveFilters = duration !== 'ALL' || selectedCompany !== 'ALL' || claimType !== 'ALL' || hospitalQuery.trim() !== '';
+  const hasActiveFilters = duration !== 'ALL' || selectedCompany !== 'ALL' || claimType !== 'ALL' || hospitalQuery.trim() !== '' || startDate !== '' || endDate !== '' || selectedAgent !== '';
+
+  const handleResetFilters = () => {
+    setDuration('ALL');
+    setSelectedCompany('ALL');
+    setClaimType('ALL');
+    setHospitalQuery('');
+    setStartDate('');
+    setEndDate('');
+    setSelectedAgent('');
+  };
 
   return (
     <div className="space-y-6 animate-fadeIn">
-      {/* Filters Bar */}
-      <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm space-y-3">
+      {/* Header Banner */}
+      <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h3 className="text-base font-bold text-gray-800 flex items-center gap-2">
+            <FileCheck2 size={20} className="text-blue-600" />
+            Claims Analytics & Reports Dashboard
+          </h3>
+          <p className="text-xs text-gray-500 mt-0.5">Real-time statistics, graphs, breakdown tables, and filtered reports</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={exportAnalytics}
+            className="btn-primary h-9 py-0 px-3.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center gap-1.5 shadow-sm rounded-xl cursor-pointer transition-all"
+          >
+            <FileCheck2 size={14} /> Export Report (CSV)
+          </button>
+        </div>
+      </div>
+
+      {/* Advanced Filters Panel */}
+      <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-xs font-bold text-gray-700 uppercase tracking-wide">Filter Claims & Analytics</span>
@@ -989,25 +1134,42 @@ function ClaimsReportsTab() {
           {hasActiveFilters && (
             <button
               type="button"
-              onClick={() => {
-                setDuration('ALL');
-                setSelectedCompany('ALL');
-                setClaimType('ALL');
-                setHospitalQuery('');
-              }}
+              onClick={handleResetFilters}
               className="text-xs font-bold text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1 cursor-pointer transition-colors"
             >
               <RotateCcw className="w-3 h-3" /> Reset All Filters
             </button>
           )}
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-          <div>
-            <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">Duration</label>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+          {/* Start Date */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Start Date</label>
+            <DatePicker
+              value={startDate}
+              onDateChange={setStartDate}
+              className="w-full py-1 px-2 text-xs bg-gray-50 border border-gray-200 rounded-lg outline-none font-bold text-gray-600"
+            />
+          </div>
+
+          {/* End Date */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">End Date</label>
+            <DatePicker
+              value={endDate}
+              onDateChange={setEndDate}
+              className="w-full py-1 px-2 text-xs bg-gray-50 border border-gray-200 rounded-lg outline-none font-bold text-gray-600"
+            />
+          </div>
+
+          {/* Duration */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Duration</label>
             <select
               value={duration}
               onChange={e => setDuration(e.target.value)}
-              className="w-full mt-1.5 py-1.5 px-3 text-xs bg-gray-50 border border-gray-200 rounded-lg outline-none font-bold text-gray-600"
+              className="w-full py-1.5 px-2 text-xs bg-gray-50 border border-gray-200 rounded-lg outline-none font-bold text-gray-600"
             >
               <option value="ALL">All Time</option>
               <option value="30">Last 30 Days</option>
@@ -1016,12 +1178,13 @@ function ClaimsReportsTab() {
             </select>
           </div>
 
-          <div>
-            <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">Insurance Company</label>
+          {/* Insurance Company */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Company</label>
             <select
               value={selectedCompany}
               onChange={e => setSelectedCompany(e.target.value)}
-              className="w-full mt-1.5 py-1.5 px-3 text-xs bg-gray-50 border border-gray-200 rounded-lg outline-none font-bold text-gray-600"
+              className="w-full py-1.5 px-2 text-xs bg-gray-50 border border-gray-200 rounded-lg outline-none font-bold text-gray-600"
             >
               <option value="ALL">All Companies</option>
               {companies.map(comp => (
@@ -1030,12 +1193,13 @@ function ClaimsReportsTab() {
             </select>
           </div>
 
-          <div>
-            <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">Claim Type</label>
+          {/* Claim Type */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Claim Type</label>
             <select
               value={claimType}
               onChange={e => setClaimType(e.target.value)}
-              className="w-full mt-1.5 py-1.5 px-3 text-xs bg-gray-50 border border-gray-200 rounded-lg outline-none font-bold text-gray-600"
+              className="w-full py-1.5 px-2 text-xs bg-gray-50 border border-gray-200 rounded-lg outline-none font-bold text-gray-600"
             >
               <option value="ALL">All Types</option>
               <option value="CASHLESS">Cashless</option>
@@ -1046,68 +1210,251 @@ function ClaimsReportsTab() {
             </select>
           </div>
 
-          <div>
-            <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">Hospital Name</label>
+          {/* Hospital */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Hospital</label>
             <input
               type="text"
               placeholder="Search hospital..."
               value={hospitalQuery}
               onChange={e => setHospitalQuery(e.target.value)}
-              className="w-full mt-1.5 py-1.5 px-3 text-xs bg-gray-50 border border-gray-200 rounded-lg outline-none font-bold text-gray-600 placeholder-gray-400"
+              className="w-full py-1.5 px-2 text-xs bg-gray-50 border border-gray-200 rounded-lg outline-none font-bold text-gray-600 placeholder-gray-400"
             />
+          </div>
+
+          {/* Agent */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Agent</label>
+            <select
+              value={selectedAgent}
+              onChange={e => setSelectedAgent(e.target.value)}
+              className="w-full py-1.5 px-2 text-xs bg-gray-50 border border-gray-200 rounded-lg outline-none font-bold text-gray-600"
+            >
+              <option value="">All Agents</option>
+              {employees.map((emp: any) => (
+                <option key={emp.id} value={emp.id}>{emp.firstName} {emp.lastName}</option>
+              ))}
+            </select>
           </div>
         </div>
       </div>
 
-      {/* Stats Cards */}
+      {/* Claim Stage Count Cards Row */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4">
+        {['Pending', 'In Progress', 'Approved', 'Settled', 'Rejected'].map(status => {
+          const statusData = stats.statuses.find(s => s.name === status);
+          const count = statusData ? statusData.count : 0;
+          return (
+            <div key={status} className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm flex flex-col justify-between items-center text-center">
+              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{status}</span>
+              <span className="text-xl font-black text-indigo-600 mt-1">{count}</span>
+            </div>
+          );
+        })}
+        <div className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm flex flex-col justify-between items-center text-center">
+          <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Total Claims</span>
+          <span className="text-xl font-black text-slate-800 mt-1">{stats.totalClaims}</span>
+        </div>
+      </div>
+
+      {/* 6 KPI Metric Cards Row */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
         <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm flex flex-col justify-between min-h-[112px]">
           <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide">Total Claims</span>
-          <span className="text-2xl font-black text-gray-900 mt-1">{stats.totalCount}</span>
+          <span className="text-2xl font-black text-gray-900 mt-1">{stats.totalClaims}</span>
           <span className="text-[10px] text-gray-400 font-semibold truncate">Matching filtered criteria</span>
         </div>
         <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm flex flex-col justify-between min-h-[112px]">
-          <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide">Claimed Amount</span>
-          <span className="text-2xl font-black text-blue-600 mt-1">₹{stats.claimedSum.toLocaleString('en-IN')}</span>
+          <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide">Claimed Amt</span>
+          <span className="text-2xl font-black text-blue-600 mt-1">₹{Math.round(stats.totalClaimed).toLocaleString('en-IN')}</span>
           <span className="text-[10px] text-gray-400 font-semibold truncate">Sum of total claims</span>
         </div>
         <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm flex flex-col justify-between min-h-[112px]">
-          <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide">Settled Amount</span>
-          <span className="text-2xl font-black text-emerald-600 mt-1">₹{stats.settledSum.toLocaleString('en-IN')}</span>
+          <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide">Settled Amt</span>
+          <span className="text-2xl font-black text-emerald-600 mt-1">₹{Math.round(stats.totalSettled).toLocaleString('en-IN')}</span>
           <span className="text-[10px] text-gray-400 font-semibold truncate">Total paid out amount</span>
         </div>
         <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm flex flex-col justify-between min-h-[112px]">
-          <span className="text-[11px] font-bold text-amber-500 uppercase tracking-wide">Pending Claims</span>
-          <span className="text-2xl font-black text-amber-600 mt-1">{stats.pendingCount}</span>
-          <span className="text-[10px] text-amber-600/70 font-semibold truncate">In progress & pending</span>
-        </div>
-        <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm flex flex-col justify-between min-h-[112px]">
-          <span className="text-[11px] font-bold text-red-500 uppercase tracking-wide">Rejected Claims</span>
-          <span className="text-2xl font-black text-red-600 mt-1">{stats.rejectedCount}</span>
-          <span className="text-[10px] text-red-600/70 font-semibold truncate">Exclusions & repudiated</span>
+          <span className="text-[11px] font-bold text-amber-500 uppercase tracking-wide">Pending Amt</span>
+          <span className="text-2xl font-black text-amber-600 mt-1">₹{Math.round(stats.pendingClaimed).toLocaleString('en-IN')}</span>
+          <span className="text-[10px] text-amber-600/70 font-semibold truncate">Unsettled / In-flight</span>
         </div>
         <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm flex flex-col justify-between min-h-[112px]">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide">Settlement Ratio</span>
-            <span className={`text-[10px] font-bold ${stats.ratio >= 85 ? 'text-emerald-600' : stats.ratio >= 70 ? 'text-amber-600' : 'text-red-600'}`}>
-              {stats.ratio >= 85 ? '▲ High' : stats.ratio >= 70 ? '▲ Moderate' : '▼ Low'}
+            <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide">Settlement %</span>
+            <span className={`text-[10px] font-bold ${stats.settlementRatio >= 85 ? 'text-emerald-600' : stats.settlementRatio >= 70 ? 'text-amber-600' : 'text-red-600'}`}>
+              {stats.settlementRatio >= 85 ? '▲ High' : stats.settlementRatio >= 70 ? '▲ Moderate' : '▼ Low'}
             </span>
           </div>
-          <span className={`text-2xl font-black mt-1 ${stats.ratio >= 85 ? 'text-emerald-600' : stats.ratio >= 70 ? 'text-amber-600' : 'text-red-600'}`}>
-            {stats.claimedSum > 0 ? `${stats.ratio.toFixed(1)}%` : '0%'}
+          <span className={`text-2xl font-black mt-1 ${stats.settlementRatio >= 85 ? 'text-emerald-600' : stats.settlementRatio >= 70 ? 'text-amber-600' : 'text-red-600'}`}>
+            {stats.totalClaimed > 0 ? `${stats.settlementRatio.toFixed(1)}%` : '0%'}
           </span>
           <div className="w-full bg-gray-100 rounded-full h-1.5 mt-2 overflow-hidden">
             <div
               className={`h-1.5 rounded-full transition-all duration-500 ${
-                stats.ratio >= 85 ? 'bg-emerald-500' : stats.ratio >= 70 ? 'bg-amber-500' : 'bg-red-500'
+                stats.settlementRatio >= 85 ? 'bg-emerald-500' : stats.settlementRatio >= 70 ? 'bg-amber-500' : 'bg-red-500'
               }`}
-              style={{ width: `${Math.min(100, Math.max(0, stats.ratio))}%` }}
+              style={{ width: `${Math.min(100, Math.max(0, stats.settlementRatio))}%` }}
             />
+          </div>
+        </div>
+        <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm flex flex-col justify-between min-h-[112px]">
+          <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide">Avg Claim</span>
+          <span className="text-2xl font-black text-slate-800 mt-1">₹{Math.round(stats.avgClaim).toLocaleString('en-IN')}</span>
+          <span className="text-[10px] text-gray-400 font-semibold truncate">Average claim size</span>
+        </div>
+      </div>
+
+      {/* Section 1: Visual Interactive SVG Charts (From Claims Analytics) */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {/* Chart 1: Claims Trend (Monthly) */}
+        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm space-y-4">
+          <div>
+            <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider">Claims Trend (Monthly)</h4>
+            <p className="text-[10px] text-gray-400 font-semibold">Total claimed amount in ₹ across months</p>
+          </div>
+          <div className="relative h-44 flex items-end justify-center">
+            <svg viewBox="0 0 240 120" className="w-full h-full">
+              {/* Grid Lines */}
+              <line x1="10" y1="20" x2="230" y2="20" stroke="#f1f5f9" strokeWidth="1" />
+              <line x1="10" y1="60" x2="230" y2="60" stroke="#f1f5f9" strokeWidth="1" />
+              <line x1="10" y1="100" x2="230" y2="100" stroke="#e2e8f0" strokeWidth="1" />
+
+              {/* Polyline */}
+              {(() => {
+                const maxVal = Math.max(...monthlyData.values, 1);
+                const points = monthlyData.values.map((val, idx) => {
+                  const x = 10 + idx * 20;
+                  const y = 100 - (val / maxVal) * 80;
+                  return `${x},${y}`;
+                }).join(' ');
+                return (
+                  <>
+                    <polyline fill="none" stroke="#3b82f6" strokeWidth="2.5" points={points} />
+                    {monthlyData.values.map((val, idx) => {
+                      const x = 10 + idx * 20;
+                      const y = 100 - (val / maxVal) * 80;
+                      if (val === 0) return null;
+                      return (
+                        <circle key={idx} cx={x} cy={y} r="3.5" fill="#2563eb" stroke="#ffffff" strokeWidth="1.5" />
+                      );
+                    })}
+                  </>
+                );
+              })()}
+
+              {/* X Axis Labels */}
+              {monthlyData.months.map((m, idx) => (
+                <text key={m} x={10 + idx * 20} y="115" fontSize="6.5" fill="#94a3b8" textAnchor="middle">{m}</text>
+              ))}
+            </svg>
+          </div>
+        </div>
+
+        {/* Chart 2: Claim Type Share (SVG Doughnut Chart) */}
+        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm space-y-4">
+          <div>
+            <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider">Claim Type Share</h4>
+            <p className="text-[10px] text-gray-400 font-semibold">Cashless vs Reimbursement distribution</p>
+          </div>
+          <div className="h-44 flex items-center justify-between gap-2">
+            <div className="w-1/2 relative flex items-center justify-center">
+              <svg width="100" height="100" viewBox="0 0 36 36" className="w-24 h-24">
+                <circle cx="18" cy="18" r="15.915" fill="none" stroke="#f1f5f9" strokeWidth="3" />
+                {(() => {
+                  let accumulatedPercent = 0;
+                  const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ec4899', '#6366f1'];
+                  return stats.types.map((type, idx) => {
+                    const pct = stats.totalClaims > 0 ? (type.count / stats.totalClaims) * 100 : 0;
+                    const dashArray = `${pct} ${100 - pct}`;
+                    const dashOffset = 100 - accumulatedPercent + 25;
+                    accumulatedPercent += pct;
+                    return (
+                      <circle
+                        key={type.name}
+                        cx="18"
+                        cy="18"
+                        r="15.915"
+                        fill="none"
+                        stroke={colors[idx % colors.length]}
+                        strokeWidth="3.5"
+                        strokeDasharray={dashArray}
+                        strokeDashoffset={dashOffset}
+                      />
+                    );
+                  });
+                })()}
+              </svg>
+              <div className="absolute flex flex-col items-center justify-center">
+                <span className="text-[10px] text-gray-400 uppercase font-semibold">Total</span>
+                <span className="text-base font-bold text-gray-800">{stats.totalClaims}</span>
+              </div>
+            </div>
+            <div className="w-1/2 space-y-1.5 max-h-36 overflow-y-auto pr-1">
+              {stats.types.map((t, idx) => {
+                const colors = ['bg-blue-500', 'bg-emerald-500', 'bg-amber-500', 'bg-pink-500', 'bg-indigo-500'];
+                const pct = stats.totalClaims > 0 ? (t.count / stats.totalClaims) * 100 : 0;
+                return (
+                  <div key={t.name} className="flex flex-wrap items-center gap-1.5 text-[9px] text-gray-600">
+                    <span className={`w-2 h-2 rounded-full ${colors[idx % colors.length]}`} />
+                    <span className="truncate font-medium flex-1">{t.name}</span>
+                    <span className="font-bold text-gray-800">{pct.toFixed(0)}%</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Chart 3: Status Distribution (SVG Bar Chart) */}
+        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm space-y-4">
+          <div>
+            <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider">Status Distribution</h4>
+            <p className="text-[10px] text-gray-400 font-semibold">Total claims per status stage</p>
+          </div>
+          <div className="relative h-44 flex items-end justify-center">
+            <svg viewBox="0 0 200 120" className="w-full h-full">
+              <line x1="10" y1="20" x2="190" y2="20" stroke="#f1f5f9" strokeWidth="1" />
+              <line x1="10" y1="60" x2="190" y2="60" stroke="#f1f5f9" strokeWidth="1" />
+              <line x1="10" y1="100" x2="190" y2="100" stroke="#e2e8f0" strokeWidth="1" />
+
+              {(() => {
+                const counts = stats.statuses.map(s => s.count);
+                const maxCount = Math.max(...counts, 1);
+                const colors: Record<string, string> = {
+                  Pending: '#3b82f6',
+                  'In Progress': '#f59e0b',
+                  Approved: '#10b981',
+                  Rejected: '#ef4444',
+                  Settled: '#059669',
+                };
+                return stats.statuses.map((s, idx) => {
+                  const barWidth = 18;
+                  const x = 20 + idx * 35;
+                  const barHeight = (s.count / maxCount) * 80;
+                  const y = 100 - barHeight;
+                  return (
+                    <g key={s.name}>
+                      <rect
+                        x={x}
+                        y={y}
+                        width={barWidth}
+                        height={barHeight}
+                        rx="2"
+                        fill={colors[s.name] || '#64748b'}
+                      />
+                      <text x={x + 9} y={y - 4} fontSize="7" fontWeight="bold" fill="#475569" textAnchor="middle">{s.count}</text>
+                      <text x={x + 9} y="113" fontSize="6" fill="#64748b" textAnchor="middle">{s.name}</text>
+                    </g>
+                  );
+                });
+              })()}
+            </svg>
           </div>
         </div>
       </div>
 
-      {/* Graphs Grid */}
+      {/* Section 2: Recharts Widgets (From Dashboard Claims Reports) */}
       <div className="grid lg:grid-cols-2 gap-6">
         <div className="relative">
           <div className="absolute top-4 right-5 z-10 flex items-center gap-2">
@@ -1190,6 +1537,168 @@ function ClaimsReportsTab() {
         </div>
       </div>
 
+      {/* Section 3: Breakdown Tables Grid (2x2) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Company-wise Breakdown */}
+        <div className="space-y-2 bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+          <h4 className="text-xs font-bold text-gray-600 uppercase tracking-wider">Company-wise Breakdown & Share</h4>
+          <div className="border border-gray-100 rounded-xl overflow-hidden bg-white max-h-56 overflow-y-auto">
+            <table className="min-w-full divide-y divide-gray-100 text-xs">
+              <thead className="bg-gray-50 font-bold text-gray-600">
+                <tr>
+                  <th className="px-3 py-2 text-left">Company</th>
+                  <th className="px-3 py-2 text-center">Claims</th>
+                  <th className="px-3 py-2 text-right">Claimed</th>
+                  <th className="px-3 py-2 text-right">Settled</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50 text-gray-700">
+                {stats.companies.length === 0 ? (
+                  <tr><td colSpan={4} className="text-center py-4 text-gray-400">No data found</td></tr>
+                ) : (
+                  stats.companies.map(c => {
+                    const pct = stats.totalClaimed > 0 ? (c.claimed / stats.totalClaimed) * 100 : 0;
+                    return (
+                      <tr key={c.name} className="hover:bg-gray-50/50">
+                        <td className="px-3 py-2">
+                          <span className="font-semibold block">{c.name}</span>
+                          <div className="w-full bg-gray-100 h-1.5 rounded-full mt-1.5 overflow-hidden">
+                            <div className="bg-blue-600 h-full rounded-full" style={{ width: `${Math.max(3, pct)}%` }} />
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 text-center font-bold">{c.count}</td>
+                        <td className="px-3 py-2 text-right">₹{c.claimed.toLocaleString('en-IN')}</td>
+                        <td className="px-3 py-2 text-right text-emerald-600 font-bold">₹{c.settled.toLocaleString('en-IN')}</td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Hospital-wise Breakdown */}
+        <div className="space-y-2 bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+          <h4 className="text-xs font-bold text-gray-600 uppercase tracking-wider">Hospital-wise Breakdown & Share</h4>
+          <div className="border border-gray-100 rounded-xl overflow-hidden bg-white max-h-56 overflow-y-auto">
+            <table className="min-w-full divide-y divide-gray-100 text-xs">
+              <thead className="bg-gray-50 font-bold text-gray-600">
+                <tr>
+                  <th className="px-3 py-2 text-left">Hospital</th>
+                  <th className="px-3 py-2 text-center">Claims</th>
+                  <th className="px-3 py-2 text-right">Claimed</th>
+                  <th className="px-3 py-2 text-right">Settled</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50 text-gray-700">
+                {stats.hospitals.length === 0 ? (
+                  <tr><td colSpan={4} className="text-center py-4 text-gray-400">No data found</td></tr>
+                ) : (
+                  stats.hospitals.map(h => {
+                    const pct = stats.totalClaimed > 0 ? (h.claimed / stats.totalClaimed) * 100 : 0;
+                    return (
+                      <tr key={h.name} className="hover:bg-gray-50/50">
+                        <td className="px-3 py-2">
+                          <span className="font-semibold block truncate max-w-[150px]" title={h.name}>{h.name}</span>
+                          <div className="w-full bg-gray-100 h-1.5 rounded-full mt-1.5 overflow-hidden">
+                            <div className="bg-indigo-600 h-full rounded-full" style={{ width: `${Math.max(3, pct)}%` }} />
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 text-center font-bold">{h.count}</td>
+                        <td className="px-3 py-2 text-right">₹{h.claimed.toLocaleString('en-IN')}</td>
+                        <td className="px-3 py-2 text-right text-emerald-600 font-bold">₹{h.settled.toLocaleString('en-IN')}</td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Claim Type Breakdown */}
+        <div className="space-y-2 bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+          <h4 className="text-xs font-bold text-gray-600 uppercase tracking-wider">Claim Type Breakdown (Cashless / Reimbursement)</h4>
+          <div className="border border-gray-100 rounded-xl overflow-hidden bg-white max-h-56 overflow-y-auto">
+            <table className="min-w-full divide-y divide-gray-100 text-xs">
+              <thead className="bg-gray-50 font-bold text-gray-600">
+                <tr>
+                  <th className="px-3 py-2 text-left">Type</th>
+                  <th className="px-3 py-2 text-center">Claims</th>
+                  <th className="px-3 py-2 text-right">Claimed</th>
+                  <th className="px-3 py-2 text-right">Settled</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50 text-gray-700">
+                {stats.types.length === 0 ? (
+                  <tr><td colSpan={4} className="text-center py-4 text-gray-400">No data found</td></tr>
+                ) : (
+                  stats.types.map(t => {
+                    const pct = stats.totalClaimed > 0 ? (t.claimed / stats.totalClaimed) * 100 : 0;
+                    return (
+                      <tr key={t.name} className="hover:bg-gray-50/50">
+                        <td className="px-3 py-2">
+                          <span className="font-semibold block">{t.name}</span>
+                          <div className="w-full bg-gray-100 h-1.5 rounded-full mt-1.5 overflow-hidden">
+                            <div className="bg-emerald-600 h-full rounded-full" style={{ width: `${Math.max(3, pct)}%` }} />
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 text-center font-bold">{t.count}</td>
+                        <td className="px-3 py-2 text-right">₹{t.claimed.toLocaleString('en-IN')}</td>
+                        <td className="px-3 py-2 text-right text-emerald-600 font-bold">₹{t.settled.toLocaleString('en-IN')}</td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Duration Breakdown */}
+        <div className="space-y-2 bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+          <h4 className="text-xs font-bold text-gray-600 uppercase tracking-wider">Duration-wise Breakdown</h4>
+          <div className="border border-gray-100 rounded-xl overflow-hidden bg-white max-h-56 overflow-y-auto">
+            <table className="min-w-full divide-y divide-gray-100 text-xs">
+              <thead className="bg-gray-50 font-bold text-gray-600">
+                <tr>
+                  <th className="px-3 py-2 text-left">Time Range</th>
+                  <th className="px-3 py-2 text-center">Claims</th>
+                  <th className="px-3 py-2 text-right">Claimed</th>
+                  <th className="px-3 py-2 text-right">Settled</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50 text-gray-700">
+                {[
+                  { name: 'Last 30 Days', filter: (c: any) => (Date.now() - new Date(c.intimatedAt || c.createdAt).getTime()) / 86400000 <= 30 },
+                  { name: '31 to 90 Days', filter: (c: any) => { const diff = (Date.now() - new Date(c.intimatedAt || c.createdAt).getTime()) / 86400000; return diff > 30 && diff <= 90; } },
+                  { name: 'Older (90+ Days)', filter: (c: any) => (Date.now() - new Date(c.intimatedAt || c.createdAt).getTime()) / 86400000 > 90 },
+                ].map(range => {
+                  const matched = filteredClaims.filter(range.filter);
+                  const claimed = matched.reduce((sum: number, c: any) => sum + Number(c.claimAmount || 0), 0);
+                  const settled = matched.reduce((sum: number, c: any) => sum + Number(c.approvedAmount || 0), 0);
+                  const pct = stats.totalClaimed > 0 ? (claimed / stats.totalClaimed) * 100 : 0;
+                  return (
+                    <tr key={range.name} className="hover:bg-gray-50/50">
+                      <td className="px-3 py-2">
+                        <span className="font-semibold block">{range.name}</span>
+                        <div className="w-full bg-gray-100 h-1.5 rounded-full mt-1.5 overflow-hidden">
+                          <div className="bg-amber-500 h-full rounded-full" style={{ width: `${Math.max(3, pct)}%` }} />
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-center font-bold">{matched.length}</td>
+                      <td className="px-3 py-2 text-right">₹{claimed.toLocaleString('en-IN')}</td>
+                      <td className="px-3 py-2 text-right text-emerald-600 font-bold">₹{settled.toLocaleString('en-IN')}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       {/* ── Claims Detailed History Table ─────────────────────────────────── */}
       <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm overflow-hidden">
         <div className="flex items-center justify-between mb-4">
@@ -1226,6 +1735,7 @@ function ClaimsReportsTab() {
                   const notesData = getClaimNotesData(c.notes);
                   const amount = Number(c.claimAmount ?? c.amount ?? 0);
                   const approved = Number(c.approvedAmount ?? (c.status === 'SETTLED' ? amount : 0));
+                  const uiStatus = getClaimUiStatus(c);
 
                   return (
                     <tr key={c.id} className="hover:bg-blue-50/30 transition-colors text-xs">
@@ -1252,13 +1762,13 @@ function ClaimsReportsTab() {
                       <td className="px-5 py-3.5">
                         <span className={clsx(
                           'inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider',
-                          c.status === 'SETTLED' || c.status === 'APPROVED' ? 'bg-green-100 text-green-700' :
-                            c.status === 'PENDING' ? 'bg-amber-100 text-amber-700' :
-                              c.status === 'IN_PROGRESS' ? 'bg-blue-100 text-blue-700' :
-                                c.status === 'REJECTED' ? 'bg-red-100 text-red-700' :
+                          uiStatus === 'Settled' || c.status === 'SETTLED' || c.status === 'APPROVED' ? 'bg-green-100 text-green-700' :
+                            uiStatus === 'Pending' || c.status === 'PENDING' ? 'bg-amber-100 text-amber-700' :
+                              uiStatus === 'In Progress' || c.status === 'IN_PROGRESS' ? 'bg-blue-100 text-blue-700' :
+                                uiStatus === 'Rejected' || c.status === 'REJECTED' ? 'bg-red-100 text-red-700' :
                                   'bg-gray-100 text-gray-700'
                         )}>
-                          {c.status || 'PENDING'}
+                          {uiStatus || c.status || 'PENDING'}
                         </span>
                       </td>
                     </tr>

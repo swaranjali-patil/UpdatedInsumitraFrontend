@@ -1629,9 +1629,9 @@ export default function EmiTrackingView({ selectedMonth }: { selectedMonth: stri
         </div>
 
         <div className="max-h-[420px] overflow-auto custom-scrollbar overscroll-contain">
-          <table className="w-full text-left text-xs">
-            <thead className="sticky top-0 z-10">
-              <tr className="bg-slate-50/80 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+          <table className="w-full text-left text-xs border-collapse">
+            <thead className="sticky top-0 z-20 bg-slate-100 shadow-xs">
+              <tr className="bg-slate-100 border-b border-slate-200 text-[11px] font-bold text-slate-700 uppercase tracking-wider">
                 {[
                   { key: 'select', label: '' },
                   { key: 'customerName', label: 'Customer Name' },
@@ -1653,7 +1653,10 @@ export default function EmiTrackingView({ selectedMonth }: { selectedMonth: stri
                   { key: 'Actions', label: 'Actions', align: 'right' }
                 ].map(h => (
                   <th key={h.key} 
-                    className={clsx(`px-4 py-3 border border-slate-200 select-none ${h.align === 'right' ? 'text-right' : ''}`, h.key !== 'Actions' && h.key !== 'select' && 'cursor-pointer hover:text-slate-900')}
+                    className={clsx(
+                      `px-4 py-3 border border-slate-200 select-none bg-slate-100 bg-clip-padding text-slate-700 ${h.align === 'right' ? 'text-right' : ''}`,
+                      h.key !== 'Actions' && h.key !== 'select' && 'cursor-pointer hover:text-slate-900 hover:bg-slate-200/70 transition-colors'
+                    )}
                     onClick={() => {
                       if (h.key === 'Actions' || h.key === 'select') return;
                       if (sortKey === h.key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');

@@ -1,7 +1,7 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Users, TrendingUp, Shield, FileText,
-  UserCheck, DollarSign, MessageSquare, Calendar,
+  UserCheck, DollarSign, MessageSquare,
   LogOut, ChevronLeft, ChevronRight,
   Lock, Briefcase, Trash2, User
 } from 'lucide-react';
@@ -10,22 +10,21 @@ import { authService } from '@api/auth.service';
 import { useAuthStore } from '@store/auth.store';
 import clsx from 'clsx';
 
-const NAV: { to: string; label: string; Icon: React.ElementType; roles?: string[]; feature?: string }[] = [
-  // { to: '/client/dashboard', label: 'Contact Portal', Icon: User, roles: ['OWNER', 'SUPERADMIN', 'EMPLOYEE'] },
-  { to: '/dashboard', label: 'Dashboard', Icon: LayoutDashboard, roles: ['OWNER', 'SUPERADMIN'], feature: 'dashboard' },
-  { to: '/workspace', label: 'Workspace', Icon: Briefcase, roles: ['EMPLOYEE', 'OWNER', 'SUPERADMIN'], feature: 'workspace' },
-  { to: '/contacts', label: 'Contacts', Icon: Users, roles: ['OWNER', 'SUPERADMIN', 'EMPLOYEE'], feature: 'contacts' },
-  { to: '/leads', label: 'Leads', Icon: TrendingUp, roles: ['OWNER', 'SUPERADMIN', 'EMPLOYEE'], feature: 'leads' },
-  { to: '/policies', label: 'Policies', Icon: Shield, roles: ['OWNER', 'SUPERADMIN', 'EMPLOYEE'], feature: 'policies' },
-  { to: '/claims', label: 'Claims', Icon: FileText, roles: ['OWNER', 'SUPERADMIN', 'EMPLOYEE'], feature: 'claims' },
-  // { to: '/calendar', label: 'Calendar', Icon: Calendar, roles: ['OWNER', 'SUPERADMIN', 'EMPLOYEE'], feature: 'calendar' },
-  { to: '/operations', label: 'Operations', Icon: Briefcase, roles: ['OWNER', 'SUPERADMIN'], feature: 'operations' },
-  { to: '/commissions', label: 'Commissions', Icon: DollarSign, roles: ['OWNER', 'SUPERADMIN'], feature: 'commissions' },
-  { to: '/employees', label: 'Employees', Icon: UserCheck, roles: ['OWNER', 'SUPERADMIN'], feature: 'employees' },
+const NAV: { to: string; label: string; Icon: React.ElementType; feature: string }[] = [
+  { to: '/dashboard', label: 'Dashboard', Icon: LayoutDashboard, feature: 'dashboard' },
+  { to: '/workspace', label: 'Workspace', Icon: Briefcase, feature: 'workspace' },
+  { to: '/contacts', label: 'Contacts', Icon: Users, feature: 'contacts' },
+  { to: '/leads', label: 'Leads', Icon: TrendingUp, feature: 'leads' },
+  { to: '/policies', label: 'Policies', Icon: Shield, feature: 'policies' },
+  { to: '/claims', label: 'Claims', Icon: FileText, feature: 'claims' },
+  // { to: '/calendar', label: 'Calendar', Icon: Calendar, feature: 'calendar' },
+  { to: '/operations', label: 'Operations', Icon: Briefcase, feature: 'operations' },
+  { to: '/commissions', label: 'Commissions', Icon: DollarSign, feature: 'commissions' },
+  { to: '/employees', label: 'Employees', Icon: UserCheck, feature: 'employees' },
 ];
 
 const OVERVIEW_ROUTES = ['/client/dashboard', '/dashboard', '/workspace'];
-const OPS_ROUTES = ['/contacts', '/leads', '/policies', '/policies?tab=emi', '/claims', '/calendar', '/operations'];
+const OPS_ROUTES = ['/contacts', '/leads', '/policies', '/policies?tab=emi', '/claims', '/operations'];
 const MGMT_ROUTES = ['/employees', '/commissions'];
 
 interface NavGroupProps {
@@ -156,25 +155,17 @@ export default function Sidebar({ mobileOpen, setMobileOpen }: { mobileOpen: boo
     if (role === 'EMPLOYEE') {
       const perms: string[] = (user as any)?.permissions || [];
 
-      // Special permission grants for employees
-      if (item.to.startsWith('/employees')) {
-        return perms.includes('manage_employees') || perms.includes('view_employees');
-      }
-      if (item.to.startsWith('/whatsapp')) {
-        return perms.includes('manage_whatsapp');
-      }
-
-      // Explicitly disallowed for standard employee
-      if (['/dashboard', '/commissions', '/operations'].includes(item.to)) {
-        return false;
+      if (item.feature) {
+        if (item.feature === 'workspace') {
+          return perms.includes('workspace') || perms.length === 0;
+        }
+        if (item.feature === 'employees') {
+          return perms.includes('employees') || perms.includes('manage_employees') || perms.includes('view_employees');
+        }
+        return perms.includes(item.feature);
       }
 
-      // If item has roles array, ensure EMPLOYEE is included
-      if (item.roles && !item.roles.includes('EMPLOYEE')) {
-        return false;
-      }
-
-      return true;
+      return false;
     }
 
     if (role === 'CONTACT') {
@@ -292,5 +283,4 @@ export default function Sidebar({ mobileOpen, setMobileOpen }: { mobileOpen: boo
     </>
   );
 }
-
 

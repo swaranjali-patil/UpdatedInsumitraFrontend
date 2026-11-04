@@ -1,6 +1,7 @@
 import { Outlet, useLocation } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { useLookupStore } from '@store/lookup.store';
+import { authService } from '@api/auth.service';
 import Sidebar from './Sidebar';
 import Header  from './Header';
 
@@ -14,7 +15,7 @@ const TITLES: Record<string, string> = {
   employees:    'Employees',
   commissions:  'Commissions',
   whatsapp:     'WhatsApp',
-  calendar:     'Calendar',
+  // calendar:     'Calendar',
   settings:     'Settings',
   operations:   'Operations',
 };
@@ -27,7 +28,7 @@ const SCALED_SECTIONS = [
   'policies',
   'claims',
   'emi-tracking',
-  'calendar',
+  // 'calendar',
   'operations',
   'commissions',
   'employees',
@@ -44,6 +45,7 @@ export default function Layout() {
 
   useEffect(() => {
     useLookupStore.getState().loadAll();
+    authService.getMe();
   }, []);
 
   return (

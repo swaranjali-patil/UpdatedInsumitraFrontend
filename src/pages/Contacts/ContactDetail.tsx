@@ -54,6 +54,7 @@ const STATUS_BADGE: Record<string, string> = {
 
 import PolicyDetailModal from '../Policies/PolicyDetailModal';
 import CreatePolicyModal from '../Policies/CreatePolicyModal';
+import ClaimDetailModal from '../Claims/ClaimDetailModal';
 
 export default function ContactDetail() {
   const { id } = useParams<{ id: string }>();
@@ -67,6 +68,7 @@ export default function ContactDetail() {
   const [selectedRelContact, setSelectedRelContact] = useState<any>(null);
   const [relDropdown, setRelDropdown] = useState(false);
   const [selectedPolicyModalId, setSelectedPolicyModalId] = useState<string | null>(null);
+  const [selectedClaimModalId, setSelectedClaimModalId] = useState<string | null>(null);
   const [createPolicyModalOpen, setCreatePolicyModalOpen] = useState(false);
 
   // Profile Edit states
@@ -707,7 +709,7 @@ export default function ContactDetail() {
             {claimsList.length === 0 && <p className="text-xs text-gray-400">No claims filed.</p>}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {claimsList.map((cl: any) => (
-                <div key={cl.id} className="p-2.5 rounded-lg border border-slate-100 bg-slate-50/50 flex justify-between items-center text-xs">
+                <div key={cl.id} onClick={() => setSelectedClaimModalId(cl.id)} className="p-2.5 rounded-lg border border-slate-100 bg-slate-50/50 hover:bg-white hover:border-slate-300 hover:shadow-xs transition-all cursor-pointer flex justify-between items-center text-xs">
                   <div>
                     <p className="font-bold text-slate-800">{cl.claimNumber}</p>
                     <p className="text-[10px] text-gray-400">{cl.claimType} · Policy: {cl.policy?.policyNumber}</p>
@@ -927,11 +929,22 @@ export default function ContactDetail() {
         onClose={() => setSelectedPolicyModalId(null)}
       />
 
+      {selectedClaimModalId && (
+        <ClaimDetailModal
+          claimId={selectedClaimModalId}
+          onClose={() => {
+            setSelectedClaimModalId(null);
+            qc.invalidateQueries({ queryKey: ['contact-claims', id] });
+          }}
+        />
+      )}
+
       <CreatePolicyModal
         open={createPolicyModalOpen}
         onClose={() => setCreatePolicyModalOpen(false)}
         contactId={c?.id}
         contactName={`${c?.firstName || ''} ${c?.lastName || ''}`.trim()}
+        initialData={c}
         onSuccess={() => qc.invalidateQueries({ queryKey: ['contact', c?.id] })}
       />
     </div>
