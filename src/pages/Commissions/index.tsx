@@ -3,7 +3,7 @@ import {
   Plus, FileText, User, Trash2, Search, TrendingUp, CheckCircle, Clock, DollarSign, 
   Shield, Calendar, ChevronUp, ChevronDown, Filter, RefreshCw, Eye, CheckSquare, 
   Square, PieChart, Users, Award, ChevronRight, Download, SlidersHorizontal, Info,
-  UserPlus, X, Save, Send, LayoutGrid, List, MessageSquare
+  UserPlus, X, Save, Send, LayoutGrid, List, MessageSquare, Mail, Phone
 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { commissionsService, policiesService, employeesService, contactsService, claimsService, documentsService } from '@api/index';
@@ -179,6 +179,7 @@ export default function Commissions() {
     beneficiaryId: string;
   }[]>([]);
   const [commonRate, setCommonRate]         = useState<number>(15);
+  const [commonAmount, setCommonAmount]     = useState<number>(0);
   const [selectedMainIds, setSelectedMainIds] = useState<string[]>([]);
   const [policyDrop, setPolicyDrop]         = useState(false);
 
@@ -202,6 +203,29 @@ export default function Commissions() {
     staleTime: 30 * 1000,
   });
   const allCommissionsList: any[] = allCommissionsData?.data ?? [];
+
+  const [selectedEmployeeSummary, setSelectedEmployeeSummary] = useState<any | null>(null);
+  const [summaryModalStatusFilter, setSummaryModalStatusFilter] = useState<'ALL' | 'PAID' | 'UNPAID'>('ALL');
+
+  const existingDistributedForSelected = useMemo(() => {
+    if (!selectedPolicy) return [];
+    const isClaim = selectedPolicy.itemType === 'CLAIM';
+    if (isClaim) {
+      return allCommissionsList.filter((c: any) => {
+        const claimMatch = c.notes?.match(/\[Claim:\s*([^\]]+)\]/i);
+        const claimNum = claimMatch ? claimMatch[1].trim() : '';
+        if (selectedPolicy.claimNumber && claimNum && claimNum.toLowerCase() === String(selectedPolicy.claimNumber).toLowerCase()) return true;
+        if (selectedPolicy.item?.id && claimNum && claimNum === selectedPolicy.item.id) return true;
+        const effectivePolicyId = selectedPolicy.effectivePolicyId;
+        return effectivePolicyId && c.policyId === effectivePolicyId && Boolean(claimNum);
+      });
+    } else {
+      return allCommissionsList.filter((c: any) => {
+        const isClaimComm = c.notes?.match(/\[Claim:\s*([^\]]+)\]/i);
+        return c.policyId === (selectedPolicy.effectivePolicyId || selectedPolicy.item?.id) && !isClaimComm;
+      });
+    }
+  }, [selectedPolicy, allCommissionsList]);
 
   const { data: summary } = useQuery({
     queryKey: ['commissions', 'overview'],
@@ -440,8 +464,8 @@ export default function Commissions() {
     const designation = emp.designation || emp.user?.role || 'Staff';
     const pol = currentPolicy || selectedPolicy;
     const base = Number(pol?.baseAmount || 0);
-    const rate = commonRate || 15;
-    const commAmt = Math.round(base * (rate / 100));
+    const commAmt = commonAmount > 0 ? commonAmount : (commonRate ? Math.round(base * (commonRate / 100)) : 0);
+    const rate = base > 0 ? Number(((commAmt / base) * 100).toFixed(2)) : (commonRate || 0);
 
     setSelectedEmployeesList(prev => {
       if (prev.some(x => x.id === empId || x.beneficiaryId === beneficiaryId)) {
@@ -514,6 +538,20 @@ export default function Commissions() {
     setSelectedEmployeesList(prev => {
       const updated = prev.map(emp => {
         const amt = Math.round(emp.baseAmount * (rate / 100));
+        return { ...emp, rate, commissionAmount: amt };
+      });
+      const totalAmt = updated.reduce((acc, curr) => acc + curr.commissionAmount, 0);
+      setValue('amount', totalAmt, { shouldValidate: true });
+      setValue('baseCommissionAmount', totalAmt);
+      return updated;
+    });
+  };
+
+  const handleApplyCommonAmount = (amt: number) => {
+    setCommonAmount(amt);
+    setSelectedEmployeesList(prev => {
+      const updated = prev.map(emp => {
+        const rate = emp.baseAmount > 0 ? Number(((amt / emp.baseAmount) * 100).toFixed(2)) : 0;
         return { ...emp, rate, commissionAmount: amt };
       });
       const totalAmt = updated.reduce((acc, curr) => acc + curr.commissionAmount, 0);
@@ -1199,7 +1237,12 @@ export default function Commissions() {
                   const isPaid = Boolean(row.isPaid);
 
                   return (
-                    <tr key={row.id || idx} className="hover:bg-indigo-50/30 transition-colors">
+                    <tr 
+                      key={row.id || idx} 
+                      className="hover:bg-indigo-50/50 transition-colors cursor-pointer group"
+                      onClick={() => setSelectedEmployeeSummary(row)}
+                      title="Click to view full employee commission summary"
+                    >
                       <td className="px-3 py-2.5 text-center font-medium border-r border-slate-100 text-slate-500">
                         {idx + 1}
                       </td>
@@ -1255,7 +1298,6 @@ export default function Commissions() {
                       </td>
                       <td className="px-3 py-2.5 text-right font-extrabold text-emerald-600 border-r border-slate-100">
                         ₹{commAmt.toLocaleString('en-IN')}
-                        {row.rate ? <span className="block text-[10px] font-semibold text-slate-400">{row.rate}%</span> : null}
                       </td>
                       <td className="px-3 py-2.5 text-center border-r border-slate-100">
                         {isPaid ? (
@@ -1274,7 +1316,7 @@ export default function Commissions() {
                         {!isPaid ? (
                           <button
                             type="button"
-                            onClick={() => setPayConfirm(row)}
+                            onClick={(e) => { e.stopPropagation(); setPayConfirm(row); }}
                             className="px-2.5 py-1 rounded-lg text-[10px] font-bold text-indigo-700 hover:text-white bg-indigo-50 hover:bg-indigo-600 border border-indigo-200 transition-all cursor-pointer shadow-2xs"
                           >
                             Mark Paid
@@ -2783,6 +2825,100 @@ return (
 
               </div>
 
+              {/* ALREADY COMMISSION DISTRIBUTED EMPLOYEES */}
+              {selectedPolicy && (
+                <div className="bg-gradient-to-r from-amber-50/70 via-slate-50 to-indigo-50/40 border border-amber-200/90 rounded-2xl p-3.5 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-5 h-5 rounded-full bg-emerald-600 text-white flex items-center justify-center text-[10px] font-black shadow-2xs">
+                        ✓
+                      </div>
+                      <div>
+                        <span className="text-xs font-bold text-slate-800">
+                          Already Commission Distributed Employees
+                        </span>
+                        <span className={clsx(
+                          "ml-1.5 text-[10px] font-extrabold px-2 py-0.5 rounded-full",
+                          existingDistributedForSelected.length > 0
+                            ? "bg-emerald-100 text-emerald-800"
+                            : "bg-slate-100 text-slate-600"
+                        )}>
+                          {existingDistributedForSelected.length} {existingDistributedForSelected.length === 1 ? 'Employee' : 'Employees'}
+                        </span>
+                      </div>
+                    </div>
+                    {existingDistributedForSelected.length > 0 && (
+                      <span className="text-xs font-extrabold text-emerald-700 bg-white border border-emerald-200 px-2.5 py-0.5 rounded-lg shadow-2xs">
+                        Distributed: ₹{existingDistributedForSelected.reduce((sum: number, c: any) => sum + Number(c.amount || 0), 0).toLocaleString('en-IN')}
+                      </span>
+                    )}
+                  </div>
+
+                  {existingDistributedForSelected.length === 0 ? (
+                    <div className="flex items-center gap-2 px-3 py-2 bg-white/80 border border-slate-200 rounded-xl text-xs text-slate-500">
+                      <Info size={14} className="text-slate-400 shrink-0" />
+                      <span>No commission has been distributed for this {selectedPolicy.itemType === 'CLAIM' ? 'claim' : 'policy'} yet. You are distributing the first commission.</span>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-2xs">
+                      <table className="w-full border-collapse text-left text-xs">
+                        <thead>
+                          <tr className="bg-slate-50 text-[10px] font-extrabold uppercase text-slate-500 border-b border-slate-200">
+                            <th className="px-3 py-2">Employee</th>
+                            <th className="px-3 py-2 text-right">Commission Amount</th>
+                            <th className="px-3 py-2 text-center">Status</th>
+                            <th className="px-3 py-2">Remark / Paid Date</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {existingDistributedForSelected.map((dc: any, idx: number) => {
+                            const bName = dc.beneficiary
+                              ? `${dc.beneficiary.firstName || ''} ${dc.beneficiary.lastName || ''}`.trim()
+                              : (dc.notes?.match(/Beneficiary:\s*([^\n]+)/i)?.[1] || 'Employee');
+                            const bDesig = dc.beneficiary?.designation || (dc.beneficiary?.role === 'OWNER' ? 'Owner / Admin' : 'Advisor / Agent');
+                            const isPaid = Boolean(dc.isPaid);
+                            const matchRemark = dc.notes?.match(/Payment Remark:\s*([^\n]+)/i);
+                            const commentText = matchRemark ? matchRemark[1].trim() : (dc.remark || (dc.paidAt ? format(new Date(dc.paidAt), 'dd/MM/yyyy') : '—'));
+
+                            return (
+                              <tr key={dc.id || idx} className="hover:bg-slate-50/60 transition-colors">
+                                <td className="px-3 py-2">
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-700 font-bold text-[10px] flex items-center justify-center shrink-0">
+                                      {bName[0]?.toUpperCase() || 'E'}
+                                    </div>
+                                    <div className="min-w-0">
+                                      <p className="font-bold text-slate-900 truncate leading-tight">{bName}</p>
+                                      <p className="text-[10px] text-slate-400 truncate">{bDesig}</p>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="px-3 py-2 text-right font-extrabold text-emerald-600 whitespace-nowrap">
+                                  ₹{Number(dc.amount || 0).toLocaleString('en-IN')}
+                                </td>
+                                <td className="px-3 py-2 text-center whitespace-nowrap">
+                                  <span className={clsx(
+                                    "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold",
+                                    isPaid
+                                      ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                      : "bg-rose-50 text-rose-700 border border-rose-200"
+                                  )}>
+                                    {isPaid ? 'PAID' : 'UNPAID'}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2 text-[11px] text-slate-600 max-w-[180px] truncate" title={commentText}>
+                                  {commentText}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* EMPLOYEES MULTI-SELECTION SECTION UNDER POLICY/SERVICE */}
               <div className="space-y-3 pt-2">
                 {/* Header with Search and Common Rate */}
@@ -2802,18 +2938,18 @@ return (
 
                   {selectedEmployeesList.length > 1 && (
                     <div className="flex items-center gap-2 bg-indigo-50/80 border border-indigo-200 px-3 py-1 rounded-xl">
-                      <span className="text-[11px] font-bold text-indigo-900">Set Rate for All:</span>
+                      <span className="text-[11px] font-bold text-indigo-900">Set Commission for All:</span>
                       <div className="flex items-center gap-1">
+                        <span className="text-[11px] font-bold text-indigo-600">₹</span>
                         <input
                           type="number"
                           min="0"
-                          max="100"
-                          step="0.5"
-                          value={commonRate}
-                          onChange={(e) => handleApplyCommonRate(Number(e.target.value) || 0)}
-                          className="w-14 h-6 text-xs text-center font-bold bg-white border border-indigo-200 rounded-lg text-indigo-900 focus:outline-none"
+                          step="100"
+                          placeholder="Amount"
+                          value={commonAmount === 0 ? '' : commonAmount}
+                          onChange={(e) => handleApplyCommonAmount(parseFloat(e.target.value) || 0)}
+                          className="w-20 h-6 text-xs text-right font-bold bg-white border border-indigo-200 rounded-lg text-indigo-900 px-1.5 focus:outline-none"
                         />
-                        <span className="text-[11px] font-bold text-indigo-600">%</span>
                       </div>
                     </div>
                   )}
@@ -2903,7 +3039,6 @@ return (
                             <th className="py-2.5 px-3">Employee &amp; Details</th>
                             <th className="py-2.5 px-3">Designation / Role</th>
                             <th className="py-2.5 px-3 text-right">Base Amount (₹)</th>
-                            <th className="py-2.5 px-3 text-center">Rate (%)</th>
                             <th className="py-2.5 px-3 text-right">Commission (₹)</th>
                             <th className="py-2.5 px-2 w-8 text-center"></th>
                           </tr>
@@ -2934,26 +3069,19 @@ return (
                               <td className="py-2 px-3 text-right font-bold text-slate-800">
                                 ₹{emp.baseAmount.toLocaleString('en-IN')}
                               </td>
-                              <td className="py-2 px-3 text-center">
-                                <input
-                                  type="number"
-                                  min="0"
-                                  max="100"
-                                  step="0.1"
-                                  value={emp.rate}
-                                  onChange={(e) => handleEmployeeRateChange(emp.id, parseFloat(e.target.value) || 0)}
-                                  className="w-14 h-7 text-xs text-center font-bold bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:bg-white"
-                                />
-                              </td>
                               <td className="py-2 px-3 text-right">
-                                <input
-                                  type="number"
-                                  min="0"
-                                  step="1"
-                                  value={emp.commissionAmount}
-                                  onChange={(e) => handleEmployeeAmountChange(emp.id, parseFloat(e.target.value) || 0)}
-                                  className="w-24 h-7 text-xs text-right font-black bg-emerald-50/70 border border-emerald-200 rounded-lg text-emerald-700 px-1.5 focus:bg-white"
-                                />
+                                <div className="inline-flex items-center gap-1 justify-end">
+                                  <span className="text-xs font-bold text-slate-400">₹</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="1"
+                                    value={emp.commissionAmount === 0 ? '' : emp.commissionAmount}
+                                    placeholder="0"
+                                    onChange={(e) => handleEmployeeAmountChange(emp.id, parseFloat(e.target.value) || 0)}
+                                    className="w-28 h-7 text-xs text-right font-black bg-emerald-50/70 border border-emerald-200 rounded-lg text-emerald-700 px-2 focus:bg-white focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400"
+                                  />
+                                </div>
                               </td>
                               <td className="py-2 px-2 text-center">
                                 <button
@@ -3545,6 +3673,285 @@ return (
             Apply Commission %
           </button>
         </div>
+      </Modal>
+
+      {/* ── Employee Commission Full Summary Modal ────────────────────────────── */}
+      <Modal
+        open={!!selectedEmployeeSummary}
+        onClose={() => { setSelectedEmployeeSummary(null); setSummaryModalStatusFilter('ALL'); }}
+        title="Employee Commission Summary"
+        subtitle={selectedEmployeeSummary ? "Detailed commission breakdown and profile" : undefined}
+        size="2xl"
+      >
+        {selectedEmployeeSummary && (() => {
+          const selectedEmpId = selectedEmployeeSummary.beneficiaryId || selectedEmployeeSummary.beneficiary?.id;
+          const selectedEmpName = selectedEmployeeSummary.beneficiary
+            ? `${selectedEmployeeSummary.beneficiary.firstName || ''} ${selectedEmployeeSummary.beneficiary.lastName || ''}`.trim()
+            : (selectedEmployeeSummary.notes?.match(/Beneficiary:\s*([^\n]+)/i)?.[1] || 'Employee');
+
+          const employeeProfile = employeesList.find((e: any) =>
+            e.id === selectedEmpId || e.userId === selectedEmpId || e.user?.id === selectedEmpId ||
+            `${e.firstName || ''} ${e.lastName || ''}`.trim().toLowerCase() === selectedEmpName.toLowerCase()
+          );
+
+          const displayEmpName = employeeProfile
+            ? `${employeeProfile.firstName || ''} ${employeeProfile.lastName || ''}`.trim()
+            : selectedEmpName;
+
+          const displayEmpEmail = employeeProfile?.email || employeeProfile?.user?.email || selectedEmployeeSummary.beneficiary?.email || '';
+          const displayEmpPhone = employeeProfile?.phone || employeeProfile?.user?.phone || selectedEmployeeSummary.beneficiary?.phone || '';
+          const displayEmpDesig = employeeProfile?.designation || employeeProfile?.role || selectedEmployeeSummary.beneficiary?.designation || 'Advisor / Agent';
+          const displayEmpCode = employeeProfile?.employeeCode || employeeProfile?.code || '';
+
+          const empAllComms = allCommissionsList.filter((c: any) => {
+            if (selectedEmpId && (c.beneficiaryId === selectedEmpId || c.beneficiary?.id === selectedEmpId)) return true;
+            const cName = c.beneficiary
+              ? `${c.beneficiary.firstName || ''} ${c.beneficiary.lastName || ''}`.trim().toLowerCase()
+              : (c.notes?.match(/Beneficiary:\s*([^\n]+)/i)?.[1] || '').trim().toLowerCase();
+            return cName && cName === selectedEmpName.toLowerCase();
+          });
+
+          const totalEarned = empAllComms.reduce((sum: number, c: any) => sum + Number(c.amount || 0), 0);
+          const totalPaid = empAllComms.filter((c: any) => c.isPaid).reduce((sum: number, c: any) => sum + Number(c.amount || 0), 0);
+          const totalPending = empAllComms.filter((c: any) => !c.isPaid).reduce((sum: number, c: any) => sum + Number(c.amount || 0), 0);
+
+          const filteredModalComms = empAllComms.filter((c: any) => {
+            if (summaryModalStatusFilter === 'PAID') return c.isPaid;
+            if (summaryModalStatusFilter === 'UNPAID') return !c.isPaid;
+            return true;
+          });
+
+          return (
+            <div className="space-y-4 py-1">
+              {/* Profile Card Header */}
+              <div className="p-4 rounded-2xl bg-gradient-to-r from-indigo-50/80 via-blue-50/50 to-slate-50 border border-indigo-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-2xl bg-indigo-600 text-white font-black text-lg flex items-center justify-center shadow-md shadow-indigo-500/20 shrink-0">
+                    {displayEmpName[0]?.toUpperCase() || 'E'}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="text-base font-extrabold text-slate-900 leading-tight">
+                        {displayEmpName}
+                      </h3>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800">
+                        {displayEmpDesig}
+                      </span>
+                      {displayEmpCode && (
+                        <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600">
+                          #{displayEmpCode}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 text-xs text-slate-500 mt-1 flex-wrap">
+                      {displayEmpPhone && (
+                        <span className="flex items-center gap-1 font-medium">
+                          <Phone size={12} className="text-indigo-600" />
+                          {displayEmpPhone}
+                        </span>
+                      )}
+                      {displayEmpEmail && (
+                        <span className="flex items-center gap-1 font-medium">
+                          <Mail size={12} className="text-indigo-600" />
+                          {displayEmpEmail}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 4 Stat KPI Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                  <span className="text-[10px] font-extrabold uppercase text-slate-400 block tracking-wider">Total Earned</span>
+                  <span className="text-base font-black text-slate-900 block mt-0.5">
+                    ₹{totalEarned.toLocaleString('en-IN')}
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-semibold">{empAllComms.length} entries</span>
+                </div>
+                <div className="p-3 bg-white rounded-xl border border-emerald-200 bg-emerald-50/20 shadow-2xs">
+                  <span className="text-[10px] font-extrabold uppercase text-emerald-600 block tracking-wider">Paid / Settled</span>
+                  <span className="text-base font-black text-emerald-700 block mt-0.5">
+                    ₹{totalPaid.toLocaleString('en-IN')}
+                  </span>
+                  <span className="text-[10px] text-emerald-600 font-semibold">
+                    {empAllComms.filter((c: any) => c.isPaid).length} paid
+                  </span>
+                </div>
+                <div className="p-3 bg-white rounded-xl border border-rose-200 bg-rose-50/20 shadow-2xs">
+                  <span className="text-[10px] font-extrabold uppercase text-rose-600 block tracking-wider">Pending / Due</span>
+                  <span className="text-base font-black text-rose-700 block mt-0.5">
+                    ₹{totalPending.toLocaleString('en-IN')}
+                  </span>
+                  <span className="text-[10px] text-rose-600 font-semibold">
+                    {empAllComms.filter((c: any) => !c.isPaid).length} pending
+                  </span>
+                </div>
+                <div className="p-3 bg-white rounded-xl border border-indigo-200 bg-indigo-50/20 shadow-2xs">
+                  <span className="text-[10px] font-extrabold uppercase text-indigo-600 block tracking-wider">Settlement Rate</span>
+                  <span className="text-base font-black text-indigo-700 block mt-0.5">
+                    {totalEarned > 0 ? `${Math.round((totalPaid / totalEarned) * 100)}%` : '0%'}
+                  </span>
+                  <span className="text-[10px] text-indigo-500 font-semibold">settled</span>
+                </div>
+              </div>
+
+              {/* Status Filter Tabs & Table Header */}
+              <div className="space-y-2 pt-1">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5 uppercase tracking-wider">
+                    <FileText size={14} className="text-indigo-600" />
+                    <span>Distributed Commissions Breakdown</span>
+                  </h4>
+                  <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setSummaryModalStatusFilter('ALL')}
+                      className={clsx(
+                        "px-2.5 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer",
+                        summaryModalStatusFilter === 'ALL' ? "bg-white text-indigo-700 shadow-2xs" : "text-slate-600 hover:text-slate-900"
+                      )}
+                    >
+                      All ({empAllComms.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSummaryModalStatusFilter('PAID')}
+                      className={clsx(
+                        "px-2.5 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer",
+                        summaryModalStatusFilter === 'PAID' ? "bg-emerald-600 text-white shadow-2xs" : "text-slate-600 hover:text-emerald-700"
+                      )}
+                    >
+                      Paid ({empAllComms.filter((c: any) => c.isPaid).length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSummaryModalStatusFilter('UNPAID')}
+                      className={clsx(
+                        "px-2.5 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer",
+                        summaryModalStatusFilter === 'UNPAID' ? "bg-rose-600 text-white shadow-2xs" : "text-slate-600 hover:text-rose-700"
+                      )}
+                    >
+                      Unpaid ({empAllComms.filter((c: any) => !c.isPaid).length})
+                    </button>
+                  </div>
+                </div>
+
+                {filteredModalComms.length === 0 ? (
+                  <div className="border border-slate-200 rounded-xl p-8 text-center bg-slate-50/50">
+                    <Clock size={28} className="mx-auto text-slate-300 mb-1" />
+                    <p className="text-xs text-slate-400 font-semibold">No commissions found for this filter</p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white max-h-[340px] shadow-2xs">
+                    <table className="w-full border-collapse text-left text-xs">
+                      <thead className="sticky top-0 bg-slate-50 z-10 border-b border-slate-200">
+                        <tr className="text-[10px] font-extrabold uppercase text-slate-500">
+                          <th className="px-3 py-2.5">Policy / Claim</th>
+                          <th className="px-3 py-2.5">Proposer / Client</th>
+                          <th className="px-3 py-2.5 text-right">Commission</th>
+                          <th className="px-3 py-2.5 text-center">Status</th>
+                          <th className="px-3 py-2.5">Remark / Paid Date</th>
+                          <th className="px-3 py-2.5 text-center">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {filteredModalComms.map((c: any, i: number) => {
+                          const claimMatch = c.notes?.match(/\[Claim:\s*([^\]]+)\]/i);
+                          const claimNum = claimMatch ? claimMatch[1].trim() : null;
+                          const pNum = c.policy?.policyNumber || '—';
+                          const planName = c.policy?.plan?.name || '';
+                          const compName = c.policy?.plan?.company?.name || '';
+                          const clientName = c.policy?.contact
+                            ? `${c.policy.contact.firstName || ''} ${c.policy.contact.lastName || ''}`.trim()
+                            : (c.notes?.match(/Client:\s*([^\n]+)/i)?.[1] || '—');
+                          const cAmt = Number(c.amount || 0);
+                          const isPaid = Boolean(c.isPaid);
+                          const matchRemark = c.notes?.match(/Payment Remark:\s*([^\n]+)/i);
+                          const remarkText = matchRemark ? matchRemark[1].trim() : (c.remark || (c.paidAt ? format(new Date(c.paidAt), 'dd/MM/yyyy') : '—'));
+
+                          return (
+                            <tr key={c.id || i} className="hover:bg-slate-50/80 transition-colors">
+                              <td className="px-3 py-2.5">
+                                {claimNum ? (
+                                  <div>
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800">
+                                        CLAIM
+                                      </span>
+                                      <span className="font-bold text-slate-900">Claim #{claimNum}</span>
+                                    </div>
+                                    <p className="text-[10px] text-slate-500 truncate mt-0.5">{planName || pNum} {compName ? `(${compName})` : ''}</p>
+                                  </div>
+                                ) : (
+                                  <div>
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-[9px] font-extrabold px-1.5 py-0.2 rounded bg-indigo-100 text-indigo-800">
+                                        POLICY
+                                      </span>
+                                      <span className="font-bold text-slate-900 font-mono text-[11px]">{pNum}</span>
+                                    </div>
+                                    <p className="text-[10px] text-slate-500 truncate mt-0.5">{planName} {compName ? `(${compName})` : ''}</p>
+                                  </div>
+                                )}
+                              </td>
+                              <td className="px-3 py-2.5 font-medium text-slate-700">
+                                {clientName}
+                              </td>
+                              <td className="px-3 py-2.5 text-right font-extrabold text-emerald-600 whitespace-nowrap">
+                                ₹{cAmt.toLocaleString('en-IN')}
+                              </td>
+                              <td className="px-3 py-2.5 text-center whitespace-nowrap">
+                                <span className={clsx(
+                                  "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold",
+                                  isPaid
+                                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                    : "bg-rose-50 text-rose-700 border border-rose-200"
+                                )}>
+                                  {isPaid ? 'PAID' : 'UNPAID'}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2.5 text-[11px] text-slate-600 max-w-[150px] truncate" title={remarkText}>
+                                {remarkText}
+                              </td>
+                              <td className="px-3 py-2.5 text-center whitespace-nowrap">
+                                {!isPaid ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setPayConfirm(c)}
+                                    className="px-2.5 py-1 rounded-lg text-[10px] font-bold text-indigo-700 hover:text-white bg-indigo-50 hover:bg-indigo-600 border border-indigo-200 transition-all cursor-pointer shadow-2xs"
+                                  >
+                                    Mark Paid
+                                  </button>
+                                ) : (
+                                  <span className="text-[10px] text-emerald-600 font-semibold">
+                                    Settled
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Close Button Footer */}
+              <div className="flex justify-end pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setSelectedEmployeeSummary(null)}
+                  className="px-4 py-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold text-xs transition-colors cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          );
+        })()}
       </Modal>
 
     </div>

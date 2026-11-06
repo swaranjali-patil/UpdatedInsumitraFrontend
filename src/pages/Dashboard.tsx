@@ -9,7 +9,7 @@ import {
 import { format, isToday, isTomorrow, differenceInDays } from 'date-fns';
 import {
   useDashboardKpis, useDashboardRevenue, useDashboardPortfolio,
-  useDashboardPipeline, useDashboardDbSummary
+  useDashboardPipeline, useDashboardDbSummary, useDashboardAnalytics
 } from '@hooks/useDashboard';
 import { useClaims } from '@hooks/useClaims';
 import { LineChartWidget, PieChartWidget, BarChartWidget, CoverageBarChartWidget } from '@comps/common/Charts';
@@ -163,7 +163,6 @@ const FALLBACK_KPIS = {
   openLeads: 86,
   monthlyPremium: 3840000,
   openClaims: 14,
-  pendingTasks: 22,
 };
 
 const FALLBACK_REVENUE_12 = [
@@ -302,10 +301,16 @@ function PremiumKpiCard({ label, value, trend, trendUp = true, icon, color, onCl
 
 // ── Contacts Breakdown Indicator Card ─────────────────────────────────────────
 function ContactsBreakdownCard({ data }: { data: { total: number; male: number; female: number; under18: number; above60: number } }) {
-  const malePct = ((data.male / data.total) * 100).toFixed(0);
-  const femalePct = ((data.female / data.total) * 100).toFixed(0);
-  const under18Pct = ((data.under18 / data.total) * 100).toFixed(0);
-  const above60Pct = ((data.above60 / data.total) * 100).toFixed(0);
+  const total = data?.total > 0 ? data.total : 1;
+  const maleCount = data?.male || 0;
+  const femaleCount = data?.female || 0;
+  const under18Count = data?.under18 || 0;
+  const above60Count = data?.above60 || 0;
+
+  const malePct = ((maleCount / total) * 100).toFixed(0);
+  const femalePct = ((femaleCount / total) * 100).toFixed(0);
+  const under18Pct = ((under18Count / total) * 100).toFixed(0);
+  const above60Pct = ((above60Count / total) * 100).toFixed(0);
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm h-full flex flex-col justify-between group hover:shadow-md transition-all">
@@ -318,7 +323,7 @@ function ContactsBreakdownCard({ data }: { data: { total: number; male: number; 
         </div>
 
         <div className="mb-4">
-          <span className="text-3xl font-extrabold text-gray-900">{fmt(data.total)}</span>
+          <span className="text-3xl font-extrabold text-gray-900">{fmt(data?.total || 0)}</span>
           <p className="text-[10px] font-semibold text-gray-400 mt-1 uppercase tracking-wide">Total registered contacts</p>
         </div>
 
@@ -534,8 +539,22 @@ function LeadsProgressIndicator({ pipelineData }: { pipelineData: any[] }) {
   );
 }
 
+// ── Helper format for Sum Insured ───────────────────────────────────────────
+function formatLakhOrCr(amount: number) {
+  if (!amount || amount === 0) return '₹0';
+  if (amount >= 10000000) {
+    return `₹${(amount / 10000000).toFixed(2)} Cr`;
+  }
+  return `₹${(amount / 100000).toFixed(1)}L`;
+}
+
 // ── Avg Sum Insured Card (Gen + Health) ──────────────────────────────────────
-function AvgSumInsuredGenHealthCard() {
+function AvgSumInsuredGenHealthCard({ data }: { data?: any }) {
+  const freshVal = data?.fresh ? formatLakhOrCr(data.fresh) : '₹8.5L';
+  const portVal = data?.port ? formatLakhOrCr(data.port) : '₹10.2L';
+  const renewalVal = data?.renewal ? formatLakhOrCr(data.renewal) : '₹12.5L';
+  const weightedVal = data?.weighted ? `${formatLakhOrCr(data.weighted)} / Person` : '₹10.4 Lakhs / Person';
+
   return (
     <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm h-full flex flex-col justify-between group hover:shadow-md transition-all">
       <div>
@@ -563,7 +582,7 @@ function AvgSumInsuredGenHealthCard() {
               <p className="text-[10px] font-bold text-indigo-800 uppercase tracking-wide">Fresh</p>
               <span className="w-2 h-2 rounded-full bg-indigo-500" />
             </div>
-            <p className="text-lg font-black text-indigo-950 mt-1.5 tracking-tight">₹8.5L</p>
+            <p className="text-lg font-black text-indigo-950 mt-1.5 tracking-tight">{freshVal}</p>
             <p className="text-[9px] font-medium text-indigo-600 mt-0.5">Base entry cover</p>
           </div>
 
@@ -573,7 +592,7 @@ function AvgSumInsuredGenHealthCard() {
               <p className="text-[10px] font-bold text-teal-800 uppercase tracking-wide">Port</p>
               <span className="w-2 h-2 rounded-full bg-teal-500" />
             </div>
-            <p className="text-lg font-black text-teal-950 mt-1.5 tracking-tight">₹10.2L</p>
+            <p className="text-lg font-black text-teal-950 mt-1.5 tracking-tight">{portVal}</p>
             <p className="text-[9px] font-medium text-teal-600 mt-0.5">Enhanced porting</p>
           </div>
 
@@ -583,7 +602,7 @@ function AvgSumInsuredGenHealthCard() {
               <p className="text-[10px] font-bold text-amber-800 uppercase tracking-wide">Renewal</p>
               <span className="w-2 h-2 rounded-full bg-amber-500" />
             </div>
-            <p className="text-lg font-black text-amber-950 mt-1.5 tracking-tight">₹12.5L</p>
+            <p className="text-lg font-black text-amber-950 mt-1.5 tracking-tight">{renewalVal}</p>
             <p className="text-[9px] font-medium text-amber-600 mt-0.5">With bonus added</p>
           </div>
         </div>
@@ -593,7 +612,7 @@ function AvgSumInsuredGenHealthCard() {
       <div className="mt-4 pt-3 border-t border-gray-100/80 flex items-center justify-between text-xs">
         <span className="text-[11px] font-semibold text-gray-500">Overall Weighted Portfolio Average</span>
         <span className="text-xs font-black text-indigo-900 bg-indigo-50/80 px-2.5 py-1 rounded-lg border border-indigo-100">
-          ₹10.4 Lakhs / Person
+          {weightedVal}
         </span>
       </div>
     </div>
@@ -601,7 +620,10 @@ function AvgSumInsuredGenHealthCard() {
 }
 
 // ── Avg Sum Insured Card (Term) ─────────────────────────────────────────────
-function AvgSumInsuredTermCard() {
+function AvgSumInsuredTermCard({ data }: { data?: any }) {
+  const avgLifeCover = data?.avg ? formatLakhOrCr(data.avg) : '₹1.50 Cr';
+  const over1Cr = data?.over1CrPct !== undefined ? `${data.over1CrPct}%` : '78%';
+
   return (
     <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm h-full flex flex-col justify-between group hover:shadow-md transition-all">
       <div>
@@ -627,7 +649,7 @@ function AvgSumInsuredTermCard() {
           <div className="bg-gradient-to-br from-rose-50/90 to-pink-50/40 rounded-2xl p-3.5 border border-rose-100/80 shadow-2xs flex flex-col justify-between">
             <p className="text-[10px] font-bold text-rose-800 uppercase tracking-wide">Average Life Cover</p>
             <div className="my-1">
-              <span className="text-2xl font-black text-rose-950 tracking-tight">₹1.50 Cr</span>
+              <span className="text-2xl font-black text-rose-950 tracking-tight">{avgLifeCover}</span>
               <p className="text-[10px] font-semibold text-rose-600 mt-0.5">Per insured breadwinner</p>
             </div>
             <div className="w-full bg-rose-200/60 rounded-full h-1.5 mt-1 overflow-hidden">
@@ -642,7 +664,7 @@ function AvgSumInsuredTermCard() {
               <div className="mt-2 space-y-1.5">
                 <div className="flex justify-between text-[11px] font-bold">
                   <span className="text-gray-600">≥ ₹1.0 Cr Share</span>
-                  <span className="text-emerald-600 font-extrabold">78%</span>
+                  <span className="text-emerald-600 font-extrabold">{over1Cr}</span>
                 </div>
                 <div className="flex justify-between text-[11px] font-bold">
                   <span className="text-gray-600">Avg Income Multiplier</span>
@@ -668,48 +690,57 @@ function AvgSumInsuredTermCard() {
 
 // ── Database Summary Status Table Card ───────────────────────────────────────
 function DatabaseSummary({ summaryData }: { summaryData: any }) {
-  const { policies = [], contacts = 0, claims = [], leads = 0, tasks = [] } = summaryData || {};
+  const {
+    policies = [],
+    contacts = 0,
+    contactsActive: rawContactsActive,
+    contactsInactive: rawContactsInactive,
+    claims = [],
+    leads = 0,
+    leadsGrouped = []
+  } = summaryData || {};
 
   // Policies: Active and Expired
-  const rawPolicyActive = policies.find((p: any) => p.status === 'ACTIVE')?.count || 0;
-  const rawPolicyExpired = policies.filter((p: any) => ['EXPIRED', 'LAPSED', 'CANCELLED'].includes(p.status)).reduce((acc: number, curr: any) => acc + (curr.count || 0), 0);
+  const rawPolicyActive = policies
+    .filter((p: any) => ['ACTIVE', 'INFORCE'].includes(p.status))
+    .reduce((acc: number, curr: any) => acc + (curr.count || 0), 0);
+  const rawPolicyExpired = policies
+    .filter((p: any) => ['EXPIRED', 'LAPSED', 'CANCELLED', 'SURRENDERED', 'INACTIVE_OLD'].includes(p.status))
+    .reduce((acc: number, curr: any) => acc + (curr.count || 0), 0);
   const rawPolicyTotal = policies.reduce((acc: number, curr: any) => acc + (curr.count || 0), 0);
 
-  const policyTotal = rawPolicyTotal > 0 ? rawPolicyTotal : 1248;
-  const policyActive = rawPolicyActive > 0 ? rawPolicyActive : 1180;
-  const policyExpired = rawPolicyExpired > 0 ? rawPolicyExpired : 68;
+  const policyTotal = rawPolicyTotal;
+  const policyActive = rawPolicyActive;
+  const policyExpired = rawPolicyExpired;
 
   // Contacts: Active and Inactive
-  const totalContacts = contacts > 0 ? contacts : 2090;
-  const contactsActive = Math.round(totalContacts * 0.88);
-  const contactsInactive = totalContacts - contactsActive;
+  const totalContacts = contacts;
+  const contactsActive = rawContactsActive !== undefined ? rawContactsActive : Math.round(totalContacts * 0.9);
+  const contactsInactive = rawContactsInactive !== undefined ? rawContactsInactive : (totalContacts - contactsActive);
 
-  // Leads: Hopeful (Interested, Hot, Very Hot) and Hopeless (Lost, Not Interested)
-  const totalLeads = leads > 0 ? leads : 186;
-  const leadsHopeful = Math.round(totalLeads * 0.76);
+  // Leads: Hopeful (Interested, Hot, Very Hot, Contacted, Proposal, Login, Payment) and Hopeless (Lost, Not Interested)
+  const totalLeads = leads;
+  const leadsHopeful = leadsGrouped.length > 0
+    ? leadsGrouped.filter((l: any) => !['LOST', 'DROPPED', 'NOT_INTERESTED'].includes(l.stage)).reduce((acc: number, curr: any) => acc + (curr.count || 0), 0)
+    : Math.round(totalLeads * 0.76);
   const leadsHopeless = totalLeads - leadsHopeful;
 
   // Claims: Active, Settled, Inprogress
-  const rawClaimActive = claims.filter((c: any) => ['INTIMATED', 'DOC_COLLECTION', 'FILED'].includes(c.status)).reduce((acc: number, curr: any) => acc + (curr.count || 0), 0);
-  const rawClaimInProgress = claims.filter((c: any) => c.status === 'IN_REVIEW' || c.status === 'IN_PROGRESS').reduce((acc: number, curr: any) => acc + (curr.count || 0), 0);
-  const rawClaimSettled = claims.filter((c: any) => c.status === 'SETTLED' || c.status === 'APPROVED').reduce((acc: number, curr: any) => acc + (curr.count || 0), 0);
+  const rawClaimActive = claims
+    .filter((c: any) => ['INTIMATED', 'DOC_COLLECTION', 'FILED'].includes(c.status))
+    .reduce((acc: number, curr: any) => acc + (curr.count || 0), 0);
+  const rawClaimInProgress = claims
+    .filter((c: any) => c.status === 'IN_REVIEW' || c.status === 'IN_PROGRESS')
+    .reduce((acc: number, curr: any) => acc + (curr.count || 0), 0);
+  const rawClaimSettled = claims
+    .filter((c: any) => c.status === 'SETTLED' || c.status === 'APPROVED')
+    .reduce((acc: number, curr: any) => acc + (curr.count || 0), 0);
   const rawClaimTotal = claims.reduce((acc: number, curr: any) => acc + (curr.count || 0), 0);
 
-  const claimTotal = rawClaimTotal > 0 ? rawClaimTotal : 42;
-  const claimActive = rawClaimActive > 0 ? rawClaimActive : 14;
-  const claimSettled = rawClaimSettled > 0 ? rawClaimSettled : 18;
-  const claimInProgress = rawClaimInProgress > 0 ? rawClaimInProgress : 10;
-
-  // Tasks: Completed, In-Progress, Not Started
-  const rawTaskCompleted = tasks.find((t: any) => t.status === 'COMPLETED')?.count || 0;
-  const rawTaskInProgress = tasks.find((t: any) => t.status === 'IN_PROGRESS')?.count || 0;
-  const rawTaskNotStarted = tasks.filter((t: any) => ['PENDING', 'NOT_STARTED', 'TODO'].includes(t.status)).reduce((acc: number, curr: any) => acc + (curr.count || 0), 0);
-  const rawTaskTotal = tasks.reduce((acc: number, curr: any) => acc + (curr.count || 0), 0);
-
-  const taskTotal = rawTaskTotal > 0 ? rawTaskTotal : 64;
-  const taskCompleted = rawTaskCompleted > 0 ? rawTaskCompleted : 27;
-  const taskInProgress = rawTaskInProgress > 0 ? rawTaskInProgress : 15;
-  const taskNotStarted = rawTaskNotStarted > 0 ? rawTaskNotStarted : 22;
+  const claimTotal = rawClaimTotal;
+  const claimActive = rawClaimActive;
+  const claimSettled = rawClaimSettled;
+  const claimInProgress = rawClaimInProgress;
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm h-full flex flex-col justify-between">
@@ -764,16 +795,6 @@ function DatabaseSummary({ summaryData }: { summaryData: any }) {
                   <span className="text-blue-500 font-semibold">{claimActive} Active</span> •{' '}
                   <span className="text-emerald-600 font-semibold">{claimSettled} Settled</span> •{' '}
                   <span className="text-amber-500 font-medium">{claimInProgress} In-Progress</span>
-                </td>
-              </tr>
-              {/* Tasks: Completed, Inprogress, Not started */}
-              <tr className="hover:bg-gray-50/50">
-                <td className="px-4 py-3 font-semibold text-gray-950">Tasks</td>
-                <td className="px-4 py-3 font-bold text-purple-600">{taskTotal}</td>
-                <td className="px-4 py-3 text-gray-500">
-                  <span className="text-emerald-600 font-semibold">{taskCompleted} Completed</span> •{' '}
-                  <span className="text-amber-500 font-medium">{taskInProgress} In-Progress</span> •{' '}
-                  <span className="text-blue-500 font-medium">{taskNotStarted} Not Started</span>
                 </td>
               </tr>
             </tbody>
@@ -1819,6 +1840,8 @@ export default function Dashboard() {
   const { data: portfolioRes, isLoading: portfolioLoading } = useDashboardPortfolio();
   const { data: pipelineRes, isLoading: pipelineLoading } = useDashboardPipeline();
   const { data: summaryRes, isLoading: summaryLoading } = useDashboardDbSummary();
+  const { data: analyticsRes, isLoading: analyticsLoading } = useDashboardAnalytics();
+  const analytics = analyticsRes?.data ?? analyticsRes;
 
   // Load claims and agents directly for the Overview sections
   const { data: claimsListRes, isLoading: claimsListLoading } = useQuery({
@@ -1833,12 +1856,35 @@ export default function Dashboard() {
     staleTime: 5 * 60_000,
   });
 
-  // Normalise KPIs with realistic dummy fallback
+  // Normalise KPIs with realistic fallback
   const kpis = kpiRes?.data ?? FALLBACK_KPIS;
   const revenue = (revenueRes?.data && revenueRes.data.length > 0) ? revenueRes.data : FALLBACK_REVENUE_12.slice(-revenueMonths);
 
+  // Dynamic companies from live analytics
+  const companyLines = useMemo(() => {
+    if (analytics?.companyLines && analytics.companyLines.length > 0) {
+      return analytics.companyLines;
+    }
+    return COMPANY_LINES;
+  }, [analytics]);
+
+  const companyWiseData = useMemo(() => {
+    if (analytics?.monthlyCompanyWise && analytics.monthlyCompanyWise.length > 0) {
+      return analytics.monthlyCompanyWise;
+    }
+    return MOCK_BUSINESS_COMPANY_WISE;
+  }, [analytics]);
+
   // Filtered Premium by Plan based on selected time period
   const filteredPremiumByPlan = useMemo(() => {
+    const periodMap = analytics?.premiumByPlanPeriods?.[premiumPlanPeriod];
+    if (periodMap && Object.keys(periodMap).length > 0) {
+      return Object.entries(periodMap).map(([name, value]) => ({
+        name,
+        value: Number(value),
+      }));
+    }
+
     let multiplier = 1;
     if (premiumPlanPeriod === 'this_month') multiplier = 0.12;
     else if (premiumPlanPeriod === 'this_quarter') multiplier = 0.32;
@@ -1849,7 +1895,7 @@ export default function Dashboard() {
       ...item,
       value: Math.round(item.value * multiplier)
     }));
-  }, [premiumPlanPeriod]);
+  }, [analytics, premiumPlanPeriod]);
 
   // Normalize Portfolio to support both product (category) and company toggles
   const portfolio = useMemo(() => {
@@ -1925,14 +1971,14 @@ export default function Dashboard() {
       ) : (
         <div className="space-y-6 animate-fadeIn">
           {/* ── Top KPI Cards Grid ───────────────────────────────────────────── */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {kpiLoading ? (
-              Array.from({ length: 5 }).map((_, i) => <SkeletonCard key={i} />)
+              Array.from({ length: 4 }).map((_, i) => <SkeletonCard key={i} />)
             ) : (
               <>
                 <PremiumKpiCard
                   label="Total Policies"
-                  value={fmt(kpis?.activePolicies)}
+                  value={fmt(kpis?.totalPolicies ?? kpis?.activePolicies)}
                   trend="12.5%"
                   trendUp={true}
                   icon={<Shield size={18} className="text-blue-600" />}
@@ -1959,27 +2005,18 @@ export default function Dashboard() {
                 />
                 <PremiumKpiCard
                   label="Total Contacts"
-                  value={fmt(MOCK_CONTACTS.total)}
+                  value={fmt(analytics?.contactsDemographics?.total ?? kpis?.totalContacts ?? summaryData?.contacts ?? 0)}
                   trend="7.8%"
                   trendUp={true}
                   icon={<Users size={18} className="text-teal-600" />}
                   color="bg-teal-50"
                   onClick={() => navigate('/contacts')}
                 />
-                <PremiumKpiCard
-                  label="Pending Tasks"
-                  value={fmt(kpis?.pendingTasks)}
-                  trend="8.3%"
-                  trendUp={true}
-                  icon={<CheckCircle size={18} className="text-purple-600" />}
-                  color="bg-purple-50"
-                  onClick={() => navigate('/workspace')}
-                />
               </>
             )}
           </div>
 
-          {/* ── Info Charts (Mocked) ─────────────────────────────────────────── */}
+          {/* ── Info Charts ─────────────────────────────────────────────────── */}
           <div className="grid lg:grid-cols-3 gap-6 mb-6">
             <div className="lg:col-span-2 relative">
               <div className="absolute right-5 top-3.5 z-10 flex items-center gap-2">
@@ -2006,12 +2043,12 @@ export default function Dashboard() {
             </div>
             <div className="lg:col-span-1 flex flex-col gap-6">
               <div className="flex-1">
-                <ContactsBreakdownCard data={MOCK_CONTACTS} />
+                <ContactsBreakdownCard data={analytics?.contactsDemographics || MOCK_CONTACTS} />
               </div>
               <div className="flex-1">
                 <PieChartWidget
                   title="Active Policies by Category"
-                  data={MOCK_ACTIVE_POLICIES}
+                  data={portfolioRes?.data?.byProduct?.length ? portfolioRes.data.byProduct : (portfolio.length ? portfolio : MOCK_ACTIVE_POLICIES)}
                   nameKey="name"
                   valueKey="value"
                 />
@@ -2165,7 +2202,7 @@ export default function Dashboard() {
               </div>
               <BarChartWidget
                 title="Total Business Graph Category Wise (Jan to Dec)"
-                data={MOCK_BUSINESS_CATEGORY_WISE}
+                data={analytics?.monthlyCategoryWise || MOCK_BUSINESS_CATEGORY_WISE}
                 xKey="month"
                 bars={filteredBusinessCategoryBars}
               />
@@ -2183,16 +2220,16 @@ export default function Dashboard() {
                   className="bg-gray-50 border border-gray-200 text-gray-700 text-xs font-bold rounded-lg px-2 py-1 outline-none cursor-pointer"
                 >
                   <option value="ALL">All Companies</option>
-                  {COMPANY_LINES.map(c => (
+                  {companyLines.map((c: any) => (
                     <option key={c.key} value={c.key}>{c.label}</option>
                   ))}
                 </select>
               </div>
               <LineChartWidget
                 title="Total Business Graph by Company (Jan to Dec)"
-                data={MOCK_BUSINESS_COMPANY_WISE}
+                data={companyWiseData}
                 xKey="month"
-                lines={selectedCompanyFilter === 'ALL' ? COMPANY_LINES : COMPANY_LINES.filter(l => l.key === selectedCompanyFilter)}
+                lines={selectedCompanyFilter === 'ALL' ? companyLines : companyLines.filter((l: any) => l.key === selectedCompanyFilter)}
               />
             </div>
           </div>
@@ -2201,7 +2238,7 @@ export default function Dashboard() {
           <div className="grid grid-cols-1 gap-6 mb-6">
             <BarChartWidget
               title="Insurance Company Category Gen + Health Total Business (Tenure Wise 1-5 Years)"
-              data={MOCK_TENURE_WISE}
+              data={analytics?.monthlyTenureWise || MOCK_TENURE_WISE}
               xKey="month"
               bars={TENURE_BARS}
             />
@@ -2209,8 +2246,8 @@ export default function Dashboard() {
 
           {/* ── Avg Sum Insured Cards ────────────────────────────────────────── */}
           <div className="grid lg:grid-cols-2 gap-6 mb-6">
-            <AvgSumInsuredGenHealthCard />
-            <AvgSumInsuredTermCard />
+            <AvgSumInsuredGenHealthCard data={analytics?.avgSumInsured?.genHealth} />
+            <AvgSumInsuredTermCard data={analytics?.avgSumInsured?.termLife} />
           </div>
 
           {/* ── New Leads Created (Stage Wise & Status Wise) ──────────────── */}
@@ -2233,7 +2270,7 @@ export default function Dashboard() {
                 </div>
               </div>
               <BarChartWidget
-                data={MOCK_LEADS_STATUS_WISE}
+                data={analytics?.leadsStatusWise || MOCK_LEADS_STATUS_WISE}
                 xKey="stage"
                 bars={LEAD_STATUS_BARS}
                 height={300}
@@ -2246,14 +2283,14 @@ export default function Dashboard() {
             <div className="lg:col-span-2 bg-white rounded-2xl border border-gray-100 p-5 shadow-sm">
               <CoverageBarChartWidget
                 title="Total No. of Persons Covered Under Product Category"
-                data={MOCK_PERSONS_COVERED}
+                data={analytics?.personsCovered?.length ? analytics.personsCovered : MOCK_PERSONS_COVERED}
                 xKey="name"
                 valueKey="value"
                 totalKey="total"
               />
             </div>
             <div className="lg:col-span-1">
-              <MfLeadsSummaryCard data={MOCK_MF_LEADS} />
+              <MfLeadsSummaryCard data={analytics?.mfBusiness || MOCK_MF_LEADS} />
             </div>
           </div>
 
@@ -2265,7 +2302,7 @@ export default function Dashboard() {
               </div>
               <div>
                 <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">Policy Retention Rate</p>
-                <p className="text-xl font-black text-gray-900 mt-1">94.2%</p>
+                <p className="text-xl font-black text-gray-900 mt-1">{analytics?.retentionRate !== undefined ? `${analytics.retentionRate}%` : '94.2%'}</p>
                 <span className="text-[10px] font-bold text-green-600">▲ +2.4% <span className="text-gray-400 font-medium">vs last month</span></span>
               </div>
             </div>
@@ -2276,7 +2313,7 @@ export default function Dashboard() {
               </div>
               <div>
                 <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">Renewal Rate</p>
-                <p className="text-xl font-black text-gray-900 mt-1">87.6%</p>
+                <p className="text-xl font-black text-gray-900 mt-1">{analytics?.renewalRate !== undefined ? `${analytics.renewalRate}%` : '87.6%'}</p>
                 <span className="text-[10px] font-bold text-green-600">▲ +3.7% <span className="text-gray-400 font-medium">vs last month</span></span>
               </div>
             </div>

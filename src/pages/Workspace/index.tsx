@@ -16,18 +16,14 @@ import {
   Clock, CheckCircle, Play, Square,
   TrendingUp, ListTodo, ClipboardList,
   Plus, CheckSquare, User, Shield,
-  FileText, Users, Calendar, Phone, DollarSign,
+  FileText, Users, Phone, DollarSign,
   Filter, Check, AlertCircle, LayoutDashboard, ArrowRight, Lock, MessageSquare,
   ChevronDown, Eye, X
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { DatePicker } from '@comps/common/DatePicker';
 import toast from 'react-hot-toast';
-import WorkspaceHeader from './components/WorkspaceHeader';
 import WorkspaceKpiCards from './components/WorkspaceKpiCards';
-import UnifiedTaskActivityLog from './components/UnifiedTaskActivityLog';
-import MyTasksPanel from './components/MyTasksPanel';
-import DailyProductivitySummary from './components/DailyProductivitySummary';
 
 function formatTotalDuration(checkIn: string | Date, checkOut: string | Date) {
   const diffMs = new Date(checkOut).getTime() - new Date(checkIn).getTime();
@@ -39,7 +35,7 @@ function formatTotalDuration(checkIn: string | Date, checkOut: string | Date) {
   return `${mins}m`;
 }
 
-type TabType = 'today' | 'my_tasks' | 'commissions';
+type TabType = 'commissions';
 
 const formatPreview = (dateStr?: string) => {
   if (!dateStr) return '';
@@ -62,7 +58,7 @@ export default function Workspace() {
   const createTaskMutation = useCreateTask();
 
   // Active tab state
-  const [activeTab, setActiveTab] = useState<TabType>('today');
+  const [activeTab, setActiveTab] = useState<TabType>('commissions');
 
   // Task filter & form state
   const [taskStatusFilter, setTaskStatusFilter] = useState<'ALL' | 'PENDING' | 'COMPLETED'>('ALL');
@@ -342,39 +338,11 @@ export default function Workspace() {
         </div>
       )}
 
-      {/* 2. THREE WORKSPACE NAVIGATION TABS (Mobile Responsive Horizontal Scroll) */}
+      {/* 2. WORKSPACE NAVIGATION (Commissions) */}
       <div className="flex items-center gap-2 border-b border-gray-200 pb-2 overflow-x-auto no-scrollbar flex-nowrap scroll-smooth">
         <button
-          onClick={() => setActiveTab('today')}
-          className={`shrink-0 whitespace-nowrap flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-xl font-extrabold text-xs transition-all cursor-pointer ${
-            activeTab === 'today'
-              ? 'bg-primary-600 text-white shadow-sm'
-              : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 bg-white border border-gray-100 sm:border-transparent'
-          }`}
-        >
-          <Calendar className="w-4 h-4" /> Today
-        </button>
-
-        {/* Commented out My Tasks tab
-        <button
-          onClick={() => setActiveTab('my_tasks')}
-          className={`shrink-0 whitespace-nowrap flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-xl font-extrabold text-xs transition-all cursor-pointer ${
-            activeTab === 'my_tasks'
-              ? 'bg-primary-600 text-white shadow-sm'
-              : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 bg-white border border-gray-100 sm:border-transparent'
-          }`}
-        >
-          <ListTodo className="w-4 h-4" /> My Tasks
-        </button>
-        */}
-
-        <button
           onClick={() => setActiveTab('commissions')}
-          className={`shrink-0 whitespace-nowrap flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-xl font-extrabold text-xs transition-all cursor-pointer ${
-            activeTab === 'commissions'
-              ? 'bg-primary-600 text-white shadow-sm'
-              : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 bg-white border border-gray-100 sm:border-transparent'
-          }`}
+          className="shrink-0 whitespace-nowrap flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-xl font-extrabold text-xs transition-all cursor-pointer bg-primary-600 text-white shadow-sm"
         >
           <DollarSign className="w-4 h-4" /> Commissions
         </button>
@@ -399,47 +367,7 @@ export default function Workspace() {
         </div>
       </div>
 
-      {/* TAB 1: TODAY (Executive Cockpit: Shift Control + Daily Summary + 3 Sub-Tabs: Overdue, Today's Queue, Today's Timeline) */}
-      {activeTab === 'today' && (
-        <div className="space-y-6">
-          <WorkspaceHeader
-            selectedEmployeeUserId={selectedEmployeeUserId}
-            selectedEmployeeObj={selectedEmployeeObj}
-            activeLogToday={activeLogToday}
-            refetch={refetch}
-          />
-
-          {/* Auto-Captured Daily Productivity Summary Cards */}
-          <DailyProductivitySummary 
-            isViewOnly={!!selectedEmployeeUserId}
-          />
-
-          {/* 3 Sub-Tabs: Overdue, Today's Queue, Today's Timeline (Commented out)
-          <UnifiedTaskActivityLog 
-            tasks={filteredTasksList} 
-            employeesList={employeesList}
-            onToggleTask={handleToggleTask}
-            onAddTask={(payload) => createTaskMutation.mutate(payload, { onSuccess: () => refetch() })}
-            isViewOnly={!!selectedEmployeeUserId}
-          />
-          */}
-        </div>
-      )}
-
-      {/* TAB 2: MY TASKS (TABLE & KANBAN) (Commented out) */}
-      {/*
-      {activeTab === 'my_tasks' && (
-        <MyTasksPanel
-          tasks={filteredTasksList}
-          employeesList={employeesList}
-          onToggleTask={handleToggleTask}
-          onAddTask={(payload) => createTaskMutation.mutate(payload, { onSuccess: () => refetch() })}
-          isViewOnly={!!selectedEmployeeUserId}
-        />
-      )}
-      */}
-
-      {/* TAB 3: COMMISSIONS */}
+      {/* COMMISSIONS */}
       {activeTab === 'commissions' && (
         <div className="space-y-6">
           {/* Compensation Overview (Backend Sourced) */}
@@ -510,7 +438,7 @@ export default function Workspace() {
                           <th className="pb-3 px-3">Policy Number</th>
                           <th className="pb-3 px-3">Year</th>
                           <th className="pb-3 px-3 text-right">Commission Amount</th>
-                          <th className="pb-3 px-3 text-right">Rate</th>
+                          <th className="pb-3 px-3">Comment</th>
                           <th className="pb-3 px-3 text-center">Status</th>
                           <th className="pb-3 px-3">Paid Date</th>
                         </tr>
@@ -534,7 +462,17 @@ export default function Workspace() {
                               </td>
                               <td className="py-3 px-3 text-gray-600 font-medium">{c.commissionYear?.name ?? (c.year ? `Year ${c.year}` : '—')}</td>
                               <td className="py-3 px-3 text-right font-bold text-gray-900">₹{Number(c.amount ?? 0).toLocaleString('en-IN')}</td>
-                              <td className="py-3 px-3 text-right text-gray-500">{Number(c.rate ?? 0).toFixed(2)}%</td>
+                              <td className="py-3 px-3 text-gray-600 font-medium max-w-[180px]">
+                                {(() => {
+                                  const matchRemark = c.notes?.match(/Payment Remark:\s*([^\n]+)/i);
+                                  const commentText = matchRemark ? matchRemark[1].trim() : (c.remark || (c.notes && !c.notes.includes('[Claim:') ? c.notes : '—'));
+                                  return (
+                                    <span className="truncate block" title={commentText}>
+                                      {commentText || '—'}
+                                    </span>
+                                  );
+                                })()}
+                              </td>
                               <td className="py-3 px-3 text-center">
                                 <span className={c.isPaid ? 'badge-green' : 'badge-yellow'}>
                                   {c.isPaid ? 'Paid' : 'Pending'}

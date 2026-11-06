@@ -758,7 +758,7 @@ export default function Contacts() {
     if (filterCity) count++;
     if (filterBank) count++;
     if (filterMedicalHistory.length > 0) count++;
-    if (filterActiveStatus !== 'ALL') count++;
+    if (filterActiveStatus !== 'ALL' || selectedFilters.includes('Active') || selectedFilters.includes('Inactive')) count++;
     if (filterPolicyCombo !== 'ALL') count++;
     if (filterRole !== 'ALL') count++;
     if (filterAssignedAgent !== 'ALL' && filterAssignedAgent !== '') count++;
@@ -768,7 +768,7 @@ export default function Contacts() {
   }, [
     filterFollowUpFrom, filterFollowUpTo, filterGender, filterMaritalStatus, filterAgeRange,
     filterIncomeRange, filterEducation, filterOccupation, filterResidency, filterState,
-    filterCity, filterBank, filterMedicalHistory, filterActiveStatus, filterPolicyCombo,
+    filterCity, filterBank, filterMedicalHistory, filterActiveStatus, selectedFilters, filterPolicyCombo,
     filterRole, filterAssignedAgent, filterProducts, dateFrom, dateTo
   ]);
 
@@ -2504,7 +2504,15 @@ export default function Contacts() {
         event.preventDefault();
         event.stopPropagation();
         const contactId = editContactId || loadedContact?.id;
-        if (contactId) {
+        const currentMember = editingFamilyMemberIdx !== null && editingFamilyMemberIdx !== undefined
+          ? familyMembers[editingFamilyMemberIdx]
+          : selectedFamilyMemberForModal;
+        if (currentMember?.contactId) {
+          openContactInNewTab(currentMember.contactId, {
+            parentContactId: contactId,
+            returnTab: 'Family',
+          });
+        } else if (contactId) {
           openFamilyMemberInNewTab(contactId, editingFamilyMemberIdx);
         }
         return;
@@ -2553,7 +2561,15 @@ export default function Contacts() {
           event.preventDefault();
           event.stopPropagation();
           if (familyMembers.length > 0) {
-            openFamilyMemberInNewTab(contactId, 0);
+            const firstMember = familyMembers[0];
+            if (firstMember?.contactId) {
+              openContactInNewTab(firstMember.contactId, {
+                parentContactId: contactId,
+                returnTab: 'Family',
+              });
+            } else {
+              openFamilyMemberInNewTab(contactId, 0);
+            }
           } else {
             openFamilyMemberInNewTab(contactId);
           }
@@ -2594,7 +2610,7 @@ export default function Contacts() {
           leadId: editLeadId,
           activeTab: activeLeadTab || 'Family',
           isViewMode: isViewMode,
-          contactName: loadedContact ? `${loadedContact.firstName || ''} ${loadedContact.lastName || ''}`.trim() : undefined,
+          contactName: loadedContact ? [loadedContact.firstName, loadedContact.middleName, loadedContact.lastName].filter(Boolean).join(' ').trim() : undefined,
         }
       ]);
     }
@@ -3616,19 +3632,45 @@ export default function Contacts() {
         }
       }
 
-      // Text Search: Full Name, Phone, Alternate Phone, Email, Contact ID, Aadhaar, PAN
+      // Contact Active Status Resolution
+      const isItemActive = item.isActive === true || item.isActive === 'true' || (item.isActive !== false && item.isActive !== 'false' && (item.contactStatus || '').toLowerCase() !== 'inactive');
+
+      // Text Search: Full Name, Phone, Alternate Phone, Email, Contact ID, Aadhaar, PAN, Role, City, Stage, Status, Assigned Employee
       if (search && search.trim()) {
         const sTerm = search.trim().toLowerCase();
         const searchTokens = sTerm.split(/\s+/).filter(Boolean);
-        const fullName = `${item.firstName || item.contact?.firstName || ''} ${item.lastName || item.contact?.lastName || ''}`.trim().toLowerCase();
+        const fullName = [item.firstName || item.contact?.firstName, item.middleName || item.contact?.middleName, item.lastName || item.contact?.lastName].filter(Boolean).join(' ').trim().toLowerCase();
         const phone = (item.phone || item.contact?.phone || '').toLowerCase();
         const altPhone = (item.alternatePhone || item.contact?.alternatePhone || '').toLowerCase();
         const email = (item.email || item.contact?.email || '').toLowerCase();
         const cid = (item.contactId || item.id || '').toLowerCase();
         const aadh = (item.aadhaarNumber || item.contact?.aadhaarNumber || '').toLowerCase();
         const pan = (item.panNumber || item.contact?.panNumber || '').toLowerCase();
+        const role = (item.role || item.user?.role || 'Contact').toLowerCase();
+        const city = (item.city || item.address?.city || item.addresses?.[0]?.city || item.contact?.city || (item.contact as any)?.addresses?.[0]?.city || '').toLowerCase();
+        const leadStage = (item.leadStage || item.stage || '').toLowerCase();
+        const leadStatus = (item.leadStatus || '').toLowerCase();
+        const source = (item.source || '').toLowerCase();
+        const statusStr = isItemActive ? 'active' : 'inactive';
+        const empName = getEmployeeName(item.assignedEmployeeId, item.assignedEmployee, item).toLowerCase();
+
         const matchesFullName = searchTokens.every(token => fullName.includes(token));
-        if (!matchesFullName && !phone.includes(sTerm) && !altPhone.includes(sTerm) && !email.includes(sTerm) && !cid.includes(sTerm) && !aadh.includes(sTerm) && !pan.includes(sTerm)) {
+        const matchesOther =
+          phone.includes(sTerm) ||
+          altPhone.includes(sTerm) ||
+          email.includes(sTerm) ||
+          cid.includes(sTerm) ||
+          aadh.includes(sTerm) ||
+          pan.includes(sTerm) ||
+          role.includes(sTerm) ||
+          city.includes(sTerm) ||
+          leadStage.includes(sTerm) ||
+          leadStatus.includes(sTerm) ||
+          source.includes(sTerm) ||
+          statusStr === sTerm ||
+          empName.includes(sTerm);
+
+        if (!matchesFullName && !matchesOther) {
           return false;
         }
       }
@@ -3782,10 +3824,7 @@ export default function Contacts() {
 
       const isCustomer = (item.policies && item.policies.length > 0) || hasTag('customer') || (policyMap[item.id]?.length > 0);
 
-      if (activeTab === 'contacts') {
-        if (selectedFilters.includes('Active') && item.isActive === false) return false;
-        if (selectedFilters.includes('Inactive') && item.isActive !== false) return false;
-      } else if (activeTab === 'customers') {
+      if (activeTab === 'customers') {
         // Customer tab filters
         if (!isCustomer && !hasTag('customer')) return false;
 
@@ -4044,12 +4083,17 @@ export default function Contacts() {
         if (!matchesMed) return false;
       }
 
-      // 13. Active / Inactive Status Filter
-      if (filterActiveStatus && filterActiveStatus !== 'ALL') {
-        const isActive = item.isActive !== false;
-        if (filterActiveStatus === 'Active' && !isActive) return false;
-        if (filterActiveStatus === 'Inactive' && isActive) return false;
-      }
+      // 13. Active / Inactive Status Filter (unified across all tabs and filter triggers)
+      const filterActiveEffective = filterActiveStatus !== 'ALL'
+        ? filterActiveStatus
+        : selectedFilters.includes('Active')
+          ? 'Active'
+          : selectedFilters.includes('Inactive')
+            ? 'Inactive'
+            : 'ALL';
+
+      if (filterActiveEffective === 'Active' && !isItemActive) return false;
+      if (filterActiveEffective === 'Inactive' && isItemActive) return false;
 
       // 14. Policy Combo Filter (Health No Term / Term No Health)
       if (filterPolicyCombo && filterPolicyCombo !== 'ALL') {
@@ -4126,14 +4170,73 @@ export default function Contacts() {
         const num = parseInt(cid.replace(/\D/g, ''), 10);
         return isNaN(num) ? cid : num;
       }
-      if (key === 'name') return `${row.firstName || row.contact?.firstName || ''} ${row.lastName || row.contact?.lastName || ''}`;
+      if (key === 'name') return [row.firstName || row.contact?.firstName, row.middleName || row.contact?.middleName, row.lastName || row.contact?.lastName].filter(Boolean).join(' ').trim() || row.name || '';
       if (key === 'phone') return row.phone || row.contact?.phone || '';
-      if (key === 'product') {
-        const p = policyMap[row.id] ?? [];
-        return p.map((x: any) => x.plan?.category || x.plan?.name).join(', ');
+      if (key === 'role') return row.role || row.user?.role || 'Contact';
+      if (key === 'contactStatus' || key === 'status' || key === 'isActive') {
+        const isItemActive = row.isActive === true || row.isActive === 'true' || (row.isActive !== false && row.isActive !== 'false' && (row.contactStatus || '').toLowerCase() !== 'inactive');
+        return isItemActive ? 'Active' : 'Inactive';
       }
-      if (key === 'assignedTo') return getEmployeeName(row.assignedEmployeeId, row.assignedEmployee, row);
-      
+      if (key === 'leadStage' || key === 'leadstage') return row.leadStage || row.stage || '';
+      if (key === 'leadStatus' || key === 'leadstatus') return row.leadStatus || '';
+      if (key === 'assignedTo' || key === 'assignedEmployee' || key === 'assignedemployee') return getEmployeeName(row.assignedEmployeeId, row.assignedEmployee, row);
+      if (key === 'source') return row.source || '';
+      if (key === 'email') return row.email || row.contact?.email || '';
+      if (key === 'city') return row.city || row.address?.city || row.addresses?.[0]?.city || row.contact?.city || (row.contact as any)?.addresses?.[0]?.city || '';
+      if (key === 'product') {
+        const p = policyMap[row.id] ?? row.policies ?? [];
+        return p.map((x: any) => x.plan?.category || x.plan?.name || x.policyNumber).join(', ');
+      }
+      if (key === 'renewStatus' || key === 'renewstatus') {
+        const policies = policyMap[row.id] ?? row.policies ?? [];
+        const active = policies.filter((p: any) => p.status === 'ACTIVE');
+        if (active.length === 0) return '';
+        const due = active.some((p: any) =>
+          p.endDate && new Date(p.endDate) <= new Date(Date.now() + 30 * 86400000)
+        );
+        return due ? 'Due' : 'OK';
+      }
+      if (key === 'renewAssigned' || key === 'renewassigned') {
+        const policies = policyMap[row.id] ?? row.policies ?? [];
+        const active = policies.find((p: any) => p.status === 'ACTIVE' && p.assignedEmployeeId);
+        return active ? getEmployeeName(active.assignedEmployeeId) : '';
+      }
+      if (key === 'claimStatus' || key === 'claimstatus') {
+        const claims = claimMap[row.id] ?? row.claims ?? [];
+        const active = claims.find((c: any) => ['INTIMATED', 'FILED', 'IN_REVIEW'].includes(c.status));
+        return active ? (active.status || '') : '';
+      }
+      if (key === 'claimAssigned' || key === 'claimassigned') {
+        const claims = claimMap[row.id] ?? row.claims ?? [];
+        const active = claims.find((c: any) =>
+          ['INTIMATED', 'FILED', 'IN_REVIEW'].includes(c.status) && c.assignedEmployeeId
+        );
+        return active ? getEmployeeName(active.assignedEmployeeId) : '';
+      }
+      if (key === 'waCampaign' || key === 'wacampaign') {
+        const campaigns = row.tags?.filter((t: string) => [
+          'Health Awareness',
+          'New Year Offer',
+          'Pension Plan',
+          'Monsoon Safety',
+          'Term Insurance Promo',
+          'Family Health Package'
+        ].includes(t)) || [];
+        return campaigns.join(', ');
+      }
+      if (key === 'dateOfBirth' || key === 'dateofbirth') return row.dateOfBirth || row.contact?.dateOfBirth || '';
+      if (key === 'daysUntil' || key === 'daysuntilbirthday') {
+        const dob = row.dateOfBirth || row.contact?.dateOfBirth;
+        if (!dob) return 999999;
+        const dobDate = new Date(dob);
+        const today = new Date();
+        const nextBday = new Date(today.getFullYear(), dobDate.getMonth(), dobDate.getDate());
+        if (nextBday < today) {
+          nextBday.setFullYear(today.getFullYear() + 1);
+        }
+        return differenceInDays(nextBday, today);
+      }
+
       // Attempt to resolve nested paths generically if standard row[key] is undefined
       const parts = key.split('.');
       let val = row;
@@ -4141,9 +4244,15 @@ export default function Contacts() {
         if (val == null) break;
         val = val[part];
       }
-      return val !== undefined ? val : row[key];
+      if (val !== undefined && val !== null) return val;
+      return (
+        row[key] ??
+        row[key.toLowerCase()] ??
+        (row.customFields && (row.customFields[key] ?? row.customFields[key.toLowerCase()])) ??
+        (row.extraData && (row.extraData[key] ?? row.extraData[key.toLowerCase()]))
+      );
     });
-  }, [filteredData, sortKey, sortDir, policyMap]);
+  }, [filteredData, sortKey, sortDir, policyMap, claimMap]);
 
   // Contact Table Columns
   const CONTACT_COLS: Column<any>[] = [
@@ -4152,7 +4261,7 @@ export default function Contacts() {
       label: 'NAME',
       sortable: true,
       render: r => {
-        const fullName = `${r.firstName || ''} ${r.lastName || ''}`.trim() || r.name || '—';
+        const fullName = [r.firstName || r.contact?.firstName, r.middleName || r.contact?.middleName, r.lastName || r.contact?.lastName].filter(Boolean).join(' ').trim() || r.name || '—';
         return (
           <button
             type="button"
@@ -4352,7 +4461,7 @@ export default function Contacts() {
       label: 'NAME',
       sortable: true,
       render: r => {
-        const fullName = `${r.firstName || ''} ${r.lastName || ''}`.trim() || r.name || '—';
+        const fullName = [r.firstName || r.contact?.firstName, r.middleName || r.contact?.middleName, r.lastName || r.contact?.lastName].filter(Boolean).join(' ').trim() || r.name || '—';
         return (
           <button
             type="button"
@@ -4480,6 +4589,7 @@ export default function Contacts() {
     {
       key: 'waCampaign',
       label: 'WA CAMPAIGN',
+      sortable: true,
       render: r => {
         const campaigns = r.tags?.filter((t: string) => [
           'Health Awareness',
@@ -4538,7 +4648,7 @@ export default function Contacts() {
       label: 'NAME',
       sortable: true,
       render: r => {
-        const fullName = `${r.firstName || ''} ${r.lastName || ''}`.trim() || r.name || '—';
+        const fullName = [r.firstName || r.contact?.firstName, r.middleName || r.contact?.middleName, r.lastName || r.contact?.lastName].filter(Boolean).join(' ').trim() || r.name || '—';
         return (
           <button
             type="button"
@@ -4576,6 +4686,7 @@ export default function Contacts() {
     {
       key: 'daysUntil',
       label: 'DAYS UNTIL BIRTHDAY',
+      sortable: true,
       render: r => {
         if (!r.dateOfBirth) return '—';
         const dob = new Date(r.dateOfBirth);
@@ -4755,7 +4866,7 @@ export default function Contacts() {
         cols.push({
           key: colName,
           label: colName.toUpperCase(),
-          sortable: false,
+          sortable: true,
           render: (r: any) => {
             const val = r[colName] ?? r[colName.toLowerCase()] ?? (r.customFields && r.customFields[colName]) ?? (r.extraData && r.extraData[colName]) ?? '—';
             return <span className="text-slate-700 text-sm font-medium">{typeof val === 'object' ? JSON.stringify(val) : String(val)}</span>;
@@ -4845,12 +4956,14 @@ export default function Contacts() {
             <button
               type="button"
               onClick={() => {
-                setSelectedFilters(prev => prev.includes('Active') ? [] : ['Active']);
+                const next = (filterActiveStatus === 'Active' || selectedFilters.includes('Active')) ? 'ALL' : 'Active';
+                setFilterActiveStatus(next);
+                setSelectedFilters(next === 'Active' ? ['Active'] : []);
                 setPage(1);
               }}
               className={clsx(
                 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border shadow-2xs',
-                selectedFilters.includes('Active')
+                (filterActiveStatus === 'Active' || selectedFilters.includes('Active'))
                   ? 'bg-emerald-600 text-white border-emerald-600 shadow-emerald-500/20'
                   : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
               )}
@@ -4860,12 +4973,14 @@ export default function Contacts() {
             <button
               type="button"
               onClick={() => {
-                setSelectedFilters(prev => prev.includes('Inactive') ? [] : ['Inactive']);
+                const next = (filterActiveStatus === 'Inactive' || selectedFilters.includes('Inactive')) ? 'ALL' : 'Inactive';
+                setFilterActiveStatus(next);
+                setSelectedFilters(next === 'Inactive' ? ['Inactive'] : []);
                 setPage(1);
               }}
               className={clsx(
                 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border shadow-2xs',
-                selectedFilters.includes('Inactive')
+                (filterActiveStatus === 'Inactive' || selectedFilters.includes('Inactive'))
                   ? 'bg-rose-600 text-white border-rose-600 shadow-rose-500/20'
                   : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
               )}
@@ -5153,10 +5268,10 @@ export default function Contacts() {
               <span className="cursor-pointer hover:text-red-500 font-bold ml-1" onClick={() => setFilterMedicalHistory([])}>×</span>
             </span>
           )}
-          {filterActiveStatus !== 'ALL' && (
+          {(filterActiveStatus !== 'ALL' || selectedFilters.includes('Active') || selectedFilters.includes('Inactive')) && (
             <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-white text-blue-900 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs">
-              Status: {filterActiveStatus}
-              <span className="cursor-pointer hover:text-red-500 font-bold ml-1" onClick={() => setFilterActiveStatus('ALL')}>×</span>
+              Status: {filterActiveStatus !== 'ALL' ? filterActiveStatus : selectedFilters.includes('Active') ? 'Active' : 'Inactive'}
+              <span className="cursor-pointer hover:text-red-500 font-bold ml-1" onClick={() => { setFilterActiveStatus('ALL'); setSelectedFilters(prev => prev.filter(f => f !== 'Active' && f !== 'Inactive')); }}>×</span>
             </span>
           )}
           {filterPolicyCombo !== 'ALL' && (
@@ -5351,7 +5466,17 @@ export default function Contacts() {
             {/* 12. Active Status */}
             <div>
               <label className="label text-[11px] font-bold text-slate-600">Contact Active Status</label>
-              <select className="input text-xs w-full bg-white shadow-2xs mt-1" value={filterActiveStatus} onChange={e => setFilterActiveStatus(e.target.value)}>
+              <select
+                className="input text-xs w-full bg-white shadow-2xs mt-1"
+                value={filterActiveStatus !== 'ALL' ? filterActiveStatus : selectedFilters.includes('Active') ? 'Active' : selectedFilters.includes('Inactive') ? 'Inactive' : 'ALL'}
+                onChange={e => {
+                  const val = e.target.value;
+                  setFilterActiveStatus(val);
+                  if (val === 'Active') setSelectedFilters(['Active']);
+                  else if (val === 'Inactive') setSelectedFilters(['Inactive']);
+                  else setSelectedFilters(prev => prev.filter(f => f !== 'Active' && f !== 'Inactive'));
+                }}
+              >
                 <option value="ALL">All Contacts (Active & Inactive)</option>
                 <option value="Active">Active Only</option>
                 <option value="Inactive">Inactive Only</option>
@@ -5505,6 +5630,8 @@ export default function Contacts() {
           loading={activeTab === 'birthdays' ? birthdayLoading : contactsLoading}
           rowKey={r => r.id}
           onPageChange={setPage}
+          sortKey={sortKey}
+          sortDir={sortDir as 'asc' | 'desc'}
           onSort={(key, dir) => {
             setSortKey(key);
             setSortDir(dir);
@@ -5794,7 +5921,7 @@ export default function Contacts() {
 
           {/* Modal sub-navigation tabs */}
           <div className="flex bg-slate-200/60 p-1.5 rounded-2xl mt-0 mb-3 gap-2 border border-slate-200/80 overflow-x-auto shadow-2xs">
-            {['Product Interest', 'Personal', 'Family', 'Policy', 'Claims', 'Documents', 'WA Campaign', 'History'].map(tab => (
+            {['Product Interest', 'Personal', 'Family', 'Policy', 'Claims', 'Documents', 'History'].map(tab => (
               <button
                 key={tab}
                 type="button"
@@ -7073,20 +7200,26 @@ export default function Contacts() {
                                 e.preventDefault();
                                 e.stopPropagation();
                                 if (e.ctrlKey || e.metaKey) {
-                                  const contactId = editContactId || loadedContact?.id;
-                                  if (contactId) {
-                                    openFamilyMemberInNewTab(contactId, idx, {
-                                      parentContactId: contactId,
-                                      returnTab: 'Family',
-                                    });
-                                  } else if (member.contactId) {
+                                  if (member.contactId) {
                                     openContactInNewTab(member.contactId, {
                                       parentContactId: editContactId || loadedContact?.id,
                                       returnTab: 'Family',
                                     });
+                                  } else {
+                                    const contactId = editContactId || loadedContact?.id;
+                                    if (contactId) {
+                                      openFamilyMemberInNewTab(contactId, idx, {
+                                        parentContactId: contactId,
+                                        returnTab: 'Family',
+                                      });
+                                    }
                                   }
                                 } else {
-                                  openEditFamilyMemberModal(idx);
+                                  if (member.contactId) {
+                                    navigateToContact({ id: member.contactId, contactId: member.contactId });
+                                  } else {
+                                    openEditFamilyMemberModal(idx);
+                                  }
                                 }
                               }
                             }}
@@ -7097,24 +7230,30 @@ export default function Contacts() {
                               onClick={(e) => {
                                 e.stopPropagation();
                                 if (e.ctrlKey || e.metaKey) {
-                                  const contactId = editContactId || loadedContact?.id;
-                                  if (contactId) {
-                                    openFamilyMemberInNewTab(contactId, idx, {
-                                      parentContactId: contactId,
-                                      returnTab: 'Family',
-                                    });
-                                  } else if (member.contactId) {
+                                  if (member.contactId) {
                                     openContactInNewTab(member.contactId, {
                                       parentContactId: editContactId || loadedContact?.id,
                                       returnTab: 'Family',
                                     });
+                                  } else {
+                                    const contactId = editContactId || loadedContact?.id;
+                                    if (contactId) {
+                                      openFamilyMemberInNewTab(contactId, idx, {
+                                        parentContactId: contactId,
+                                        returnTab: 'Family',
+                                      });
+                                    }
                                   }
                                   return;
                                 }
-                                openEditFamilyMemberModal(idx);
+                                if (member.contactId) {
+                                  navigateToContact({ id: member.contactId, contactId: member.contactId });
+                                } else {
+                                  openEditFamilyMemberModal(idx);
+                                }
                               }}
                               className={`flex items-center justify-between bg-gradient-to-r ${headerGradient} px-4 py-3 cursor-pointer select-none`}
-                              title="Click to view/edit family member in same tab (Ctrl+Click or Ctrl+Enter to open in new tab)"
+                              title="Click to view full contact profile with all tabs in same tab (Ctrl+Click or Ctrl+Enter to open in new tab)"
                             >
                               <div className="flex items-center gap-3 min-w-0 flex-1">
                                 <div className="w-7 h-7 rounded-lg bg-white/20 backdrop-blur-sm flex items-center justify-center text-white shrink-0 font-black text-xs">
@@ -7179,8 +7318,15 @@ export default function Contacts() {
                                   onClick={(e) => {
                                     if (e.ctrlKey || e.metaKey) {
                                       e.preventDefault();
-                                      const contactId = editContactId || loadedContact?.id;
-                                      if (contactId) openFamilyMemberInNewTab(contactId, idx);
+                                      if (member.contactId) {
+                                        openContactInNewTab(member.contactId, {
+                                          parentContactId: editContactId || loadedContact?.id,
+                                          returnTab: 'Family',
+                                        });
+                                      } else {
+                                        const contactId = editContactId || loadedContact?.id;
+                                        if (contactId) openFamilyMemberInNewTab(contactId, idx);
+                                      }
                                       return;
                                     }
                                     openEditFamilyMemberModal(idx);
@@ -7190,14 +7336,21 @@ export default function Contacts() {
                                       if (e.ctrlKey || e.metaKey) {
                                         e.preventDefault();
                                         e.stopPropagation();
-                                        const contactId = editContactId || loadedContact?.id;
-                                        if (contactId) openFamilyMemberInNewTab(contactId, idx);
+                                        if (member.contactId) {
+                                          openContactInNewTab(member.contactId, {
+                                            parentContactId: editContactId || loadedContact?.id,
+                                            returnTab: 'Family',
+                                          });
+                                        } else {
+                                          const contactId = editContactId || loadedContact?.id;
+                                          if (contactId) openFamilyMemberInNewTab(contactId, idx);
+                                        }
                                         return;
                                       }
                                     }
                                   }}
                                   className="p-1.5 rounded-lg bg-white/15 hover:bg-white/30 text-white font-bold text-xs flex items-center gap-1 transition-all cursor-pointer"
-                                  title="Edit Family Member Details in Popup (Ctrl+Click or Ctrl+Enter to open in new tab)"
+                                  title="Edit Family Member Details in Popup (Ctrl+Click or Ctrl+Enter to open full profile in new tab)"
                                 >
                                   <Pencil size={13} />
                                   <span className="text-[11px]">Edit</span>
@@ -7218,24 +7371,30 @@ export default function Contacts() {
                               onClick={(e) => {
                                 e.stopPropagation();
                                 if (e.ctrlKey || e.metaKey) {
-                                  const contactId = editContactId || loadedContact?.id;
-                                  if (contactId) {
-                                    openFamilyMemberInNewTab(contactId, idx, {
-                                      parentContactId: contactId,
-                                      returnTab: 'Family',
-                                    });
-                                  } else if (member.contactId) {
+                                  if (member.contactId) {
                                     openContactInNewTab(member.contactId, {
                                       parentContactId: editContactId || loadedContact?.id,
                                       returnTab: 'Family',
                                     });
+                                  } else {
+                                    const contactId = editContactId || loadedContact?.id;
+                                    if (contactId) {
+                                      openFamilyMemberInNewTab(contactId, idx, {
+                                        parentContactId: contactId,
+                                        returnTab: 'Family',
+                                      });
+                                    }
                                   }
                                   return;
                                 }
-                                openEditFamilyMemberModal(idx);
+                                if (member.contactId) {
+                                  navigateToContact({ id: member.contactId, contactId: member.contactId });
+                                } else {
+                                  openEditFamilyMemberModal(idx);
+                                }
                               }}
                               className="p-3.5 bg-slate-50/40 hover:bg-slate-50/80 transition-colors cursor-pointer grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs text-slate-600"
-                              title="Click to view/edit family member in same tab (Ctrl+Click or Ctrl+Enter to open in new tab)"
+                              title="Click to view full contact profile with all tabs in same tab (Ctrl+Click or Ctrl+Enter to open in new tab)"
                             >
                               <div>
                                 <span className="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">Contact</span>
@@ -7344,15 +7503,34 @@ export default function Contacts() {
               const direct = loadedContact?.policies || [];
               const mappedFromPolicyMap = Array.from(connectedContactIds).flatMap(cid => policyMap[cid] || []);
 
-              // Also match by contact name & phone in policyListArray
-              const contactName = `${loadedContact?.firstName || personalFields?.firstName || ''} ${loadedContact?.lastName || personalFields?.lastName || ''}`.trim().toLowerCase();
-              const contactPhone = (loadedContact?.phone || personalFields?.whatsappNumber || personalFields?.callingNumber || '').replace(/\D/g, '').slice(-10);
+              // Also match by contact full name & contact number in policyListArray
+              const contactFullName = [
+                loadedContact?.firstName || personalFields?.firstName || '',
+                loadedContact?.middleName || personalFields?.middleName || '',
+                loadedContact?.lastName || personalFields?.lastName || ''
+              ].filter(Boolean).join(' ').trim().toLowerCase();
 
-              const familyNames = new Set<string>();
-              if (contactName) familyNames.add(contactName);
+              const contactPhone = (
+                loadedContact?.phone ||
+                personalFields?.whatsappNumber ||
+                personalFields?.callingNumber ||
+                ''
+              ).replace(/\D/g, '').slice(-10);
+
+              // Gather connected family members' full names & contact numbers
+              const familyClusters: Array<{ fullName: string; phone: string }> = [];
+              if (contactFullName && contactPhone && contactPhone.length >= 7) {
+                familyClusters.push({ fullName: contactFullName, phone: contactPhone });
+              }
               familyMembers.forEach((m: any) => {
-                const name = (m.name || `${m.firstName || ''} ${m.lastName || ''}`).trim().toLowerCase();
-                if (name) familyNames.add(name);
+                const famFullName = (
+                  m.name ||
+                  [m.firstName, m.middleName, m.lastName].filter(Boolean).join(' ')
+                ).trim().toLowerCase();
+                const famPhone = (m.phone || m.mobile || m.contactNo || '').replace(/\D/g, '').slice(-10);
+                if (famFullName && famPhone && famPhone.length >= 7) {
+                  familyClusters.push({ fullName: famFullName, phone: famPhone });
+                }
               });
 
               const matchedFromAllPolicies = policyListArray.filter((p: any) => {
@@ -7360,26 +7538,27 @@ export default function Contacts() {
                 if (pContactId && connectedContactIds.has(pContactId)) return true;
 
                 if (Array.isArray(p.members)) {
-                  const hasMember = p.members.some((m: any) => {
-                    if (m.contactId && connectedContactIds.has(String(m.contactId))) return true;
-                    const mName = String(m.name || '').trim().toLowerCase();
-                    return mName && familyNames.has(mName);
-                  });
-                  if (hasMember) return true;
+                  const hasMemberId = p.members.some((m: any) => m.contactId && connectedContactIds.has(String(m.contactId)));
+                  if (hasMemberId) return true;
                 }
 
-                const notesStr = typeof p.notes === 'string' ? p.notes.toLowerCase() : '';
-                if (notesStr && familyNames.size > 0) {
-                  for (const famName of familyNames) {
-                    if (famName.length > 2 && notesStr.includes(famName)) {
-                      return true;
-                    }
+                // Match ONLY when BOTH full name AND contact number match together
+                const pContactFullName = [
+                  p.contact?.firstName || '',
+                  p.contact?.middleName || '',
+                  p.contact?.lastName || ''
+                ].filter(Boolean).join(' ').trim().toLowerCase();
+                const pPhone = String(p.contact?.phone || '').replace(/\D/g, '').slice(-10);
+
+                if (contactFullName && contactPhone && contactPhone.length >= 7) {
+                  if (pContactFullName === contactFullName && pPhone === contactPhone) {
+                    return true;
                   }
                 }
 
-                if (contactPhone && contactPhone.length === 10) {
-                  const pPhone = String(p.contact?.phone || '').replace(/\D/g, '').slice(-10);
-                  if (pPhone && pPhone === contactPhone) return true;
+                if (familyClusters.length > 0 && pContactFullName && pPhone && pPhone.length >= 7) {
+                  const matchesFamily = familyClusters.some(fc => fc.fullName === pContactFullName && fc.phone === pPhone);
+                  if (matchesFamily) return true;
                 }
 
                 return false;
@@ -7720,41 +7899,6 @@ export default function Contacts() {
               );
             })()}
 
-            {activeLeadTab === 'WA Campaign' && (
-              <div className="space-y-4">
-                <div>
-                  <h3 className="text-xs font-semibold text-gray-800">Select Campaigns</h3>
-                  <p className="text-[11px] text-gray-500 mt-1">Choose which WhatsApp campaigns this lead should be part of:</p>
-                </div>
-                <div className="space-y-2 mt-3">
-                  {[
-                    'Health Awareness',
-                    'New Year Offer',
-                    'Pension Plan',
-                    'Monsoon Safety',
-                    'Term Insurance Promo',
-                    'Family Health Package'
-                  ].map((campaign) => (
-                    <label
-                      key={campaign}
-                      className="flex flex-wrap items-center gap-3 p-3 bg-gray-50/50 border border-gray-150 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors"
-                    >
-                      <input
-                        type="checkbox"
-                        className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                        checked={selectedCampaigns.includes(campaign)}
-                        onChange={() => {
-                          setSelectedCampaigns(prev =>
-                            prev.includes(campaign) ? prev.filter(c => c !== campaign) : [...prev, campaign]
-                          );
-                        }}
-                      />
-                      <span className="text-xs font-semibold text-gray-700">{campaign}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            )}
 
             {activeLeadTab === 'Claims' && (() => {
               // 1. Gather all policy IDs for current contact
@@ -7775,7 +7919,11 @@ export default function Contacts() {
                 ''
               ).trim();
 
-              const contactFullName = `${loadedContact?.firstName || personalFields?.firstName || ''} ${loadedContact?.lastName || personalFields?.lastName || ''}`.trim().toLowerCase();
+              const contactFullName = [
+                loadedContact?.firstName || personalFields?.firstName || '',
+                loadedContact?.middleName || personalFields?.middleName || '',
+                loadedContact?.lastName || personalFields?.lastName || ''
+              ].filter(Boolean).join(' ').trim().toLowerCase();
 
               // 2. Direct contact claims & mapped claims
               const directClaims = loadedContact?.claims || [];
@@ -7787,12 +7935,17 @@ export default function Contacts() {
               const matchedByPolicyOrPhone = claimListArray.filter((c: any) => {
                 if (c?.policyId && contactPolicyIds.has(c.policyId)) return true;
                 if (c?.policy?.id && contactPolicyIds.has(c.policy.id)) return true;
-                if (contactPhone && (c?.contact?.phone === contactPhone || c?.phone === contactPhone)) return true;
 
-                const claimFullName = `${c?.contact?.firstName || ''} ${c?.contact?.lastName || ''}`.trim().toLowerCase();
-                if (contactFullName && claimFullName && (contactFullName === claimFullName || contactFullName.includes(claimFullName) || claimFullName.includes(contactFullName))) return true;
+                const claimFullName = [
+                  c?.contact?.firstName || '',
+                  c?.contact?.middleName || '',
+                  c?.contact?.lastName || ''
+                ].filter(Boolean).join(' ').trim().toLowerCase();
+                const claimPhone = String(c?.contact?.phone || c?.phone || '').replace(/\D/g, '').slice(-10);
 
-                if (contactFullName && c?.notes && typeof c.notes === 'string' && c.notes.toLowerCase().includes(contactFullName)) return true;
+                if (contactFullName && contactPhone && contactPhone.length >= 7) {
+                  if (claimFullName === contactFullName && claimPhone === contactPhone) return true;
+                }
 
                 return false;
               });
@@ -8042,7 +8195,7 @@ export default function Contacts() {
             city: personalFields.city,
             pincode: personalFields.pincode,
             streetAddress: personalFields.streetAddress,
-            fullName: `${personalFields.firstName || ''} ${personalFields.lastName || ''}`.trim(),
+            fullName: [personalFields.firstName, personalFields.middleName, personalFields.lastName].filter(Boolean).join(' ').trim(),
           }}
           employeesList={employeesList}
           onSave={handleSaveFamilyMemberFromModal}
@@ -8180,7 +8333,7 @@ export default function Contacts() {
           }
         }}
         contactId={editContactId || loadedContact?.id}
-        contactName={loadedContact ? `${loadedContact.firstName || ''} ${loadedContact.lastName || ''}`.trim() : undefined}
+        contactName={loadedContact ? [loadedContact.firstName, loadedContact.middleName, loadedContact.lastName].filter(Boolean).join(' ').trim() : undefined}
         initialData={{
           ...(loadedContact || {}),
           familyMembers: familyMembers.length > 0 ? familyMembers : (loadedContact?.relationships || []),

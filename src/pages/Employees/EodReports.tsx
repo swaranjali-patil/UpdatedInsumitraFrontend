@@ -21,11 +21,11 @@ export default function EmployeeEodReports() {
   const navigate = useNavigate();
   const qc = useQueryClient();
 
-  // Filter States
+  // Filter States - Automatically default to last 7 days window (e.g. 28/10/2026 to 04/11/2026)
   const [selectedEmpId, setSelectedEmpId] = useState<string>('ALL');
   const [selectedDept, setSelectedDept] = useState<string>('ALL');
-  const [dateFrom, setDateFrom] = useState<string>(format(subDays(new Date(), 7), 'yyyy-MM-dd'));
-  const [dateTo, setDateTo] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
+  const [dateFrom, setDateFrom] = useState<string>(() => format(subDays(new Date(), 7), 'yyyy-MM-dd'));
+  const [dateTo, setDateTo] = useState<string>(() => format(new Date(), 'yyyy-MM-dd'));
 
   // Drill-down Modal State
   const [drillDownRecord, setDrillDownRecord] = useState<DailyDrillDownRecord | null>(null);
@@ -55,12 +55,15 @@ export default function EmployeeEodReports() {
   }, [employeeOptions]);
 
   // Quick Preset Handlers
-  const handleQuickPreset = (preset: 'TODAY' | 'THIS_WEEK' | 'THIS_MONTH' | 'LAST_MONTH') => {
+  const handleQuickPreset = (preset: 'TODAY' | 'LAST_7_DAYS' | 'THIS_WEEK' | 'THIS_MONTH' | 'LAST_MONTH') => {
     const today = new Date();
     if (preset === 'TODAY') {
       const d = format(today, 'yyyy-MM-dd');
       setDateFrom(d);
       setDateTo(d);
+    } else if (preset === 'LAST_7_DAYS') {
+      setDateFrom(format(subDays(today, 7), 'yyyy-MM-dd'));
+      setDateTo(format(today, 'yyyy-MM-dd'));
     } else if (preset === 'THIS_WEEK') {
       setDateFrom(format(startOfWeek(today, { weekStartsOn: 1 }), 'yyyy-MM-dd'));
       setDateTo(format(endOfWeek(today, { weekStartsOn: 1 }), 'yyyy-MM-dd'));
@@ -72,6 +75,34 @@ export default function EmployeeEodReports() {
       setDateFrom(format(startOfMonth(prev), 'yyyy-MM-dd'));
       setDateTo(format(endOfMonth(prev), 'yyyy-MM-dd'));
     }
+  };
+
+  // Determine active preset
+  const activePreset = useMemo(() => {
+    const today = new Date();
+    const todayStr = format(today, 'yyyy-MM-dd');
+    const last7Str = format(subDays(today, 7), 'yyyy-MM-dd');
+    const weekStartStr = format(startOfWeek(today, { weekStartsOn: 1 }), 'yyyy-MM-dd');
+    const weekEndStr = format(endOfWeek(today, { weekStartsOn: 1 }), 'yyyy-MM-dd');
+    const monthStartStr = format(startOfMonth(today), 'yyyy-MM-dd');
+    const monthEndStr = format(endOfMonth(today), 'yyyy-MM-dd');
+    const prev = subMonths(today, 1);
+    const lastMonthStartStr = format(startOfMonth(prev), 'yyyy-MM-dd');
+    const lastMonthEndStr = format(endOfMonth(prev), 'yyyy-MM-dd');
+
+    if (dateFrom === todayStr && dateTo === todayStr) return 'TODAY';
+    if (dateFrom === last7Str && dateTo === todayStr) return 'LAST_7_DAYS';
+    if (dateFrom === weekStartStr && dateTo === weekEndStr) return 'THIS_WEEK';
+    if (dateFrom === monthStartStr && dateTo === monthEndStr) return 'THIS_MONTH';
+    if (dateFrom === lastMonthStartStr && dateTo === lastMonthEndStr) return 'LAST_MONTH';
+    return null;
+  }, [dateFrom, dateTo]);
+
+  const getPresetBtnClass = (preset: string) => {
+    const isActive = activePreset === preset;
+    return isActive
+      ? "px-2.5 py-1 text-[11px] font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg border border-blue-200 transition-colors cursor-pointer shadow-xs"
+      : "px-2.5 py-1 text-[11px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer";
   };
 
   // Real Workforce Productivity & Deliverables Query
@@ -89,6 +120,21 @@ export default function EmployeeEodReports() {
   const filteredRecords: DailyDrillDownRecord[] = useMemo(() => {
     return (reportData?.data?.records ?? []) as DailyDrillDownRecord[];
   }, [reportData]);
+
+  // Handle column sorting
+  const handleSort = (key: string) => {
+    if (sortKey === key) {
+      setSortDir(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
+  };
+
+  const sortedRecords = useMemo(() => {
+    if (!filteredRecords || filteredRecords.length === 0) return [];
+    return sortData(filteredRecords, sortKey, sortDir);
+  }, [filteredRecords, sortKey, sortDir]);
 
   // Aggregated Summary Statistics for Selected Period
   const periodTotals = useMemo(() => {
@@ -213,7 +259,11 @@ export default function EmployeeEodReports() {
             <label className="text-[11px] font-bold text-slate-600 block mb-1">From Date</label>
             <DatePicker
               value={dateFrom}
-              onChange={(val) => setDateFrom(val)}
+              onChange={(val) => {
+                const str = typeof val === 'string' ? val : (val?.target?.value || '');
+                setDateFrom(str);
+              }}
+              onDateChange={(iso) => setDateFrom(iso)}
               placeholder="From Date"
               className="w-full"
             />
@@ -224,7 +274,11 @@ export default function EmployeeEodReports() {
             <label className="text-[11px] font-bold text-slate-600 block mb-1">To Date</label>
             <DatePicker
               value={dateTo}
-              onChange={(val) => setDateTo(val)}
+              onChange={(val) => {
+                const str = typeof val === 'string' ? val : (val?.target?.value || '');
+                setDateTo(str);
+              }}
+              onDateChange={(iso) => setDateTo(iso)}
               placeholder="To Date"
               className="w-full"
             />
@@ -237,28 +291,35 @@ export default function EmployeeEodReports() {
           <button
             type="button"
             onClick={() => handleQuickPreset('TODAY')}
-            className="px-2.5 py-1 text-[11px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+            className={getPresetBtnClass('TODAY')}
           >
             Today
           </button>
           <button
             type="button"
+            onClick={() => handleQuickPreset('LAST_7_DAYS')}
+            className={getPresetBtnClass('LAST_7_DAYS')}
+          >
+            Last 7 Days
+          </button>
+          <button
+            type="button"
             onClick={() => handleQuickPreset('THIS_WEEK')}
-            className="px-2.5 py-1 text-[11px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+            className={getPresetBtnClass('THIS_WEEK')}
           >
             This Week
           </button>
           <button
             type="button"
             onClick={() => handleQuickPreset('THIS_MONTH')}
-            className="px-2.5 py-1 text-[11px] font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg border border-blue-200 transition-colors cursor-pointer"
+            className={getPresetBtnClass('THIS_MONTH')}
           >
             This Month
           </button>
           <button
             type="button"
             onClick={() => handleQuickPreset('LAST_MONTH')}
-            className="px-2.5 py-1 text-[11px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+            className={getPresetBtnClass('LAST_MONTH')}
           >
             Last Month
           </button>
@@ -266,19 +327,7 @@ export default function EmployeeEodReports() {
       </div>
 
       {/* ── 2. Aggregated Summary Metric Strip for Selected Period ── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5">
-        <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-xs">
-          <span className="text-[10px] font-bold text-slate-400 block uppercase">Work Shifts</span>
-          <span className="text-xl font-black text-slate-800">{periodTotals.totalWorkingDays}</span>
-          <span className="text-[10px] text-slate-500 font-semibold block mt-0.5">Days Logged</span>
-        </div>
-
-        <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-xs">
-          <span className="text-[10px] font-bold text-slate-400 block uppercase">Tasks Done</span>
-          <span className="text-xl font-black text-emerald-700">{periodTotals.totalTasks}</span>
-          <span className="text-[10px] text-slate-500 font-semibold block mt-0.5">Completed</span>
-        </div>
-
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
         <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-xs">
           <span className="text-[10px] font-bold text-blue-400 block uppercase">Lead Moves</span>
           <span className="text-xl font-black text-blue-900">{periodTotals.totalLeadMoves}</span>
@@ -324,7 +373,7 @@ export default function EmployeeEodReports() {
           <div className="flex items-center gap-2">
             <Calendar className="w-4 h-4 text-slate-600" />
             <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider">
-              Daily Breakdown Log ({filteredRecords.length} Shifts Found)
+              Daily Breakdown Log ({sortedRecords.length} Shifts Found)
             </h4>
           </div>
           <span className="text-[11px] text-slate-500 font-medium">
@@ -336,37 +385,115 @@ export default function EmployeeEodReports() {
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-extrabold text-slate-500 uppercase tracking-wider">
-                <th className="py-3 px-4">Date</th>
-                <th className="py-3 px-4">Employee</th>
-                <th className="py-3 px-4">Status</th>
-                <th className="py-3 px-4">Net Work Time</th>
-                <th className="py-3 px-3 text-center">Tasks</th>
-                <th className="py-3 px-3 text-center">Leads Moved</th>
-                <th className="py-3 px-3 text-center">Installments</th>
-                <th className="py-3 px-3 text-center">PHC</th>
-                <th className="py-3 px-3 text-center">Claims</th>
-                <th className="py-3 px-4 text-right">Premium (₹)</th>
+                <th 
+                  className="py-3 px-4 cursor-pointer hover:text-slate-800 select-none transition-colors"
+                  onClick={() => handleSort('date')}
+                >
+                  <div className="flex items-center gap-1">
+                    Date
+                    {sortKey === 'date' && (
+                      <span className="text-blue-600 text-xs">{sortDir === 'asc' ? '▲' : '▼'}</span>
+                    )}
+                  </div>
+                </th>
+                <th 
+                  className="py-3 px-4 cursor-pointer hover:text-slate-800 select-none transition-colors"
+                  onClick={() => handleSort('employeeName')}
+                >
+                  <div className="flex items-center gap-1">
+                    Employee
+                    {sortKey === 'employeeName' && (
+                      <span className="text-blue-600 text-xs">{sortDir === 'asc' ? '▲' : '▼'}</span>
+                    )}
+                  </div>
+                </th>
+                <th 
+                  className="py-3 px-4 cursor-pointer hover:text-slate-800 select-none transition-colors"
+                  onClick={() => handleSort('attendanceStatus')}
+                >
+                  <div className="flex items-center gap-1">
+                    Status
+                    {sortKey === 'attendanceStatus' && (
+                      <span className="text-blue-600 text-xs">{sortDir === 'asc' ? '▲' : '▼'}</span>
+                    )}
+                  </div>
+                </th>
+                <th 
+                  className="py-3 px-3 text-center cursor-pointer hover:text-slate-800 select-none transition-colors"
+                  onClick={() => handleSort('leadMovements')}
+                >
+                  <div className="flex items-center justify-center gap-1">
+                    Leads Moved
+                    {sortKey === 'leadMovements' && (
+                      <span className="text-blue-600 text-xs">{sortDir === 'asc' ? '▲' : '▼'}</span>
+                    )}
+                  </div>
+                </th>
+                <th 
+                  className="py-3 px-3 text-center cursor-pointer hover:text-slate-800 select-none transition-colors"
+                  onClick={() => handleSort('installmentsClosed')}
+                >
+                  <div className="flex items-center justify-center gap-1">
+                    Installments
+                    {sortKey === 'installmentsClosed' && (
+                      <span className="text-blue-600 text-xs">{sortDir === 'asc' ? '▲' : '▼'}</span>
+                    )}
+                  </div>
+                </th>
+                <th 
+                  className="py-3 px-3 text-center cursor-pointer hover:text-slate-800 select-none transition-colors"
+                  onClick={() => handleSort('phcsCompleted')}
+                >
+                  <div className="flex items-center justify-center gap-1">
+                    PHC
+                    {sortKey === 'phcsCompleted' && (
+                      <span className="text-blue-600 text-xs">{sortDir === 'asc' ? '▲' : '▼'}</span>
+                    )}
+                  </div>
+                </th>
+                <th 
+                  className="py-3 px-3 text-center cursor-pointer hover:text-slate-800 select-none transition-colors"
+                  onClick={() => handleSort('claimsHandled')}
+                >
+                  <div className="flex items-center justify-center gap-1">
+                    Claims
+                    {sortKey === 'claimsHandled' && (
+                      <span className="text-blue-600 text-xs">{sortDir === 'asc' ? '▲' : '▼'}</span>
+                    )}
+                  </div>
+                </th>
+                <th 
+                  className="py-3 px-4 text-right cursor-pointer hover:text-slate-800 select-none transition-colors"
+                  onClick={() => handleSort('premiumGenerated')}
+                >
+                  <div className="flex items-center justify-end gap-1">
+                    Premium (₹)
+                    {sortKey === 'premiumGenerated' && (
+                      <span className="text-blue-600 text-xs">{sortDir === 'asc' ? '▲' : '▼'}</span>
+                    )}
+                  </div>
+                </th>
                 <th className="py-3 px-4 text-right">Drill-Down</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {isReportLoading ? (
                 <tr>
-                  <td colSpan={11} className="text-center py-12 text-slate-500 font-semibold">
+                  <td colSpan={9} className="text-center py-12 text-slate-500 font-semibold">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <RefreshCw className="w-5 h-5 text-blue-600 animate-spin" />
                       <span className="text-xs">Loading employee deliverables report...</span>
                     </div>
                   </td>
                 </tr>
-              ) : filteredRecords.length === 0 ? (
+              ) : sortedRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="text-center py-10 text-slate-400 font-medium">
+                  <td colSpan={9} className="text-center py-10 text-slate-400 font-medium">
                     No productivity logs found for the selected employee and date range.
                   </td>
                 </tr>
               ) : (
-                filteredRecords.map((r, idx) => (
+                sortedRecords.map((r, idx) => (
                   <tr 
                     key={idx}
                     onClick={() => openDrillDown(r)}
@@ -391,19 +518,6 @@ export default function EmployeeEodReports() {
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
                         {r.attendanceStatus}
                       </span>
-                    </td>
-
-                    <td className="py-3 px-4">
-                      <span className="font-mono font-bold text-slate-800">
-                        {r.netWorkingHours}
-                      </span>
-                      <span className="text-[10px] text-slate-400 block font-normal">
-                        ({r.breakDuration} break deducted)
-                      </span>
-                    </td>
-
-                    <td className="py-3 px-3 text-center font-bold text-slate-800">
-                      {r.tasksCompleted}
                     </td>
 
                     <td className="py-3 px-3 text-center font-bold text-blue-700">

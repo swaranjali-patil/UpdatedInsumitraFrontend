@@ -187,6 +187,7 @@ export const dashboardService = {
   events:    () => api.get('/dashboard/events').then(r => r.data),
   claims:    () => api.get('/dashboard/claims').then(r => r.data),
   dbSummary: () => api.get('/dashboard/db-summary').then(r => r.data),
+  analytics: () => api.get('/dashboard/analytics').then(r => r.data),
 };
 
 /* ─── Subscriptions ──────────────────────────────────────────────────────── */

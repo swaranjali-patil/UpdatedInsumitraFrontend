@@ -280,48 +280,18 @@ export default function Employees() {
     },
     {
       key: 'isActive',
-      label: 'ATTENDANCE / SHIFT',
-      render: (r: any) => {
-        const isClocked = r.attendanceStatus === 'CLOCKED_IN' || r.isActive;
-        const onLeave = r.attendanceStatus === 'ON_LEAVE';
-        return (
-          <div className="flex flex-col gap-1">
-            <span className={clsx(
-              'px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wide uppercase w-fit flex items-center gap-1.5',
-              onLeave ? 'bg-amber-50 text-amber-800 border border-amber-200' :
-              isClocked ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'
-            )}>
-              <span className={clsx('w-1.5 h-1.5 rounded-full', onLeave ? 'bg-amber-500' : isClocked ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500')}></span>
-              {onLeave ? 'On Leave' : isClocked ? 'Clocked In' : 'Absent'}
-            </span>
-            <span className="text-[10px] text-gray-400 font-medium">{r.clockInTime || '09:00 AM Shift'}</span>
-          </div>
-        );
-      },
-    },
-    {
-      key: 'monthlyTarget' as any,
-      label: 'TARGET & PROGRESS',
-      render: (r: any) => {
-        const targetVal = Number(r.monthlyTarget) || 400000;
-        const achieved = Number(r.achievedTarget) || Math.round(targetVal * 0.76);
-        const pct = Math.min(100, Math.round((achieved / targetVal) * 100));
-        return (
-          <div className="flex flex-col min-w-[120px]">
-            <div className="flex items-center justify-between text-[11px] font-bold text-gray-800">
-              <span>₹{(achieved / 100000).toFixed(1)}L / ₹{(targetVal / 100000).toFixed(1)}L</span>
-              <span className="text-primary-700">{pct}%</span>
-            </div>
-            <div className="w-full bg-gray-100 rounded-full h-1.5 mt-1 overflow-hidden">
-              <div 
-                className={clsx('h-1.5 rounded-full transition-all', pct >= 75 ? 'bg-emerald-500' : pct >= 50 ? 'bg-blue-500' : 'bg-amber-500')} 
-                style={{ width: `${pct}%` }} 
-              />
-            </div>
-            <span className="text-[10px] text-gray-400 mt-1">{r.taskStats || '10 Tasks Assigned'}</span>
-          </div>
-        );
-      },
+      label: 'STATUS',
+      render: r => (
+        <span className={clsx(
+          'px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide uppercase inline-flex items-center gap-1.5 border',
+          r.isActive
+            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+            : 'bg-rose-50 text-rose-700 border-rose-200'
+        )}>
+          <span className={clsx('w-1.5 h-1.5 rounded-full', r.isActive ? 'bg-emerald-500' : 'bg-rose-500')} />
+          {r.isActive ? 'Active' : 'Inactive'}
+        </span>
+      ),
     },
     {
       key: 'actions' as any,

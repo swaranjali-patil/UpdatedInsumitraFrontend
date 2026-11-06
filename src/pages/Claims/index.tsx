@@ -814,7 +814,7 @@ export function ClaimEditForm({ initial, isPending, onSave, onCancel, employees,
   const [approvedAmount, setApprovedAmount] = useState(String((initial as any).approvedAmount ?? ''));
   const [rejectionReason, setRejectionReason] = useState((initial as any).rejectionReason ?? '');
   const [assignedEmployeeId, setAssignedEmployeeId] = useState((initial as any).assignedEmployeeId ?? '');
-  const [activeClaimTab, setActiveClaimTab] = useState('Claim Details');
+  const [activeClaimTab, setActiveClaimTab] = useState((initial as any)?.defaultTab || 'Claim Details');
   const claimHistoryContactId = initial.contact?.id || (initial as any).contactId;
   const {
     data: claimHistoryRes,
@@ -950,7 +950,70 @@ export function ClaimEditForm({ initial, isPending, onSave, onCancel, employees,
   const [docUploadFields, setDocUploadFields] = useState<{ type: string; title: string; description: string; file: File | null }>({
     type: 'CLAIM_FORM', title: '', description: '', file: null,
   });
-  const [editDocsList, setEditDocsList] = useState<{ type: string; title: string; description: string; file: File }[]>([]);
+  const [editDocsList, setEditDocsList] = useState<{
+    id?: string;
+    type: string;
+    title: string;
+    description: string;
+    file?: File;
+    url?: string;
+    originalName?: string;
+    sizeBytes?: number;
+    createdAt?: string;
+  }[]>(() => {
+    if (Array.isArray((initial as any)?.documents) && (initial as any).documents.length > 0) {
+      return (initial as any).documents.map((doc: any) => ({
+        id: doc.id,
+        type: doc.type || 'CLAIM_DOCUMENT',
+        title: doc.name || doc.originalName || 'Document',
+        description: doc.description || '',
+        url: doc.url,
+        originalName: doc.originalName || doc.name || 'Document',
+        sizeBytes: doc.sizeBytes,
+        createdAt: doc.createdAt,
+      }));
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    if (!initial?.id) return;
+
+    let active = true;
+    documentsService.list({ claimId: initial.id }).then((res: any) => {
+      if (!active) return;
+      const docs = Array.isArray(res?.data?.data)
+        ? res.data.data
+        : Array.isArray(res?.data)
+          ? res.data
+          : Array.isArray(res)
+            ? res
+            : [];
+
+      if (docs.length > 0) {
+        const existingDocs = docs.map((doc: any) => ({
+          id: doc.id,
+          type: doc.type || 'CLAIM_DOCUMENT',
+          title: doc.name || doc.originalName || 'Document',
+          description: doc.description || '',
+          url: doc.url,
+          originalName: doc.originalName || doc.name || 'Document',
+          sizeBytes: doc.sizeBytes,
+          createdAt: doc.createdAt,
+        }));
+
+        setEditDocsList(prev => {
+          const pendingDocs = prev.filter(doc => !doc.id && doc.file);
+          const ids = new Set(existingDocs.map((d: any) => d.id));
+          return [...existingDocs, ...pendingDocs.filter(d => !d.id || !ids.has(d.id))];
+        });
+      }
+    }).catch(() => {
+      // Keep the form usable if the document list is temporarily unavailable.
+    });
+
+    return () => { active = false; };
+  }, [initial?.id]);
 
   // Split expense charges
   const [amtHospital, setAmtHospital] = useState<number | string>(notesData.amtHospital ? notesData.amtHospital : '');
@@ -1071,8 +1134,8 @@ export function ClaimEditForm({ initial, isPending, onSave, onCancel, employees,
     setUploading(true);
     try {
       const uploadPromises: Promise<any>[] = [];
-      const contactId = initial.contact?.id;
-      const policyId = initial.policy?.id;
+      const contactId = (initial as any).contactId || initial.contact?.id;
+      const policyId = (initial as any).policyId || initial.policy?.id;
       const claimId = initial.id;
 
       const getMeta = (type: string) => {
@@ -1097,6 +1160,20 @@ export function ClaimEditForm({ initial, isPending, onSave, onCancel, employees,
         if (policyId) meta.policyId = policyId;
         return meta;
       };
+
+      editDocsList
+        .filter(doc => !doc.id && doc.file)
+        .forEach(doc => {
+          const meta: Record<string, string> = {
+            claimId,
+            type: doc.type,
+            title: doc.title,
+            description: doc.description,
+          };
+          if (contactId) meta.contactId = contactId;
+          if (policyId) meta.policyId = policyId;
+          uploadPromises.push(documentsService.upload(doc.file!, meta));
+        });
 
       if (claimFormFile) {
         uploadPromises.push(documentsService.upload(claimFormFile, getMeta('CLAIM_FORM')).catch(e => console.error(e)));
@@ -1145,6 +1222,30 @@ export function ClaimEditForm({ initial, isPending, onSave, onCancel, employees,
       if (uploadPromises.length > 0) {
         await Promise.all(uploadPromises);
         toast.success('Attached documents uploaded');
+        try {
+          const refreshRes: any = await documentsService.list({ claimId });
+          const refreshedDocs = Array.isArray(refreshRes?.data?.data)
+            ? refreshRes.data.data
+            : Array.isArray(refreshRes?.data)
+              ? refreshRes.data
+              : Array.isArray(refreshRes)
+                ? refreshRes
+                : [];
+          if (refreshedDocs.length > 0) {
+            setEditDocsList(refreshedDocs.map((doc: any) => ({
+              id: doc.id,
+              type: doc.type || 'CLAIM_DOCUMENT',
+              title: doc.name || doc.originalName || 'Document',
+              description: doc.description || '',
+              url: doc.url,
+              originalName: doc.originalName || doc.name || 'Document',
+              sizeBytes: doc.sizeBytes,
+              createdAt: doc.createdAt,
+            })));
+          }
+        } catch (e) {
+          console.warn('Failed to refresh doc list after upload', e);
+        }
       }
 
       const invalidNom = nominees.find(n => n.phone && !/^\d{10}$/.test(n.phone.replace(/\D/g, '')));
@@ -1740,6 +1841,7 @@ export function ClaimEditForm({ initial, isPending, onSave, onCancel, employees,
           policy={(initial as any).policy}
           policyId={(initial as any).policy?.id || (initial as any).policyId}
           contact={(initial as any).contact}
+          claimId={initial?.id}
           onGoToClaimTab={() => setActiveClaimTab('Claim Details')}
         />
       )}
@@ -2587,12 +2689,14 @@ export function ClaimEditForm({ initial, isPending, onSave, onCancel, employees,
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-xs">
                           {editDocsList.map((doc, idx) => {
-                            const fileName = doc.file?.name || 'Document';
+                            const fileName = doc.file?.name || doc.originalName || doc.title || 'Document';
                             const docTitle = doc.title || fileName;
                             const docTypeLabel = CLAIM_DOC_TYPES.find(t => t.value === doc.type)?.label || doc.type || 'Claim Doc';
                             const desc = doc.description || '';
                             const extension = (fileName.split('.').pop()?.toUpperCase() || 'FILE').slice(0, 4);
-                            const fileSize = formatBytes(doc.file?.size);
+                            const fileSize = formatBytes(doc.file?.size ?? doc.sizeBytes);
+                            const uploadedDate = doc.createdAt ? new Date(doc.createdAt) : new Date();
+                            const localFile = doc.file;
                             const phone = (initial as any).proposerPhone || (initial as any).patientPhone || initial.contact?.phone || '';
                             const waText = `Document Title: ${docTitle}\nType: ${docTypeLabel}`;
                             const waUrl = phone
@@ -2604,7 +2708,7 @@ export function ClaimEditForm({ initial, isPending, onSave, onCancel, employees,
                                 <td className="whitespace-nowrap px-3 py-2.5 font-semibold text-slate-600">
                                   <span className="inline-flex items-center gap-1.5">
                                     <CalendarDays size={13} className="text-slate-400" />
-                                    {format(new Date(), 'dd MMM yyyy')}
+                                    {format(uploadedDate, 'dd MMM yyyy')}
                                   </span>
                                 </td>
                                 <td className="min-w-[220px] px-3 py-2.5">
@@ -2648,8 +2752,10 @@ export function ClaimEditForm({ initial, isPending, onSave, onCancel, employees,
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          const objectUrl = URL.createObjectURL(doc.file);
-                                          setDocPreviewModal({ open: true, title: docTitle, url: objectUrl });
+                                          if (!localFile) return;
+                                          const objectUrl = URL.createObjectURL(localFile);
+                                          window.open(objectUrl, '_blank', 'noopener,noreferrer');
+                                          window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
                                         }}
                                         className="rounded-lg border border-blue-100 bg-blue-50 p-1.5 text-blue-600 transition-colors hover:bg-blue-100"
                                         title="View document"
@@ -2662,7 +2768,8 @@ export function ClaimEditForm({ initial, isPending, onSave, onCancel, employees,
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          const objectUrl = URL.createObjectURL(doc.file);
+                                          if (!localFile) return;
+                                          const objectUrl = URL.createObjectURL(localFile);
                                           const a = document.createElement('a');
                                           a.href = objectUrl;
                                           a.download = fileName;
@@ -2676,9 +2783,61 @@ export function ClaimEditForm({ initial, isPending, onSave, onCancel, employees,
                                         <Download size={14} />
                                       </button>
                                     )}
+                                    {!doc.file && doc.id && (
+                                      <>
+                                        <button
+                                          type="button"
+                                          onClick={async () => {
+                                            try {
+                                              const res = await documentsService.url(doc.id!);
+                                              const url = res?.url || res?.data?.url || res?.data?.data?.url;
+                                              if (!url) throw new Error('No document URL');
+                                              window.open(url, '_blank', 'noopener,noreferrer');
+                                            } catch {
+                                              toast.error('Could not open document');
+                                            }
+                                          }}
+                                          className="rounded-lg border border-blue-100 bg-blue-50 p-1.5 text-blue-600 transition-colors hover:bg-blue-100"
+                                          title="View document"
+                                          aria-label={`View ${fileName}`}
+                                        >
+                                          <Eye size={14} />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={async () => {
+                                            try {
+                                              const res = await documentsService.url(doc.id!, true);
+                                              const url = res?.url || res?.data?.url || res?.data?.data?.url;
+                                              if (!url) throw new Error('No document URL');
+                                              window.open(url, '_blank', 'noopener,noreferrer');
+                                            } catch {
+                                              toast.error('Could not download document');
+                                            }
+                                          }}
+                                          className="rounded-lg border border-slate-200 bg-slate-100 p-1.5 text-slate-700 transition-colors hover:bg-slate-200"
+                                          title="Download document"
+                                          aria-label={`Download ${fileName}`}
+                                        >
+                                          <Download size={14} />
+                                        </button>
+                                      </>
+                                    )}
                                     <button
                                       type="button"
-                                      onClick={() => setEditDocsList(prev => prev.filter((_, i) => i !== idx))}
+                                      onClick={async () => {
+                                        if (doc.id) {
+                                          try {
+                                            await documentsService.remove(doc.id);
+                                            setEditDocsList(prev => prev.filter((_, i) => i !== idx));
+                                            toast.success('Document removed');
+                                          } catch {
+                                            toast.error('Failed to remove document');
+                                          }
+                                        } else {
+                                          setEditDocsList(prev => prev.filter((_, i) => i !== idx));
+                                        }
+                                      }}
                                       className="rounded-lg border border-rose-100 bg-rose-50 p-1.5 text-rose-600 transition-colors hover:bg-rose-100"
                                       title="Delete document"
                                       aria-label={`Delete ${fileName}`}
@@ -2777,23 +2936,6 @@ export function ClaimEditForm({ initial, isPending, onSave, onCancel, employees,
                     onClick={() => {
                       if (!docUploadFields.title.trim()) { toast.error('Please enter a document title.'); return; }
                       if (!docUploadFields.file) { toast.error('Please choose a file.'); return; }
-                      const setterMap: Record<string, (f: File | null) => void> = {
-                        CLAIM_FORM: setClaimFormFile,
-                        DISCHARGE_SUMMARY: setDischargeSummaryFile,
-                        OT_NOTES_IPD_PAPERS: setOtNotesFile,
-                        HOSPITAL_BILL: setHospitalBillFile,
-                        PHARMACY_MEDICINES_BILL: setPharmacyBillFile,
-                        INVESTIGATION_LAB_BILL: setInvestigationBillFile,
-                        BLOOD_ANESTHESIA_BILL: setBloodBagsBillFile,
-                        IMPORTANT_LAB_REPORTS: setLabReportsFile,
-                        IMP_BILLS: setBillsFile,
-                        OTHER_IMP_DOCS: setOtherImpDocsFile,
-                        QUERY_LETTER: setQueryLetterFile,
-                        REPLY_DOCS: setReplyDocsFile,
-                        SETTLEMENT_LETTER: setSettlementLetterFile,
-                        REJECTION_LETTER: setRejectionLetterFile,
-                      };
-                      setterMap[docUploadFields.type]?.(docUploadFields.file);
                       setEditDocsList(prev => [...prev, { type: docUploadFields.type, title: docUploadFields.title, description: docUploadFields.description, file: docUploadFields.file! }]);
                       setDocUploadOpen(false);
                       setDocUploadFields({ type: 'CLAIM_FORM', title: '', description: '', file: null });
@@ -2886,13 +3028,29 @@ export default function Claims({ contactId, contact, embedded = false }: ClaimsP
     };
   }, [showColPicker]);
 
+  const [editTarget, setEditTarget] = useState<Claim | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Claim | null>(null);
+
   useEffect(() => {
     if (searchParams.get('action') === 'add') {
       setModalOpen(true);
     }
-  }, [searchParams]);
-  const [editTarget, setEditTarget] = useState<Claim | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<Claim | null>(null);
+    const cid = searchParams.get('claimId') || (location.state as any)?.claimId;
+    if (cid && !editTarget) {
+      claimsService.get(cid)
+        .then((res: any) => {
+          const claim = res?.data?.data || res?.data || res;
+          if (claim && (claim.id === cid || (claim as any)._id === cid)) {
+            const reqTab = searchParams.get('tab') || (location.state as any)?.tab;
+            if (reqTab) {
+              (claim as any).defaultTab = reqTab;
+            }
+            setEditTarget(claim);
+          }
+        })
+        .catch((err: any) => console.error('Failed to preload claim from URL/state', err));
+    }
+  }, [searchParams, location.state, editTarget]);
   
   // Claim Detail sheet
   const [docPreviewModal, setDocPreviewModal] = useState<{ open: boolean; title: string; url: string }>({ open: false, title: '', url: '' });
@@ -3293,15 +3451,30 @@ export default function Claims({ contactId, contact, embedded = false }: ClaimsP
   // Client-side Sorting
   const sortedClaims = useMemo(() => {
     return sortData(filteredClaims, sortKey, sortDir, (row: any, key: string) => {
-      if (key === 'contact') return `${row.contact?.firstName ?? ''} ${row.contact?.lastName ?? ''}`;
-      
+      const notes = getClaimNotesData(row.notes);
+      if (key === 'claimNumber') return row.claimNumber || '';
+      if (key === 'contact') return `${row.contact?.firstName ?? ''} ${row.contact?.lastName ?? ''}`.trim();
+      if (key === 'policy') return row.policy?.policyNumber || '';
+      if (key === 'company') return row.policy?.plan?.company?.name || '';
+      if (key === 'hospital') return notes.hospital || row.hospital || '';
+      if (key === 'status') return getClaimUiStatus(row);
+      if (key === 'claimAmount') return row.claimAmount != null ? Number(row.claimAmount) : null;
+      if (key === 'approvedAmount') return row.approvedAmount != null ? Number(row.approvedAmount) : null;
+      if (key === 'intimatedAt') return row.intimatedAt || '';
+      if (key === 'claimType') return row.claimType || '';
+      if (key === 'assignedTo') {
+        return row.assignedEmployee?.employeeProfile
+          ? `${row.assignedEmployee.employeeProfile.firstName} ${row.assignedEmployee.employeeProfile.lastName || ''}`.trim()
+          : ((row.assignedEmployee as any)?.firstName ? `${(row.assignedEmployee as any).firstName} ${(row.assignedEmployee as any).lastName || ''}`.trim() : '');
+      }
+
       const parts = key.split('.');
       let val = row;
       for (const part of parts) {
         if (val == null) break;
         val = val[part];
       }
-      return val !== undefined ? val : row[key];
+      return val !== undefined ? val : (row[key] ?? (notes as any)[key] ?? (row.customFields && row.customFields[key]));
     });
   }, [filteredClaims, sortKey, sortDir]);
   const paginatedClaims = useMemo(
@@ -4910,9 +5083,10 @@ export default function Claims({ contactId, contact, embedded = false }: ClaimsP
             onPageChange={setPage}
             sortKey={sortKey}
             sortDir={sortDir}
-            onSort={(k) => {
-              if (sortKey === k) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-              else { setSortKey(k); setSortDir('asc'); }
+            onSort={(k, dir) => {
+              setSortKey(k);
+              setSortDir(dir);
+              setPage(1);
             }}
             onRowClick={r => {
               setSelectedClaim(r);
@@ -6779,7 +6953,12 @@ export default function Claims({ contactId, contact, embedded = false }: ClaimsP
           initial={editTarget}
           isPending={updateClaimMutation.isPending}
           onSave={body => updateClaimMutation.mutate({ id: editTarget.id, body })}
-          onCancel={() => setEditTarget(null)}
+          onCancel={() => {
+            setEditTarget(null);
+            if (searchParams.has('claimId') || searchParams.has('tab')) {
+              navigate('/claims', { replace: true });
+            }
+          }}
           employees={employees}
           zIndexClass={embedded ? "z-[70]" : undefined}
         />

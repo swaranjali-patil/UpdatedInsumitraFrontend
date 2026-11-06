@@ -362,7 +362,7 @@ interface Policy {
   lastPremiumDate?: string; lastInstallmentDate?: string; noOfInstallments?: number;
   insuredPerson?: string;
   contactId?: string;
-  contact?: { id: string; firstName: string; lastName: string; phone?: string };
+  contact?: { id: string; firstName: string; middleName?: string; lastName: string; phone?: string };
   planId?: string;
   plan?: {
     id: string;
@@ -1037,15 +1037,16 @@ export default function Policies() {
   const [pendingDocs, setPendingDocs] = useState<{ type: string; title: string; description: string; file: File }[]>([]);
 
   const handlePolicyDocumentUpload = async (file: File, meta: DocumentUploadMeta) => {
-    if (editTarget?.id) {
+    const activePolicyId = editTarget?.id || targetViewPolicyId || (routePolicyId ? String(routePolicyId) : null);
+    if (activePolicyId) {
       try {
         await documentsService.upload(file, {
-          policyId: editTarget.id,
+          policyId: activePolicyId,
           tag: meta.type,
           title: meta.title,
           description: meta.description,
         });
-        await qc.invalidateQueries({ queryKey: ['policy-docs', editTarget.id] });
+        await qc.invalidateQueries({ queryKey: ['policy-docs', activePolicyId] });
         setIsDocUploadModalOpen(false);
         toast.success('Document uploaded successfully');
         return true;
@@ -1450,7 +1451,7 @@ export default function Policies() {
 
   // Contact picker state
   const [contactSearch, setContactSearch] = useState('');
-  const [selectedContact, setSelectedContact] = useState<{ id: string; firstName: string; lastName: string; phone: string } | null>(null);
+  const [selectedContact, setSelectedContact] = useState<{ id: string; firstName: string; middleName?: string; lastName: string; phone: string } | null>(null);
   const [contactDropdown, setContactDropdown] = useState(false);
 
   // Plan picker cascade states
@@ -1952,15 +1953,115 @@ export default function Policies() {
 
   // Client-side Sorting Logic
   const sortedPolicies = useMemo(() => {
-    let key = sortBy || 'createdAt';
-    // Map specific table column keys to object paths for sorting
-    if (key === 'renewAssign') key = 'assignedEmployee.employeeProfile.firstName';
-    if (key === 'clientName') key = 'contact.firstName';
-    if (key === 'proposerName') key = 'contact.firstName';
-    if (key === 'proposerContact') key = 'contact.phone';
-    if (key === 'city') key = 'contact.address.city';
-    if (key === 'companyCategory') key = 'plan.company.category';
-    return sortData(filteredPolicies, key, sortOrder);
+    const key = sortBy || 'createdAt';
+    return sortData(filteredPolicies, key, sortOrder, (row: any, k: string) => {
+      const extra = parseExtraNotes(row.notes);
+
+      if (k === 'proposerName' || k === 'clientName') {
+        return row.contact ? `${row.contact.firstName} ${row.contact.lastName || ''}`.trim() : '';
+      }
+      if (k === 'proposerContact') {
+        return row.contact?.phone || '';
+      }
+      if (k === 'insuredPerson') {
+        return extra.insuredPerson || (row.contact ? `${row.contact.firstName} ${row.contact.lastName || ''}`.trim() : '');
+      }
+      if (k === 'city') {
+        return extra.policyZoneLocationCity || extra.policyZoneCity || row.contact?.addresses?.[0]?.city || (row.contact as any)?.address?.city || (row.contact as any)?.city || '';
+      }
+      if (k === 'companyCategory') {
+        return extra.companyCategory || row.plan?.company?.category || (row as any).insuranceCompanyCategory || '';
+      }
+      if (k === 'plan.company.name') {
+        return extra.companyName || row.plan?.company?.name || '';
+      }
+      if (k === 'plan.category') {
+        return extra.planCategory || row.plan?.category || '';
+      }
+      if (k === 'plan.name') {
+        return row.plan?.name || '';
+      }
+      if (k === 'customerCategory') {
+        return extra.customerCategory || (row.businessType ? (row.businessType === 'FRESH' ? 'Fresh' : row.businessType === 'PORT' ? 'Port' : row.businessType === 'RENEWAL' ? 'Renewal' : row.businessType) : '') || (row.contact as any)?.category || (row as any).customerCategory || '';
+      }
+      if (k === 'policyType') {
+        return extra.policyType || (row as any).policyType || row.plan?.category || '';
+      }
+      if (k === 'policyNumber') {
+        return row.policyNumber || '';
+      }
+      if (k === 'status') {
+        return getPolicyStatusDisplay(row).label;
+      }
+      if (k === 'sumAssured') {
+        return row.sumAssured != null ? Number(row.sumAssured) : null;
+      }
+      if (k === 'policyTenure') {
+        if (extra.policyTenure) return extra.policyTenure;
+        if (row.startDate && row.endDate) {
+          return Math.max(1, Math.round((new Date(row.endDate).getTime() - new Date(row.startDate).getTime()) / (365.25 * 24 * 60 * 60 * 1000)));
+        }
+        return (row as any).tenure || (row as any).duration || '';
+      }
+      if (k === 'policyTerm') {
+        if (row.startDate && row.endDate) {
+          return Math.max(1, Math.round((new Date(row.endDate).getTime() - new Date(row.startDate).getTime()) / (365.25 * 24 * 60 * 60 * 1000)));
+        }
+        return (row as any).policyTerm || '';
+      }
+      if (k === 'assignedTo' || k === 'renewAssign') {
+        return row.assignedEmployee?.employeeProfile
+          ? `${row.assignedEmployee.employeeProfile.firstName} ${row.assignedEmployee.employeeProfile.lastName || ''}`.trim()
+          : ((row.assignedEmployee as any)?.firstName ? `${(row.assignedEmployee as any).firstName} ${(row.assignedEmployee as any).lastName || ''}`.trim() : '');
+      }
+      if (k === 'comment') {
+        return extra.cleanNotes || row.notes || '';
+      }
+      if (k === 'firstYearPremium') {
+        return (row as any).firstYearPremium != null ? Number((row as any).firstYearPremium) : (row.premiumAmount != null ? Number(row.premiumAmount) : null);
+      }
+      if (k === 'secondYearPremium') {
+        return (row as any).secondYearPremium != null ? Number((row as any).secondYearPremium) : (row.premiumAmount != null ? Number(row.premiumAmount) : null);
+      }
+      if (k === 'premiumAmount') {
+        return row.premiumAmount != null ? Number(row.premiumAmount) : null;
+      }
+      if (k === 'installmentCase') {
+        return extra.emiCase ? 'Yes' : 'No';
+      }
+      if (k === 'downpaymentAmount') {
+        return extra.downpaymentAmount != null ? Number(extra.downpaymentAmount) : null;
+      }
+      if (k === 'processingFee') {
+        return extra.processingFee != null ? Number(extra.processingFee) : null;
+      }
+      if (k === 'installmentAmount') {
+        const amt = extra.installmentAmount || extra.emiPremium;
+        return amt != null ? Number(amt) : null;
+      }
+      if (k === 'noOfInstallments') {
+        return extra.noOfInstallments != null ? Number(extra.noOfInstallments) : ((row as any).noOfInstallments != null ? Number((row as any).noOfInstallments) : null);
+      }
+      if (k === 'lastInstallmentDate') {
+        return extra.lastInstallmentDate || extra.lastPremiumDate || row.lastPremiumDate || '';
+      }
+      if (k === 'nomineeDetails') {
+        if (extra.nominees && extra.nominees.length > 0) return extra.nominees[0].name || '';
+        if ((row as any).nominees && (row as any).nominees.length > 0) return (row as any).nominees[0].name || '';
+        return '';
+      }
+
+      // Resolve nested keys generically
+      const parts = k.split('.');
+      let val = row;
+      for (const part of parts) {
+        if (val == null) break;
+        val = val[part];
+      }
+      if (val !== undefined && val !== null) return val;
+
+      return (row as any)[k] ?? extra[k] ?? (row as any).customFields?.[k] ?? '';
+    });
   }, [filteredPolicies, sortBy, sortOrder]);
 
   // Client-side Pagination
@@ -2536,11 +2637,12 @@ export default function Policies() {
             setSelectedContact({
               id: contact.id,
               firstName: contact.firstName || '',
+              middleName: contact.middleName || '',
               lastName: contact.lastName || '',
               phone: contact.phone || '',
             });
             setValue('contactId', contact.id, { shouldValidate: true });
-            const fullName = `${contact.firstName || ''} ${contact.lastName || ''}`.trim();
+            const fullName = [contact.firstName, contact.middleName, contact.lastName].filter(Boolean).join(' ').trim();
             if (fullName) setInsuredPerson(fullName);
             setContactSearch('');
             syncContactFamilyMembers(contact);
@@ -2569,8 +2671,16 @@ export default function Policies() {
 
   const closeModal = () => {
     const returnState = location.state as any;
-    const returnRoute = returnState?.returnRoute;
-    const returnPayload = returnState?.returnPayload;
+    const returnRoute = returnState?.returnRoute
+      || searchParams.get('returnRoute')
+      || searchParams.get('returnTo')
+      || (returnState?.from === 'claims' || searchParams.get('from') === 'claims'
+          ? (searchParams.get('claimId') ? `/claims?claimId=${encodeURIComponent(searchParams.get('claimId')!)}&tab=Policy+Details` : '/claims')
+          : null);
+    const returnPayload = returnState?.returnPayload || (returnState?.claimId || searchParams.get('claimId') ? {
+      claimId: returnState?.claimId || searchParams.get('claimId'),
+      tab: returnState?.tab || searchParams.get('tab') || 'Claim Details',
+    } : undefined);
     setModalOpen(false);
     setIsViewMode(false);
     reset();
@@ -2691,6 +2801,7 @@ export default function Policies() {
       setSelectedContact({
         id: p.contactId || p.contact.id,
         firstName: p.contact.firstName || '',
+        middleName: p.contact.middleName || '',
         lastName: p.contact.lastName || '',
         phone: p.contact.phone || '',
       });
@@ -3000,9 +3111,20 @@ export default function Policies() {
   useEffect(() => {
     if (targetViewPolicyId && routePolicyError) {
       toast.error('Failed to load policy details');
+      const returnState = location.state as any;
+      const returnRoute = returnState?.returnRoute
+        || searchParams.get('returnRoute')
+        || searchParams.get('returnTo')
+        || (returnState?.from === 'claims' || searchParams.get('from') === 'claims'
+            ? (searchParams.get('claimId') ? `/claims?claimId=${encodeURIComponent(searchParams.get('claimId')!)}&tab=Policy+Details` : '/claims')
+            : null);
+      if (returnRoute) {
+        navigate(returnRoute, { replace: true, state: returnState?.returnPayload });
+        return;
+      }
       navigate('/policies', { replace: true });
     }
-  }, [targetViewPolicyId, routePolicyError, navigate]);
+  }, [targetViewPolicyId, routePolicyError, navigate, location.state, searchParams]);
 
   const openCreatePolicy = () => {
     const todayStr = format(new Date(), 'yyyy-MM-dd');
@@ -3209,6 +3331,7 @@ export default function Policies() {
       {
         key: 'customerCategory',
         label: 'Customer Category',
+        sortable: true,
         render: r => {
           const extra = parseExtraNotes(r.notes);
           return <span className="font-bold text-slate-800 text-xs">{extra.customerCategory || (r.businessType ? (r.businessType === 'FRESH' ? 'Fresh' : r.businessType === 'PORT' ? 'Port' : r.businessType === 'RENEWAL' ? 'Renewal' : r.businessType) : '') || (r.contact as any)?.category || (r as any).customerCategory || '—'}</span>;
@@ -3217,6 +3340,7 @@ export default function Policies() {
       {
         key: 'policyType',
         label: 'Policy Type',
+        sortable: true,
         render: r => {
           const extra = parseExtraNotes(r.notes);
           return <span className="font-bold text-slate-800 text-xs">{extra.policyType || (r as any).policyType || r.plan?.category || '—'}</span>;
@@ -3250,6 +3374,7 @@ export default function Policies() {
       {
         key: 'policyTenure',
         label: 'Policy Tenure',
+        sortable: true,
         render: r => {
           const extra = parseExtraNotes(r.notes);
           if (extra.policyTenure) return <span className="font-bold text-slate-800 text-xs">{extra.policyTenure}</span>;
@@ -3263,6 +3388,7 @@ export default function Policies() {
       {
         key: 'policyTerm',
         label: 'Policy Term (Period of Coverage in Years)',
+        sortable: true,
         render: r => {
           if (!r.startDate || !r.endDate) return <span className="font-bold text-slate-800 text-xs">{(r as any).policyTerm ? `${(r as any).policyTerm} Years` : '—'}</span>;
           const years = Math.max(1, Math.round((new Date(r.endDate).getTime() - new Date(r.startDate).getTime()) / (365.25 * 24 * 60 * 60 * 1000)));
@@ -3272,6 +3398,7 @@ export default function Policies() {
       {
         key: 'assignedTo',
         label: 'Assigned To',
+        sortable: true,
         render: r => {
           const empName = r.assignedEmployee?.employeeProfile
             ? `${r.assignedEmployee.employeeProfile.firstName} ${r.assignedEmployee.employeeProfile.lastName}`
@@ -3282,11 +3409,13 @@ export default function Policies() {
       {
         key: 'comment',
         label: 'Comment',
+        sortable: true,
         render: r => <ExpandableComment text={r.notes ? (parseExtraNotes(r.notes).cleanNotes || r.notes) : ''} />
       },
       {
         key: 'firstYearPremium',
         label: '1st Year Premium Amount',
+        sortable: true,
         render: r => {
           const val = (r as any).firstYearPremium ? `₹${Number((r as any).firstYearPremium).toLocaleString('en-IN')}` : (r.premiumAmount ? `₹${Number(r.premiumAmount).toLocaleString('en-IN')}` : '—');
           return <span className="font-extrabold text-slate-900 text-xs">{val}</span>;
@@ -3295,6 +3424,7 @@ export default function Policies() {
       {
         key: 'secondYearPremium',
         label: '2nd Year Onwards Premium Amount',
+        sortable: true,
         render: r => {
           const val = (r as any).secondYearPremium ? `₹${Number((r as any).secondYearPremium).toLocaleString('en-IN')}` : (r.premiumAmount ? `₹${Number(r.premiumAmount).toLocaleString('en-IN')}` : '—');
           return <span className="font-extrabold text-slate-900 text-xs">{val}</span>;
@@ -3309,6 +3439,7 @@ export default function Policies() {
       {
         key: 'installmentCase',
         label: 'Installment Case?',
+        sortable: true,
         render: r => {
           const isEmi = parseExtraNotes(r.notes).emiCase;
           return (
@@ -3321,6 +3452,7 @@ export default function Policies() {
       {
         key: 'downpaymentAmount',
         label: 'Downpayment Amount',
+        sortable: true,
         render: r => {
           const extra = parseExtraNotes(r.notes);
           return <span className="font-bold text-slate-800 text-xs">{extra.downpaymentAmount ? `₹${Number(extra.downpaymentAmount).toLocaleString('en-IN')}` : '—'}</span>;
@@ -3329,6 +3461,7 @@ export default function Policies() {
       {
         key: 'processingFee',
         label: 'Processing Fee (incl. GST)',
+        sortable: true,
         render: r => {
           const extra = parseExtraNotes(r.notes);
           return <span className="font-bold text-slate-800 text-xs">{extra.processingFee ? `₹${Number(extra.processingFee).toLocaleString('en-IN')}` : '—'}</span>;
@@ -3337,6 +3470,7 @@ export default function Policies() {
       {
         key: 'installmentAmount',
         label: 'Installment Amount',
+        sortable: true,
         render: r => {
           const extra = parseExtraNotes(r.notes);
           const amt = extra.installmentAmount || extra.emiPremium;
@@ -3346,6 +3480,7 @@ export default function Policies() {
       {
         key: 'noOfInstallments',
         label: 'No. of Installments',
+        sortable: true,
         render: r => {
           const extra = parseExtraNotes(r.notes);
           return <span className="font-bold text-slate-800 text-xs">{extra.noOfInstallments || (r as any).noOfInstallments || '—'}</span>;
@@ -3354,6 +3489,7 @@ export default function Policies() {
       {
         key: 'lastInstallmentDate',
         label: 'Last Installment Date',
+        sortable: true,
         render: r => {
           const extra = parseExtraNotes(r.notes);
           const d = extra.lastInstallmentDate || extra.lastPremiumDate || r.lastPremiumDate;
@@ -3363,6 +3499,7 @@ export default function Policies() {
       {
         key: 'nomineeDetails',
         label: 'Nominee Details',
+        sortable: true,
         render: r => {
           const extra = parseExtraNotes(r.notes);
           if (extra.nominees && extra.nominees.length > 0) {
@@ -3407,7 +3544,7 @@ export default function Policies() {
         cols.push({
           key: colName as any,
           label: colName,
-          sortable: false,
+          sortable: true,
           render: (r: any) => {
             const extra = parseExtraNotes(r.notes);
             const val = (r as any)[colName] ?? extra[colName] ?? (r as any).customFields?.[colName] ?? '—';
@@ -4762,6 +4899,8 @@ export default function Policies() {
               rowKey={r => r.id}
               onPageChange={setPage}
               onRowClick={r => openView(r)}
+              sortKey={sortBy}
+              sortDir={sortOrder}
               onSort={(key, dir) => { setSortBy(key); setSortOrder(dir); setPage(1); }}
             />
           </div>
@@ -4779,7 +4918,14 @@ export default function Policies() {
         subtitle={isViewMode || Boolean(targetViewPolicyId && !editTarget) ? "View policy details and plan information." : (editTarget ? "Update policy details and plan information." : "Enter policy details matching client profile standards.")}
         size="2xl"
         actions={
-          <div className="flex flex-wrap items-center gap-2.5 mr-1">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 mr-1">
+            <button
+              type="button"
+              className="px-3 sm:px-4 py-1.5 sm:py-2 text-[10px] sm:text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl cursor-pointer transition-all border border-slate-200/80 shadow-2xs"
+              onClick={closeModal}
+            >
+              Cancel
+            </button>
             {isViewMode ? (
               <button
                 type="button"
@@ -4947,7 +5093,7 @@ export default function Policies() {
                           <input type="hidden" {...register('contactId')} />
                           <div className="relative">
                             <input
-                              value={selectedContact ? `${selectedContact.firstName} ${selectedContact.lastName} (${selectedContact.phone})` : contactSearch}
+                              value={selectedContact ? `${[selectedContact.firstName, selectedContact.middleName, selectedContact.lastName].filter(Boolean).join(' ')} (${selectedContact.phone})` : contactSearch}
                               onChange={e => {
                                 if (selectedContact) {
                                   setSelectedContact(null);
@@ -4973,7 +5119,7 @@ export default function Policies() {
                                 <li key={c.id} onMouseDown={() => {
                                   setSelectedContact(c);
                                   setValue('contactId', c.id, { shouldValidate: true });
-                                  const fullName = `${c.firstName || ''} ${c.lastName || ''}`.trim();
+                                  const fullName = [c.firstName, c.middleName, c.lastName].filter(Boolean).join(' ').trim();
                                   setInsuredPerson(fullName);
                                   setContactDropdown(false);
                                   setContactSearch('');
@@ -4987,7 +5133,7 @@ export default function Policies() {
                                   }).catch(() => {});
                                 }} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm hover:bg-blue-50 cursor-pointer">
                                   <User size={13} className="text-gray-400" />
-                                  <span className="font-medium">{c.firstName} {c.lastName}</span>
+                                  <span className="font-medium">{[c.firstName, c.middleName, c.lastName].filter(Boolean).join(' ')}</span>
                                   <span className="text-gray-400 text-xs ml-auto">{c.phone}</span>
                                 </li>
                               ))}
@@ -7261,6 +7407,33 @@ export default function Policies() {
             <span>Make sure all details are accurate before saving the policy.</span>
           </div>
 
+          {/* Bottom Form Actions */}
+          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-200/70">
+            <button
+              type="button"
+              className="px-4 py-2 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl cursor-pointer transition-all border border-slate-200/80 shadow-2xs"
+              onClick={closeModal}
+            >
+              Cancel
+            </button>
+            {isViewMode ? (
+              <button
+                type="button"
+                className="px-5 py-2 text-xs font-extrabold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl cursor-pointer shadow-md shadow-blue-500/20 transition-all hover:scale-105"
+                onClick={() => setIsViewMode(false)}
+              >
+                Edit
+              </button>
+            ) : (!isRoutePolicyLoading || editTarget) ? (
+              <button
+                type="submit"
+                className="px-5 py-2 text-xs font-extrabold bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl cursor-pointer shadow-md shadow-blue-500/20 transition-all hover:scale-105"
+              >
+                {editTarget ? 'Update Policy' : 'Save Policy'}
+              </button>
+            ) : null}
+          </div>
+
         </form>
       )}
       </Modal>
@@ -7274,7 +7447,7 @@ export default function Policies() {
         title="Upload Document"
         types={POLICY_DOCUMENT_TYPE_OPTIONS}
         defaultType="POLICY_DOCUMENT"
-        zIndexClass="z-[60]"
+        zIndexClass="z-[70]"
         explicitFilePicker
       />
 

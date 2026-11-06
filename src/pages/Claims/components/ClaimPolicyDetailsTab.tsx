@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { policiesService } from '@api/index';
 import { cleanConnectedPhone } from '../../Policies/index';
@@ -17,13 +17,14 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import clsx from 'clsx';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { getPolicyStatusDisplay } from '@utils/policyStatusUtils';
 
 interface ClaimPolicyDetailsTabProps {
   policy?: any;
   policyId?: string;
   contact?: any;
+  claimId?: string;
   onGoToClaimTab?: () => void;
 }
 
@@ -31,6 +32,7 @@ export default function ClaimPolicyDetailsTab({
   policy: initialPolicy,
   policyId,
   contact: initialContact,
+  claimId,
   onGoToClaimTab,
 }: ClaimPolicyDetailsTabProps) {
   const targetId = policyId || initialPolicy?.id;
@@ -91,6 +93,36 @@ export default function ClaimPolicyDetailsTab({
   }
 
   const statusInfo = getPolicyStatusDisplay(p);
+  const targetPolicyId = p?.id || p?._id || targetId;
+  const currentClaimId = claimId || (initialPolicy as any)?.claimId || (p as any)?.claimId;
+
+  const returnUrl = useMemo(() => {
+    if (location.pathname.startsWith('/claims/')) {
+      return location.pathname;
+    }
+    if (currentClaimId) {
+      return `/claims?claimId=${encodeURIComponent(currentClaimId)}&tab=Policy+Details`;
+    }
+    return '/claims';
+  }, [location.pathname, currentClaimId]);
+
+  const policyUrl = targetPolicyId
+    ? `/policies/${targetPolicyId}?returnRoute=${encodeURIComponent(returnUrl)}&from=claims${currentClaimId ? `&claimId=${encodeURIComponent(currentClaimId)}` : ''}`
+    : '';
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        if (policyUrl) {
+          e.preventDefault();
+          e.stopPropagation();
+          window.open(policyUrl, '_blank', 'noopener,noreferrer');
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [policyUrl]);
   const companyName = p.plan?.company?.name || p.companyName || '—';
   const planName = p.plan?.name || p.productName || '—';
   const planCategory = p.plan?.category || p.category || 'Health';
@@ -209,13 +241,34 @@ export default function ClaimPolicyDetailsTab({
           </div>
 
           <div className="flex items-center gap-2 ml-auto">
-            {(p?.id || p?._id || targetId) && (
+            {policyUrl && (
               <Link
-                to={`/policies/${p?.id || p?._id || targetId}`}
-                target="_blank"
-                rel="noreferrer"
+                to={policyUrl}
+                state={{
+                  returnRoute: returnUrl,
+                  returnPayload: {
+                    claimId: currentClaimId,
+                    tab: 'Policy Details',
+                  },
+                  from: 'claims',
+                }}
+                onClick={(e) => {
+                  if (e.ctrlKey || e.metaKey) {
+                    e.preventDefault();
+                    window.open(policyUrl, '_blank', 'noopener,noreferrer');
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    if (e.ctrlKey || e.metaKey) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      window.open(policyUrl, '_blank', 'noopener,noreferrer');
+                    }
+                  }
+                }}
                 className="px-3 py-1.5 rounded-xl text-xs font-bold text-blue-700 bg-white hover:bg-blue-50 border border-blue-200 shadow-2xs hover:shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
-                title="View full policy details page in new tab"
+                title="View in Policies in same tab (Ctrl+Click or Ctrl+Enter to open in new tab)"
               >
                 <span>View in Policies</span>
                 <ExternalLink size={12} />

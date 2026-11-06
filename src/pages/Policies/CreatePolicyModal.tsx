@@ -245,7 +245,7 @@ export default function CreatePolicyModal({
     if (!contactSearch.trim()) return contactsList.slice(0, 50);
     const q = contactSearch.toLowerCase();
     return contactsList.filter((c: any) =>
-      `${c.firstName || ''} ${c.lastName || ''}`.toLowerCase().includes(q) ||
+      [c.firstName, c.middleName, c.lastName].filter(Boolean).join(' ').toLowerCase().includes(q) ||
       (c.phone && c.phone.includes(q))
     ).slice(0, 50);
   }, [contactsList, contactSearch]);
@@ -377,7 +377,7 @@ export default function CreatePolicyModal({
         );
         setPolicyZoneCity(editCity !== 'N/A' ? editCity : '');
         const matchInsured = (policyToEdit.notes || '').match(/Insured Person:\s*(.*)/i);
-        const editInsuredPerson = matchInsured ? matchInsured[1].trim() : (policyToEdit.contact ? `${policyToEdit.contact.firstName || ''} ${policyToEdit.contact.lastName || ''}`.trim() : '');
+        const editInsuredPerson = matchInsured ? matchInsured[1].trim() : (policyToEdit.contact ? [policyToEdit.contact.firstName, policyToEdit.contact.middleName, policyToEdit.contact.lastName].filter(Boolean).join(' ').trim() : '');
         setInsuredPerson(editInsuredPerson);
         const proposerNameLower = editInsuredPerson.trim().toLowerCase();
         let initialMembers: any[] = [];
@@ -749,7 +749,7 @@ export default function CreatePolicyModal({
         setFirmPan('');
         setFirmGst('');
 
-        const clientFullName = (contactName || (initialData?.contact ? `${initialData.contact.firstName || ''} ${initialData.contact.lastName || ''}` : '')).trim();
+        const clientFullName = (contactName || (initialData?.contact ? [initialData.contact.firstName, initialData.contact.middleName, initialData.contact.lastName].filter(Boolean).join(' ') : '')).trim();
         setInsuredPerson(clientFullName);
         setPhcRequired(false);
         setPhcAmount('');
@@ -2205,7 +2205,7 @@ export default function CreatePolicyModal({
                       </label>
                       <div className="relative">
                         <input
-                          value={selectedContact ? `${selectedContact.firstName || ''} ${selectedContact.lastName || ''} (${selectedContact.phone || ''})`.trim() : contactSearch}
+                          value={selectedContact ? `${[selectedContact.firstName, selectedContact.middleName, selectedContact.lastName].filter(Boolean).join(' ')} (${selectedContact.phone || ''})`.trim() : contactSearch}
                           onChange={e => {
                             if (selectedContact) {
                               setSelectedContact(null);
@@ -2233,7 +2233,7 @@ export default function CreatePolicyModal({
                               onMouseDown={() => {
                                 setSelectedContact(c);
                                 setSelectedContactId(c.id);
-                                const fullName = `${c.firstName || ''} ${c.lastName || ''}`.trim();
+                                const fullName = [c.firstName, c.middleName, c.lastName].filter(Boolean).join(' ');
                                 setInsuredPerson(fullName);
                                 setContactDropdown(false);
                                 setContactSearch('');
@@ -2249,7 +2249,7 @@ export default function CreatePolicyModal({
                               className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm hover:bg-blue-50 cursor-pointer"
                             >
                               <User size={13} className="text-gray-400" />
-                              <span className="font-medium">{c.firstName} {c.lastName}</span>
+                              <span className="font-medium">{[c.firstName, c.middleName, c.lastName].filter(Boolean).join(' ')}</span>
                               <span className="text-gray-400 text-xs ml-auto">{c.phone}</span>
                             </li>
                           ))}

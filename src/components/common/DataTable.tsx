@@ -36,6 +36,8 @@ export default function DataTable<T>({
   page = 1,
   pageSize = 20,
   onPageChange,
+  sortKey: propSortKey,
+  sortDir: propSortDir,
   onSort,
   loading,
   rowKey,
@@ -45,15 +47,19 @@ export default function DataTable<T>({
   showPagination = false,
   horizontalScroll = false,
 }: Props<T>) {
-  const [sortKey, setSortKey] = useState('');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [internalSortKey, setInternalSortKey] = useState('');
+  const [internalSortDir, setInternalSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const currentSortKey = propSortKey !== undefined ? propSortKey : internalSortKey;
+  const currentSortDir = propSortDir !== undefined ? propSortDir : internalSortDir;
 
   const handleSort = (key: string) => {
-    if (!onSort) return;
-    const dir = sortKey === key && sortDir === 'asc' ? 'desc' : 'asc';
-    setSortKey(key);
-    setSortDir(dir);
-    onSort(key, dir);
+    const dir = currentSortKey === key && currentSortDir === 'asc' ? 'desc' : 'asc';
+    setInternalSortKey(key);
+    setInternalSortDir(dir);
+    if (onSort) {
+      onSort(key, dir);
+    }
   };
 
   const totalPages = Math.ceil(total / pageSize) || 1;
@@ -84,8 +90,8 @@ export default function DataTable<T>({
                     <span className="break-words line-clamp-2 sm:line-clamp-none">{col.label}</span>
                     {col.sortable && (
                       <span className="text-slate-400 shrink-0 mt-0.5 sm:mt-0 transition-colors duration-150">
-                        {sortKey === String(col.key)
-                          ? sortDir === 'asc'
+                        {currentSortKey === String(col.key)
+                          ? currentSortDir === 'asc'
                             ? <ChevronUp size={14} className="text-slate-900 stroke-[3]" />
                             : <ChevronDown size={14} className="text-slate-900 stroke-[3]" />
                           : <ChevronUp size={14} className="text-slate-500 stroke-[2.5]" />

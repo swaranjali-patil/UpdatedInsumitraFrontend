@@ -1,4 +1,4 @@
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { claimsService, documentsService } from '@api/index';
 import { ArrowLeft, Upload, FileText, Trash2, Plus, DollarSign, MessageCircle, Building2, MapPin, Shield, CreditCard } from 'lucide-react';
@@ -56,7 +56,11 @@ export default function ClaimDetail() {
   const [approvedAmount, setApprovedAmount] = useState('');
   const [rejectionReason, setRejectionReason] = useState('');
   const [deleteDocTarget, setDeleteDocTarget] = useState<any | null>(null);
-  const [activeDetailTab, setActiveDetailTab] = useState<'claim' | 'policy' | 'hospital' | 'expenses'>('claim');
+  const location = useLocation();
+  const initialTab = (location.state as any)?.tab;
+  const [activeDetailTab, setActiveDetailTab] = useState<'claim' | 'policy' | 'hospital' | 'expenses'>(
+    initialTab === 'policy' ? 'policy' : 'claim'
+  );
 
   const { data: claim, isLoading } = useQuery({
     queryKey: ['claim', id],
@@ -238,6 +242,7 @@ export default function ClaimDetail() {
           policy={cl.policy}
           policyId={cl.policy?.id || cl.policyId}
           contact={cl.contact}
+          claimId={cl.id}
           onGoToClaimTab={() => setActiveDetailTab('claim')}
         />
       )}
@@ -282,7 +287,12 @@ export default function ClaimDetail() {
             )}
             {cl.policy && (
               <div className="space-y-1.5 pt-1">
-                <Link to={`/policies/${cl.policy.id ?? cl.policyId}`}
+                <Link to={`/policies/${cl.policy.id ?? cl.policyId}?returnRoute=${encodeURIComponent(`/claims/${cl.id}`)}&from=claims&claimId=${encodeURIComponent(cl.id)}`}
+                  state={{
+                    returnRoute: `/claims/${cl.id}`,
+                    returnPayload: { claimId: cl.id, tab: 'policy' },
+                    from: 'claims',
+                  }}
                   className="flex items-center justify-between p-2 rounded-lg hover:bg-gray-55 text-sm">
                   <span className="font-medium text-gray-900">{cl.policy.policyNumber}</span>
                   <span className="text-primary-600 text-xs">View Policy Page →</span>

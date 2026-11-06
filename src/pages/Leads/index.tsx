@@ -7,6 +7,7 @@ import Modal from '@comps/common/Modal';
 import CreatePolicyModal from '../Policies/CreatePolicyModal';
 import PolicyDetailModal from '../Policies/PolicyDetailModal';
 import ClaimDetailModal from '../Claims/ClaimDetailModal';
+import FamilyMemberModal from '../Contacts/FamilyMemberModal';
 import {
   Plus, Search, Pencil, Trash2, Shield, Upload, Phone, Calendar,
   MessageCircle, LayoutGrid, List, Filter, X, UserPlus, Users,
@@ -54,6 +55,28 @@ const EDUCATION_OPTIONS = [
   'CA/ICWA/MBA/CFA',
   'Computer degree other',
   'Other',
+];
+
+const RELATION_OPTIONS = [
+  { value: 'SPOUSE', label: 'Spouse' },
+  { value: 'HUSBAND', label: 'Husband' },
+  { value: 'WIFE', label: 'Wife' },
+  { value: 'SON', label: 'Son' },
+  { value: 'DAUGHTER', label: 'Daughter' },
+  { value: 'FATHER', label: 'Father' },
+  { value: 'MOTHER', label: 'Mother' },
+  { value: 'BROTHER', label: 'Brother' },
+  { value: 'SISTER', label: 'Sister' },
+  { value: 'UNCLE', label: 'Uncle' },
+  { value: 'AUNT', label: 'Aunt / Unty' },
+  { value: 'NEPHEW', label: 'Nephew' },
+  { value: 'NIECE', label: 'Niece' },
+  { value: 'CHILD', label: 'Child' },
+  { value: 'GRANDFATHER', label: 'Grandfather' },
+  { value: 'GRANDMOTHER', label: 'Grandmother' },
+  { value: 'GRANDSON', label: 'Grandson' },
+  { value: 'GRANDDAUGHTER', label: 'Granddaughter' },
+  { value: 'OTHER', label: 'Other' },
 ];
 
 const SUM_INSURED_OPTIONS = [
@@ -685,7 +708,15 @@ function ContactSearchSelect({
 
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function Leads() {
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+
+  const navigateToContact = (target: any) => {
+    const contactId = target?.id || target?.contactId || target;
+    if (contactId) {
+      navigate(`/contacts?openContactId=${contactId}`);
+    }
+  };
   const [viewMode, setViewMode] = useState<'board' | 'table'>('board');
   const [showFilters, setShowFilters] = useState(false);
   const [createInitialStage, setCreateInitialStage] = useState<string>('TO_CONTACT');
@@ -771,6 +802,414 @@ export default function Leads() {
   const [loadedContact, setLoadedContact] = useState<any | null>(null);
   const [duplicateContactMatched, setDuplicateContactMatched] = useState<any | null>(null);
   const [maxRenewalWindow, setMaxRenewalWindow] = useState<number>(45);
+
+  const calculateAge = (dob: string): number => {
+    if (!dob) return 0;
+    try {
+      const birthDate = new Date(dob);
+      const today = new Date();
+      let age = today.getFullYear() - birthDate.getFullYear();
+      const monthDiff = today.getMonth() - birthDate.getMonth();
+      if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+        age--;
+      }
+      return age > 0 ? age : 0;
+    } catch {
+      return 0;
+    }
+  };
+
+  const extractNameFields = (primary: any, secondary?: any) => {
+    let fn = primary?.firstName || primary?.contact?.firstName || secondary?.firstName || secondary?.contact?.firstName || '';
+    let mn = primary?.middleName || primary?.contact?.middleName || secondary?.middleName || secondary?.contact?.middleName || '';
+    let ln = primary?.lastName || primary?.contact?.lastName || secondary?.lastName || secondary?.contact?.lastName || '';
+
+    if (!fn) {
+      const nameStr = primary?.fullName || primary?.name || primary?.contact?.fullName || primary?.contact?.name ||
+                      secondary?.fullName || secondary?.name || secondary?.contact?.fullName || secondary?.contact?.name || '';
+      if (nameStr) {
+        const parts = nameStr.trim().split(/\s+/);
+        fn = parts[0] || '';
+        if (parts.length === 2) {
+          ln = parts[1] || '';
+        } else if (parts.length > 2) {
+          mn = parts.slice(1, -1).join(' ');
+          ln = parts[parts.length - 1] || '';
+        }
+      }
+    }
+    return { firstName: fn, middleName: mn, lastName: ln };
+  };
+
+  const toDateOnlyStr = (val: any): string => {
+    if (!val) return '';
+    if (typeof val === 'string') return val.split('T')[0];
+    try {
+      return new Date(val).toISOString().split('T')[0];
+    } catch {
+      return '';
+    }
+  };
+
+  const mapContactFamilyMembers = (contact: any): any[] => {
+    if (!contact) return [];
+    const allRels: any[] = [];
+    const seenContactIds = new Set<string>();
+
+    if (Array.isArray(contact.relationships)) {
+      allRels.push(...contact.relationships);
+    }
+    if (Array.isArray(contact.relatedTo)) {
+      contact.relatedTo.forEach((r: any) => {
+        const other = r.primaryContact || r.contact;
+        if (other) {
+          allRels.push({
+            ...r,
+            relatedContact: other,
+            relatedContactId: other.id || r.primaryContactId,
+            relationshipType: r.relationshipType,
+          });
+        }
+      });
+    }
+
+    const result: any[] = [];
+    allRels.forEach((r: any) => {
+      const c = r.relatedContact || r.contact || {};
+      const cId = c.id || r.relatedContactId;
+      if (cId && seenContactIds.has(cId)) return;
+      if (cId && contact.id && cId === contact.id) return;
+      if (cId) seenContactIds.add(cId);
+
+      const parsedNames = extractNameFields(c);
+      const firstOcc = Array.isArray(c.occupations) ? (c.occupations.find((o: any) => o.isPrimary) || c.occupations[0]) : null;
+      const rawDob = toDateOnlyStr(c?.dateOfBirth || r.dateOfBirth);
+      const medTags = (Array.isArray(c?.tags) ? c.tags : [])
+        .filter((t: string) => typeof t === 'string' && t.startsWith('med:'))
+        .map((t: string) => t.replace('med:', ''));
+
+      const relRaw = (r.relationshipType || 'OTHER').toUpperCase();
+      const phoneVal = (c?.phone && !c.phone.startsWith('00') && c.phone !== '0000000000')
+        ? c.phone
+        : (r?.phone && !r.phone.startsWith('00') && r.phone !== '0000000000' ? r.phone : '');
+      const altPhoneVal = (c?.alternatePhone && !c.alternatePhone.startsWith('00') && c.alternatePhone !== '0000000000')
+        ? c.alternatePhone
+        : (r?.alternatePhone && !r.alternatePhone.startsWith('00') && r.alternatePhone !== '0000000000' ? r.alternatePhone : '');
+
+      result.push({
+        id: r.id,
+        contactId: c.id || r.relatedContactId,
+        name: `${parsedNames.firstName} ${parsedNames.middleName} ${parsedNames.lastName}`.replace(/\s+/g, ' ').trim(),
+        firstName: parsedNames.firstName,
+        middleName: parsedNames.middleName,
+        lastName: parsedNames.lastName,
+        relation: relRaw,
+        dob: rawDob,
+        dateOfBirth: rawDob,
+        gender: c?.gender || '',
+        whatsapp: phoneVal,
+        callingNumber: altPhoneVal,
+        city: c?.addresses?.[0]?.city || c?.city || '',
+        state: c?.addresses?.[0]?.state || c?.state || '',
+        streetAddress: c?.addresses?.[0]?.line1 || c?.streetAddress || '',
+        pincode: c?.addresses?.[0]?.pincode || c?.pincode || '',
+        annualIncome: c?.annualIncome ? String(c.annualIncome) : '',
+        companyName: c?.companyName || firstOcc?.company || '',
+        occupation: firstOcc?.type || c?.occupation || '',
+        education: c?.education || '',
+        maritalStatus: c?.maritalStatus || '',
+        weddingAnniversaryDate: toDateOnlyStr(c?.weddingAnniversaryDate),
+        motherName: c?.motherName || '',
+        pan: c?.panNumber || c?.pan || '',
+        panNumber: c?.panNumber || c?.pan || '',
+        aadhaarNumber: c?.aadhaarNumber || '',
+        height: c?.height != null ? String(c.height) : '',
+        weight: c?.weight != null ? String(c.weight) : '',
+        bankName: c?.bankName || '',
+        bankAccountNumber: c?.bankAccountNumber || '',
+        bankIfsc: c?.bankIfsc || '',
+        bankBranch: c?.bankBranch || '',
+        chewTobacco: !!c?.chewTobacco,
+        smoke: !!c?.smoke,
+        consumeAlcohol: !!c?.consumeAlcohol,
+        medicalHistory: Array.isArray(c?.medicalHistory) && c.medicalHistory.length > 0 ? c.medicalHistory : medTags,
+        declaredMedicalHistory: Array.isArray(c?.declaredMedicalHistory) ? c.declaredMedicalHistory : [],
+        notDeclaredMedicalHistory: Array.isArray(c?.notDeclaredMedicalHistory) ? c.notDeclaredMedicalHistory : [],
+        medicalHistoryDetails: c?.medicalHistoryDetails || '',
+        surgeryDetails: c?.surgeryDetails || '',
+        prescriptionDetails: c?.prescriptionDetails || '',
+        isDependent: !!(c?.isDependent ?? r.isDependent),
+        dependentNo: c?.dependentNo || '',
+      });
+    });
+
+    return result;
+  };
+
+  const [familyMemberModalOpen, setFamilyMemberModalOpen] = useState(false);
+  const [editingFamilyMemberIdx, setEditingFamilyMemberIdx] = useState<number | null>(null);
+  const [selectedFamilyMemberForModal, setSelectedFamilyMemberForModal] = useState<any | null>(null);
+  const [createPolicyModalOpen, setCreatePolicyModalOpen] = useState(false);
+  const [policyToEdit, setPolicyToEdit] = useState<any | null>(null);
+  const [expandedPolicyIds, setExpandedPolicyIds] = useState<Record<string, boolean>>({});
+
+  const toSafeIsoString = (val?: string | null): string | undefined => {
+    if (!val || !val.trim()) return undefined;
+    const trimmed = val.trim();
+    const d = new Date(trimmed);
+    if (!isNaN(d.getTime())) return d.toISOString();
+    const MONTHS: Record<string, number> = {
+      jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+      jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11
+    };
+    const parts = trimmed.split(/[\/\-\.\s]+/);
+    if (parts.length === 3) {
+      let day: number, mon: number, year: number;
+      if (/^\d{4}$/.test(parts[0])) {
+        year = parseInt(parts[0], 10);
+        mon = parseInt(parts[1], 10) - 1;
+        day = parseInt(parts[2], 10);
+      } else {
+        day = parseInt(parts[0], 10);
+        const mStr = parts[1].toLowerCase();
+        if (/^\d+$/.test(mStr)) {
+          mon = parseInt(mStr, 10) - 1;
+        } else if (MONTHS[mStr.slice(0, 3)] !== undefined) {
+          mon = MONTHS[mStr.slice(0, 3)];
+        } else {
+          return undefined;
+        }
+        year = parseInt(parts[2], 10);
+      }
+      const parsed = new Date(year, mon, day);
+      if (!isNaN(parsed.getTime())) return parsed.toISOString();
+    }
+    return undefined;
+  };
+
+  const openPolicyInNewTab = (contactId: string, policyId?: string) => {
+    const url = new URL('/contacts', window.location.origin);
+    url.searchParams.set('openPolicyContact', contactId);
+    if (policyId) {
+      url.searchParams.set('openPolicyId', policyId);
+    } else {
+      url.searchParams.set('openNewPolicy', '1');
+    }
+    window.open(url.toString(), '_blank');
+  };
+
+  const openFamilyMemberInNewTab = (contactId: string, memberIdx?: number | null, options?: { parentContactId?: string; returnTab?: string }) => {
+    const url = new URL('/contacts', window.location.origin);
+    url.searchParams.set('openFamilyContact', contactId);
+    if (memberIdx !== null && memberIdx !== undefined && memberIdx >= 0) {
+      url.searchParams.set('openFamilyMemberIdx', String(memberIdx));
+    } else {
+      url.searchParams.set('openNewFamilyMember', '1');
+    }
+    if (options?.parentContactId) {
+      url.searchParams.set('parentContactId', options.parentContactId);
+    }
+    if (options?.returnTab) {
+      url.searchParams.set('returnTab', options.returnTab);
+    }
+    window.open(url.toString(), '_blank');
+  };
+
+  const openContactInNewTab = (contactId: string, options?: { parentContactId?: string; returnTab?: string; isView?: boolean }) => {
+    const url = new URL('/contacts', window.location.origin);
+    url.searchParams.set('openContactId', contactId);
+    const parentId = options?.parentContactId || editContactId || loadedContact?.id;
+    if (parentId) {
+      url.searchParams.set('parentContactId', parentId);
+    }
+    if (options?.returnTab) {
+      url.searchParams.set('returnTab', options.returnTab);
+    }
+    if (options?.isView) {
+      url.searchParams.set('isView', '1');
+    }
+    window.open(url.toString(), '_blank');
+  };
+
+  const openAddFamilyMemberModal = () => {
+    setEditingFamilyMemberIdx(null);
+    setSelectedFamilyMemberForModal(null);
+    setFamilyMemberModalOpen(true);
+  };
+
+  const openEditFamilyMemberModal = (idx: number, memberData?: any) => {
+    setEditingFamilyMemberIdx(idx);
+    setSelectedFamilyMemberForModal(memberData || familyMembers[idx] || null);
+    setFamilyMemberModalOpen(true);
+  };
+
+  const handleDeleteFamilyMember = async (idx: number) => {
+    const member = familyMembers[idx];
+    setFamilyMembers(prev => prev.filter((_, i) => i !== idx));
+    toast.success('Family member removed');
+
+    const contactId = editContactId || loadedContact?.id;
+    if (contactId && member?.id) {
+      try {
+        await contactsService.removeRelationship(contactId, member.id);
+      } catch (err) {
+        console.error('Failed to remove relationship from backend:', err);
+      }
+    }
+  };
+
+  const handleSaveFamilyMemberFromModal = async (savedMember: Record<string, any>) => {
+    const targetIdx = editingFamilyMemberIdx;
+    if (targetIdx !== null && targetIdx >= 0) {
+      setFamilyMembers(prev => prev.map((m, i) => i === targetIdx ? { ...m, ...savedMember } : m));
+    } else {
+      setFamilyMembers(prev => [...prev, {
+        addedAt: new Date().toISOString(),
+        ...savedMember,
+      }]);
+    }
+    setFamilyMemberModalOpen(false);
+    setEditingFamilyMemberIdx(null);
+    setSelectedFamilyMemberForModal(null);
+
+    const contactId = editContactId || loadedContact?.id;
+    if (contactId) {
+      const fam = savedMember;
+      const famFirst = (fam.firstName || '').trim() || (fam.name || '').trim().split(/\s+/)[0] || '';
+      const famMiddle = (fam.middleName || '').trim();
+      const famLast = (fam.lastName || '').trim() || (fam.name || '').trim().split(/\s+/).slice(1).join(' ') || '';
+      const fullFamName = `${famFirst} ${famMiddle} ${famLast}`.replace(/\s+/g, ' ').trim();
+      if (!fullFamName) return;
+
+      const rawFamPhone = (fam.whatsapp || fam.whatsappNumber || fam.phone || fam.contactNo || '').replace(/\D/g, '');
+      const cleanFamPhone = rawFamPhone.length > 10 ? rawFamPhone.slice(-10) : rawFamPhone;
+      const validFamPhone = (cleanFamPhone.length === 10 && !cleanFamPhone.startsWith('00') && cleanFamPhone !== '0000000000')
+        ? cleanFamPhone
+        : (rawFamPhone.length >= 7 && !rawFamPhone.startsWith('00') && rawFamPhone !== '0000000000' ? rawFamPhone : (rawFamPhone || undefined));
+
+      const rawFamCall = (fam.callingNumber || fam.alternatePhone || '').replace(/\D/g, '');
+      const cleanFamCall = rawFamCall.length > 10 ? rawFamCall.slice(-10) : rawFamCall;
+      const validFamCall = (cleanFamCall.length === 10 && !cleanFamCall.startsWith('00') && cleanFamCall !== '0000000000')
+        ? cleanFamCall
+        : (rawFamCall.length >= 7 && !rawFamCall.startsWith('00') && rawFamCall !== '0000000000' ? rawFamCall : (rawFamCall || undefined));
+      const relType = fam.relation ? fam.relation.toUpperCase().replace(/\s+/g, '_') : 'OTHER';
+      const famIsoDob = toSafeIsoString(fam.dob || fam.dateOfBirth);
+
+      const famPayload: any = {
+        firstName: famFirst,
+        middleName: famMiddle || undefined,
+        lastName: famLast,
+        phone: validFamPhone || '',
+        alternatePhone: validFamCall || undefined,
+        email: fam.email ? fam.email.trim() : undefined,
+        dateOfBirth: famIsoDob,
+        gender: fam.gender || undefined,
+        birthPlace: fam.birthPlace ? fam.birthPlace.trim() : undefined,
+        motherName: fam.motherName ? fam.motherName.trim() : undefined,
+        isDependent: !!fam.isDependent,
+        dependentNo: fam.guardianWhatsapp || fam.dependentNo || undefined,
+        panNumber: fam.pan || fam.panNumber || undefined,
+        aadhaarNumber: fam.aadhaarNumber || undefined,
+        annualIncome: fam.annualIncome ? Number(fam.annualIncome) : undefined,
+        maritalStatus: fam.maritalStatus || '',
+        weddingAnniversaryDate: fam.weddingAnniversary || fam.weddingAnniversaryDate || '',
+        education: fam.education || '',
+        occupation: fam.occupation || fam.occupationType || '',
+        height: fam.height || '',
+        weight: fam.weight || '',
+        chewTobacco: !!fam.chewTobacco,
+        smoke: !!fam.smoke,
+        consumeAlcohol: !!fam.consumeAlcohol,
+        medicalHistory: fam.medicalHistory || [],
+        declaredMedicalHistory: fam.declaredMedicalHistory || [],
+        notDeclaredMedicalHistory: fam.notDeclaredMedicalHistory || [],
+        medicalHistoryDetails: fam.medicalHistoryDetails || '',
+        surgeryDetails: fam.surgeryDetails || '',
+        prescriptionDetails: fam.prescriptionDetails || '',
+        bankName: fam.bankName ? fam.bankName.trim() : '',
+        bankAccountNumber: fam.bankAccountNumber ? fam.bankAccountNumber.trim() : '',
+        bankIfsc: (fam.bankIfsc || '').trim().toUpperCase(),
+        bankBranch: fam.bankBranch ? fam.bankBranch.trim() : '',
+        streetAddress: fam.streetAddress || undefined,
+        line1: fam.streetAddress || undefined,
+        city: fam.city || undefined,
+        district: fam.district || undefined,
+        state: fam.state || undefined,
+        pincode: fam.pincode || undefined,
+      };
+
+      try {
+        let targetFamContactId = fam.contactId;
+        if (targetFamContactId && targetFamContactId !== contactId) {
+          await contactsService.update(targetFamContactId, famPayload);
+          const hasFamAddr = Boolean(
+            (fam.streetAddress && fam.streetAddress.trim() && fam.streetAddress.trim() !== 'N/A') ||
+            (fam.city && fam.city.trim() && fam.city.trim() !== 'N/A') ||
+            (fam.state && fam.state.trim() && fam.state.trim() !== 'N/A') ||
+            (fam.district && fam.district.trim()) ||
+            (fam.pincode && fam.pincode.trim() && fam.pincode.trim() !== 'N/A')
+          );
+          if (hasFamAddr) {
+            await contactsService.addAddress(targetFamContactId, {
+              type: 'HOME',
+              line1: fam.streetAddress?.trim() || 'N/A',
+              city: fam.city?.trim() || 'N/A',
+              district: fam.district?.trim() || undefined,
+              state: fam.state?.trim() || 'N/A',
+              pincode: fam.pincode?.trim() || 'N/A',
+              country: 'India',
+              isPrimary: true,
+            }).catch(err => console.error('Failed to update family member address:', err));
+          }
+          if (fam.id) {
+            await contactsService.updateRelationship(contactId, fam.id, {
+              relatedContactId: targetFamContactId,
+              relationshipType: relType,
+              relationship: relType,
+              ...famPayload,
+            });
+          } else {
+            await contactsService.addRelationship(contactId, {
+              relatedContactId: targetFamContactId,
+              relationshipType: relType,
+              relationship: relType,
+              ...famPayload,
+            });
+          }
+        } else {
+          const addRes = await contactsService.addRelationship(contactId, {
+            name: fullFamName,
+            relationshipType: relType,
+            relationship: relType,
+            ...famPayload,
+          });
+          const relData = addRes?.data?.relationship || addRes?.data || addRes;
+          const relatedC = relData?.relatedContact || addRes?.data?.relatedContact;
+          if (relatedC?.id) {
+            targetFamContactId = relatedC.id;
+            setFamilyMembers(prev => prev.map(m => (m === savedMember || m.name === fullFamName) ? { ...m, contactId: relatedC.id } : m));
+          }
+        }
+        toast.success(targetIdx !== null && targetIdx >= 0 ? 'Family member details updated and saved' : 'Family member added and saved');
+
+        // Refresh contact relationships from server
+        contactsService.get(contactId).then(res => {
+          const c = res?.data?.data || res?.data || res;
+          if (c) {
+            setLoadedContact(c);
+            if (Array.isArray(c.relationships)) {
+              setFamilyMembers(mapContactFamilyMembers(c));
+            }
+          }
+        }).catch(() => {});
+      } catch (err: any) {
+        console.error('Failed to save family member to backend:', err);
+        toast.error(`Failed to save family member: ${err?.response?.data?.message || err?.message || 'Error'}`);
+      }
+    } else {
+      toast.success(targetIdx !== null && targetIdx >= 0 ? 'Family member details updated' : 'Family member added');
+    }
+  };
 
   const [leadDocUploadOpen, setLeadDocUploadOpen] = useState(false);
   const [docPreviewModal, setDocPreviewModal] = useState<{ open: boolean; title: string; url: string }>({ open: false, title: '', url: '' });
@@ -910,23 +1349,29 @@ export default function Leads() {
         }
       };
 
+      const parsedNames = extractNameFields(contact);
+
       setPersonalFields({
         role: contact.role || contact.user?.role || 'Contact',
         contactStatus: contact.isActive !== false ? 'Active' : 'Inactive',
         isActive: contact.isActive !== false,
-        fullName: `${contact.firstName || ''} ${contact.lastName || ''}`.trim(),
-        firstName: contact.firstName || '',
-        middleName: contact.middleName || '',
-        lastName: contact.lastName || '',
+        fullName: `${parsedNames.firstName} ${parsedNames.middleName} ${parsedNames.lastName}`.replace(/\s+/g, ' ').trim(),
+        firstName: parsedNames.firstName,
+        middleName: parsedNames.middleName,
+        lastName: parsedNames.lastName,
+        motherName: contact.motherName || '',
         gender: contact.gender || '',
         maritalStatus: contact.maritalStatus || '',
-        dateOfBirth: toDateOnly(contact.dateOfBirth),
+        weddingAnniversaryDate: toDateOnlyStr(contact.weddingAnniversaryDate),
+        dateOfBirth: toDateOnlyStr(contact.dateOfBirth),
         birthPlace: contact.birthPlace || '',
+        age: contact.dateOfBirth ? String(calculateAge(contact.dateOfBirth)) : '',
         email: contact.email || '',
         aadhaarNumber: contact.aadhaarNumber || '',
         panNumber: contact.panNumber || contact.pan || '',
+        pan: contact.panNumber || contact.pan || '',
         whatsappNumber: contact.phone || '',
-        sameAsWhatsapp: true,
+        sameAsWhatsapp: contact.phone === contact.alternatePhone,
         callingNumber: contact.alternatePhone || '',
         education: contact.education || '',
         annualIncome: contact.annualIncome != null ? String(contact.annualIncome) : '',
@@ -938,23 +1383,25 @@ export default function Leads() {
         district: primaryAddr?.district || '',
         city: primaryAddr?.city || '',
         pincode: primaryAddr?.pincode || '',
-        streetAddress: primaryAddr?.line1 || '',
-        declaredMedicalHistory: [],
-        notDeclaredMedicalHistory: [],
-        medicalHistoryDetails: ''
+        streetAddress: primaryAddr?.line1 || contact.notes || '',
+        bankName: contact.bankName || '',
+        bankAccountNumber: contact.bankAccountNumber || '',
+        bankIfsc: contact.bankIfsc || '',
+        bankBranch: contact.bankBranch || '',
+        chewTobacco: !!contact.chewTobacco,
+        smoke: !!contact.smoke,
+        consumeAlcohol: !!contact.consumeAlcohol,
+        medicalHistory: Array.isArray(contact.medicalHistory) ? contact.medicalHistory : [],
+        declaredMedicalHistory: Array.isArray(contact.declaredMedicalHistory) ? contact.declaredMedicalHistory : [],
+        notDeclaredMedicalHistory: Array.isArray(contact.notDeclaredMedicalHistory) ? contact.notDeclaredMedicalHistory : [],
+        medicalHistoryDetails: contact.medicalHistoryDetails || '',
+        surgeryDetails: contact.surgeryDetails || '',
+        prescriptionDetails: contact.prescriptionDetails || '',
+        isDependent: !!contact.isDependent,
+        dependentNo: contact.dependentNo || '',
       });
 
-      if (Array.isArray(contact.relationships)) {
-        setFamilyMembers(contact.relationships.map((r: any) => ({
-          id: r.id,
-          firstName: r.relatedContact?.firstName || r.name || '',
-          lastName: r.relatedContact?.lastName || '',
-          relation: r.relationshipType || 'OTHER',
-          dob: toDateOnly(r.relatedContact?.dateOfBirth || r.dateOfBirth),
-          whatsapp: r.relatedContact?.phone || r.phone || '',
-          contactId: r.relatedContactId || undefined
-        })));
-      }
+      setFamilyMembers(mapContactFamilyMembers(contact));
 
       const contactPolicies = (Array.isArray(contact.policies) && contact.policies.length > 0)
         ? contact.policies
@@ -1916,22 +2363,6 @@ export default function Leads() {
 
   const { register, handleSubmit, reset, setValue, watch } = useForm<Form>({ resolver: zodResolver(activeSchema) });
 
-  const calculateAge = (dob: string): number => {
-    if (!dob) return 0;
-    try {
-      const birthDate = new Date(dob);
-      const today = new Date();
-      let age = today.getFullYear() - birthDate.getFullYear();
-      const monthDiff = today.getMonth() - birthDate.getMonth();
-      if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
-        age--;
-      }
-      return age > 0 ? age : 0;
-    } catch {
-      return 0;
-    }
-  };
-
   const handleDOBChange = (val: string) => {
     const age = calculateAge(val);
     setPersonalFields(p => ({ ...p, dateOfBirth: val, age: String(age) }));
@@ -2127,6 +2558,20 @@ export default function Leads() {
               education: personalFields.education || undefined,
               annualIncome: personalFields.annualIncome ? Number(personalFields.annualIncome) : undefined,
               notes: personalFields.streetAddress || undefined,
+              motherName: personalFields.motherName || undefined,
+              weddingAnniversaryDate: personalFields.weddingAnniversaryDate?.trim() ? new Date(personalFields.weddingAnniversaryDate).toISOString() : undefined,
+              bankName: personalFields.bankName || undefined,
+              bankAccountNumber: personalFields.bankAccountNumber || undefined,
+              bankIfsc: personalFields.bankIfsc || undefined,
+              bankBranch: personalFields.bankBranch || undefined,
+              chewTobacco: personalFields.chewTobacco != null ? !!personalFields.chewTobacco : undefined,
+              smoke: personalFields.smoke != null ? !!personalFields.smoke : undefined,
+              consumeAlcohol: personalFields.consumeAlcohol != null ? !!personalFields.consumeAlcohol : undefined,
+              declaredMedicalHistory: personalFields.declaredMedicalHistory || undefined,
+              notDeclaredMedicalHistory: personalFields.notDeclaredMedicalHistory || undefined,
+              medicalHistoryDetails: personalFields.medicalHistoryDetails || undefined,
+              surgeryDetails: personalFields.surgeryDetails || undefined,
+              prescriptionDetails: personalFields.prescriptionDetails || undefined,
             });
           } catch (contactUpErr) {
             console.error('Failed to update contact profile:', contactUpErr);
@@ -2455,25 +2900,34 @@ export default function Leads() {
         }
       };
 
+      const parsedNames = extractNameFields(contact);
+
       setPersonalFields({
         role: contact.role || contact.user?.role || 'Contact',
         contactStatus: contact.isActive !== false ? 'Active' : 'Inactive',
         isActive: contact.isActive !== false,
-        fullName: `${contact.firstName || ''} ${contact.lastName || ''}`.trim(),
-        firstName: contact.firstName || '',
-        middleName: contact.middleName || '',
-        lastName: contact.lastName || '',
+        fullName: `${parsedNames.firstName} ${parsedNames.middleName} ${parsedNames.lastName}`.replace(/\s+/g, ' ').trim(),
+        firstName: parsedNames.firstName,
+        middleName: parsedNames.middleName,
+        lastName: parsedNames.lastName,
+        motherName: contact.motherName || '',
         gender: contact.gender || '',
         maritalStatus: contact.maritalStatus || '',
-        dateOfBirth: toDateOnly(contact.dateOfBirth),
+        weddingAnniversaryDate: toDateOnlyStr(contact.weddingAnniversaryDate),
+        dateOfBirth: toDateOnlyStr(contact.dateOfBirth),
         birthPlace: contact.birthPlace || '',
+        age: contact.dateOfBirth ? String(calculateAge(contact.dateOfBirth)) : '',
         email: contact.email || '',
         aadhaarNumber: contact.aadhaarNumber || '',
+        panNumber: contact.panNumber || contact.pan || '',
+        pan: contact.panNumber || contact.pan || '',
         whatsappNumber: contact.phone || '',
         sameAsWhatsapp: contact.phone === contact.alternatePhone,
         callingNumber: contact.alternatePhone || '',
         education: contact.education || '',
         annualIncome: contact.annualIncome != null ? String(contact.annualIncome) : '',
+        height: contact.height != null ? String(contact.height) : '',
+        weight: contact.weight != null ? String(contact.weight) : '',
         occupationType: primaryOcc?.type || '',
         companyName: primaryOcc?.companyName || '',
         state: primaryAddr?.state || '',
@@ -2481,9 +2935,21 @@ export default function Leads() {
         city: primaryAddr?.city || '',
         pincode: primaryAddr?.pincode || '',
         streetAddress: primaryAddr?.line1 || contact.notes || '',
+        bankName: contact.bankName || '',
+        bankAccountNumber: contact.bankAccountNumber || '',
+        bankIfsc: contact.bankIfsc || '',
+        bankBranch: contact.bankBranch || '',
+        chewTobacco: !!contact.chewTobacco,
+        smoke: !!contact.smoke,
+        consumeAlcohol: !!contact.consumeAlcohol,
+        medicalHistory: Array.isArray(contact.medicalHistory) ? contact.medicalHistory : [],
         declaredMedicalHistory: Array.isArray(contact.declaredMedicalHistory) ? contact.declaredMedicalHistory : [],
         notDeclaredMedicalHistory: Array.isArray(contact.notDeclaredMedicalHistory) ? contact.notDeclaredMedicalHistory : [],
-        medicalHistoryDetails: contact.medicalHistoryDetails || ''
+        medicalHistoryDetails: contact.medicalHistoryDetails || '',
+        surgeryDetails: contact.surgeryDetails || '',
+        prescriptionDetails: contact.prescriptionDetails || '',
+        isDependent: !!contact.isDependent,
+        dependentNo: contact.dependentNo || '',
       });
 
       setLeadInfoFields({
@@ -2504,36 +2970,7 @@ export default function Leads() {
       const campaigns = Array.isArray(contact.tags) ? contact.tags.filter((t: string) => campaignsList.includes(t)) : [];
       setSelectedCampaigns(campaigns);
 
-      const fams = (Array.isArray(contact.relationships) ? contact.relationships : []).map((r: any) => {
-        const c = r.relatedContact || r.contact || {};
-        const occ = Array.isArray(c?.occupations) ? (c.occupations.find((o: any) => o.isPrimary) || c.occupations[0]) : null;
-        const medTags = (Array.isArray(c?.tags) ? c.tags : [])
-          .filter((t: string) => t.startsWith('med:'))
-          .map((t: string) => t.replace('med:', ''));
-
-        const relRaw = r.relationshipType || '';
-        const relLower = relRaw.toLowerCase();
-        let formattedRel = relRaw ? relRaw.charAt(0).toUpperCase() + relRaw.slice(1).toLowerCase() : 'Other';
-        if (relLower === 'spouse') formattedRel = 'Spouse';
-        else if (relLower === 'son') formattedRel = 'Son';
-        else if (relLower === 'daughter') formattedRel = 'Daughter';
-        else if (relLower === 'father') formattedRel = 'Father';
-        else if (relLower === 'mother') formattedRel = 'Mother';
-        else if (relLower === 'brother') formattedRel = 'Brother';
-        else if (relLower === 'sister') formattedRel = 'Sister';
-        else if (relLower === 'child') formattedRel = 'Child';
-
-        return {
-          name: `${c?.firstName || ''} ${c?.lastName || ''}`.trim(),
-          dob: toDateOnly(c?.dateOfBirth),
-          relation: formattedRel,
-          whatsapp: c?.phone || '',
-          occupation: occ?.type || '',
-          education: c?.education || '',
-          medicalHistory: medTags
-        };
-      });
-      setFamilyMembers(fams);
+      setFamilyMembers(mapContactFamilyMembers(contact));
 
       const healthEntries: any[] = [];
       const lifeEntries: any[] = [];
@@ -2683,7 +3120,8 @@ export default function Leads() {
         setCardEditModes({});
       }
       setAllowEditPersonal(false);
-      setActiveLeadTab(preferredTab || 'Personal Information');
+      const normalizedPreferredTab = (!preferredTab || preferredTab === 'Personal Information') ? 'Personal' : preferredTab;
+      setActiveLeadTab(normalizedPreferredTab);
       setModalOpen(true);
       toast.dismiss(toastId);
     } catch (err: any) {
@@ -2741,22 +3179,29 @@ export default function Leads() {
         const primaryAddr = contact.addresses?.find((a: any) => a.isPrimary) || contact.addresses?.[0];
         const primaryOcc = contact.occupations?.find((o: any) => o.isPrimary) || contact.occupations?.[0];
 
+        const parsedNames = extractNameFields(contact);
+
         setPersonalFields({
           role: contact.role || contact.user?.role || 'Contact',
           contactStatus: contact.isActive !== false ? 'Active' : 'Inactive',
           isActive: contact.isActive !== false,
-          fullName: `${contact.firstName || ''} ${contact.lastName || ''}`.trim(),
-          firstName: contact.firstName || '',
-          middleName: contact.middleName || '',
-          lastName: contact.lastName || '',
+          fullName: `${parsedNames.firstName} ${parsedNames.middleName} ${parsedNames.lastName}`.replace(/\s+/g, ' ').trim(),
+          firstName: parsedNames.firstName,
+          middleName: parsedNames.middleName,
+          lastName: parsedNames.lastName,
+          motherName: contact.motherName || '',
           gender: contact.gender || '',
           maritalStatus: contact.maritalStatus || '',
-          dateOfBirth: contact.dateOfBirth ? contact.dateOfBirth.split('T')[0] : '',
+          weddingAnniversaryDate: toDateOnlyStr(contact.weddingAnniversaryDate),
+          dateOfBirth: toDateOnlyStr(contact.dateOfBirth),
           birthPlace: contact.birthPlace || '',
+          age: contact.dateOfBirth ? String(calculateAge(contact.dateOfBirth)) : '',
           email: contact.email || '',
-          height: "",
-          weight: "",
+          height: contact.height != null ? String(contact.height) : '',
+          weight: contact.weight != null ? String(contact.weight) : '',
           aadhaarNumber: contact.aadhaarNumber || '',
+          panNumber: contact.panNumber || contact.pan || '',
+          pan: contact.panNumber || contact.pan || '',
           whatsappNumber: contact.phone || '',
           sameAsWhatsapp: contact.phone === contact.alternatePhone,
           callingNumber: contact.alternatePhone || '',
@@ -2769,24 +3214,24 @@ export default function Leads() {
           city: primaryAddr?.city || '',
           pincode: primaryAddr?.pincode || '',
           streetAddress: primaryAddr?.line1 || contact.notes || '',
-          declaredMedicalHistory: contact.declaredMedicalHistory || [],
-          notDeclaredMedicalHistory: contact.notDeclaredMedicalHistory || [],
-          medicalHistoryDetails: contact.medicalHistoryDetails || ''
+          bankName: contact.bankName || '',
+          bankAccountNumber: contact.bankAccountNumber || '',
+          bankIfsc: contact.bankIfsc || '',
+          bankBranch: contact.bankBranch || '',
+          chewTobacco: !!contact.chewTobacco,
+          smoke: !!contact.smoke,
+          consumeAlcohol: !!contact.consumeAlcohol,
+          medicalHistory: Array.isArray(contact.medicalHistory) ? contact.medicalHistory : [],
+          declaredMedicalHistory: Array.isArray(contact.declaredMedicalHistory) ? contact.declaredMedicalHistory : [],
+          notDeclaredMedicalHistory: Array.isArray(contact.notDeclaredMedicalHistory) ? contact.notDeclaredMedicalHistory : [],
+          medicalHistoryDetails: contact.medicalHistoryDetails || '',
+          surgeryDetails: contact.surgeryDetails || '',
+          prescriptionDetails: contact.prescriptionDetails || '',
+          isDependent: !!contact.isDependent,
+          dependentNo: contact.dependentNo || '',
         });
 
-        const fams = (contact.relationships || []).map((r: any) => {
-          const c = r.relatedContact;
-          return {
-            name: `${c?.firstName || ''} ${c?.lastName || ''}`.trim(),
-            dob: c?.dateOfBirth ? c.dateOfBirth.split('T')[0] : '',
-            relation: r.relationshipType,
-            whatsapp: c?.phone || '',
-            occupation: '',
-            education: '',
-            medicalHistory: []
-          };
-        });
-        setFamilyMembers(fams);
+        setFamilyMembers(mapContactFamilyMembers(contact));
 
         const healthEntries: any[] = [];
         const lifeEntries: any[] = [];
@@ -3768,7 +4213,7 @@ export default function Leads() {
 
           {/* Modal sub-navigation tabs */}
           <div className="flex bg-slate-200/60 p-1.5 rounded-2xl mt-0 mb-3 gap-2 border border-slate-200/80 overflow-x-auto shadow-2xs">
-            {['Product Interest', 'Personal', 'Family', 'Policy', 'Claims', 'Documents', 'WA Campaign', 'History'].map(tab => (
+            {['Product Interest', 'Personal', 'Family', 'Policy', 'Claims', 'Documents', 'History'].map(tab => (
               <button
                 key={tab}
                 type="button"
@@ -4883,689 +5328,889 @@ export default function Leads() {
 
 
             {activeLeadTab === 'Family' && (
-              <div className="h-full flex flex-col gap-0">
-                {editContactId && (
-                  <div className="bg-slate-50 border border-slate-200 text-slate-500 px-3.5 py-2.5 rounded-xl text-xs font-bold mb-4 flex items-center justify-between shadow-2xs flex-shrink-0">
-                    <span>Contact details are read-only. Edit them in the Contacts module.</span>
+              <div className="h-full flex flex-col">
+                {/* Action buttons bar */}
+                <div className="flex items-center justify-between gap-3 mb-3 flex-shrink-0">
+                  <div>
+                    <h3 className="text-xs font-bold text-slate-800">Family Members &amp; Dependents</h3>
+                    <p className="text-[11px] text-slate-500 font-medium">
+                      Manage relationship profiles, personal details, contact info, and medical history.
+                    </p>
                   </div>
-                )}
-                {/* Header */}
-                <div className="flex items-center justify-between mb-3 flex-shrink-0">
-                  <h3 className="text-base font-bold text-gray-800">Dependents &amp; Beneficiaries</h3>
-                  {!editContactId && (
-                    <button
-                      type="button"
-                      onClick={() => setFamilyMembers(prev => [...prev, { firstName: '', middleName: '', lastName: '', dob: '', relation: '', whatsapp: '', occupation: '', education: '', medicalHistory: [], declaredMedicalHistory: [], notDeclaredMedicalHistory: [], medicalHistoryDetails: '' }])}
-                      className="flex flex-wrap items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg cursor-pointer transition-colors"
-                    >
-                      + Add Member
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      if (e.ctrlKey || e.metaKey) {
+                        e.preventDefault();
+                        const contactId = editContactId || loadedContact?.id;
+                        if (contactId) openFamilyMemberInNewTab(contactId);
+                        return;
+                      }
+                      openAddFamilyMemberModal();
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const contactId = editContactId || loadedContact?.id;
+                        if (contactId) openFamilyMemberInNewTab(contactId);
+                      }
+                    }}
+                    className="flex items-center justify-center gap-2 px-4 py-2.5 border-2 border-blue-400 text-blue-600 text-xs font-bold rounded-xl hover:bg-blue-50 cursor-pointer transition-all shadow-xs shrink-0"
+                    title="Add Family Member (Ctrl+Click or Ctrl+Enter to open in new tab)"
+                  >
+                    <Plus size={15} />
+                    + Add Family Member
+                  </button>
                 </div>
 
-                {/* Members */}
-                <fieldset disabled={!!editContactId} className="flex-1 overflow-y-auto pr-0.5 min-h-0">
-                  <div className="space-y-3">
-                    {familyMembers.length === 0 ? (
-                      <div className="flex items-center justify-center border border-dashed border-gray-200 rounded-xl bg-gray-50/50" style={{ minHeight: '120px' }}>
-                        <p className="text-xs text-gray-400 font-medium">No family details added yet.</p>
+                <div className="space-y-3 mb-3 overflow-y-auto max-h-[60vh] custom-scrollbar pr-1">
+                  {familyMembers.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50/60 px-6 py-12 text-center min-h-[220px]">
+                      <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-100 to-indigo-100 text-blue-600 flex items-center justify-center mb-3 shadow-xs">
+                        <Users size={26} className="text-blue-600" />
                       </div>
-                    ) : (
-                      familyMembers.map((member, idx) => (
-                        <div key={idx} className="border border-gray-200 rounded-xl bg-white shadow-sm">
-                          {/* Card header */}
-                          <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100">
-                            <span className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">Member #{idx + 1}</span>
-                            {!editContactId && (
-                              <button
-                                type="button"
-                                onClick={() => setFamilyMembers(prev => prev.filter((_, i) => i !== idx))}
-                                className="w-5 h-5 flex items-center justify-center rounded-full bg-red-50 hover:bg-red-100 text-red-400 hover:text-red-600 transition-colors cursor-pointer text-xs font-bold"
-                              >
-                                ✕
-                              </button>
-                            )}
-                          </div>
+                      <p className="text-sm font-bold text-slate-700">No family members added yet</p>
+                      <p className="text-[11px] text-slate-500 mt-1 max-w-[320px]">
+                        Add family members, spouses, children, or dependents to manage full relationship and health profiles in a dedicated popup.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          if (e.ctrlKey || e.metaKey) {
+                            e.preventDefault();
+                            const contactId = editContactId || loadedContact?.id;
+                            if (contactId) openFamilyMemberInNewTab(contactId);
+                            return;
+                          }
+                          openAddFamilyMemberModal();
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const contactId = editContactId || loadedContact?.id;
+                            if (contactId) openFamilyMemberInNewTab(contactId);
+                          }
+                        }}
+                        className="mt-4 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition-all flex items-center gap-1.5 cursor-pointer"
+                        title="Add First Family Member (Ctrl+Click or Ctrl+Enter to open in new tab)"
+                      >
+                        <Plus size={14} />
+                        Add First Family Member
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid gap-3">
+                      {familyMembers.map((member, idx) => {
+                        const fullName = [member.firstName, member.middleName, member.lastName].filter(Boolean).join(' ').trim() || member.name || 'Family Member';
+                        const rel = (member.relation || 'OTHER').toUpperCase();
+                        let relLabel = rel.replace(/_/g, ' ');
+                        if (rel === 'SPOUSE') {
+                          const g = (member.gender || '').toUpperCase();
+                          if (g === 'FEMALE') relLabel = 'WIFE';
+                          else if (g === 'MALE') relLabel = 'HUSBAND';
+                          else {
+                            const fn = (member.firstName || member.name || '').trim().split(' ')[0].toLowerCase();
+                            if (/(a|i|ee|ita|ika|shree|priya|devi|bai|ben)$/i.test(fn)) relLabel = 'WIFE';
+                          }
+                        }
+                        const dobVal = member.dob || member.dateOfBirth || '';
+                        const ageVal = member.age || (dobVal ? calculateAge(dobVal) : '');
+                        const phoneVal = (member.whatsapp && !member.whatsapp.startsWith('00') && member.whatsapp !== '0000000000')
+                          ? member.whatsapp
+                          : (member.whatsappNumber || member.phone || member.contactNo || member.callingNumber || member.alternatePhone || '');
+                        const addressVal = [member.city, member.state].filter(Boolean).join(', ');
+                        const declaredCount = (member.declaredMedicalHistory || member.medicalHistory || []).length;
 
-                          {/* Row 1: First Name | Middle Name | Last Name */}
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 px-4 pt-3">
-                            <div>
-                              <label className="label text-[10px] font-bold text-gray-500 uppercase tracking-wider">First Name {isFieldRequired('firstName', true) && <span className="text-red-500">*</span>}</label>
-                              <input
-                                type="text"
-                                className="input w-full mt-1"
-                                placeholder="First name"
-                                value={member.firstName || ''}
-                                onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, firstName: e.target.value } : m))}
-                              />
-                            </div>
-                            <div>
-                              <label className="label text-[10px] font-bold text-gray-500 uppercase tracking-wider">Middle Name</label>
-                              <input
-                                type="text"
-                                className="input w-full mt-1"
-                                placeholder="Middle name"
-                                value={member.middleName || ''}
-                                onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, middleName: e.target.value } : m))}
-                              />
-                            </div>
-                            <div>
-                              <label className="label text-[10px] font-bold text-gray-500 uppercase tracking-wider">Last Name {isFieldRequired('lastName', true) && <span className="text-red-500">*</span>}</label>
-                              <input
-                                type="text"
-                                className="input w-full mt-1"
-                                placeholder="Last name"
-                                value={member.lastName || ''}
-                                onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, lastName: e.target.value } : m))}
-                              />
-                            </div>
-                          </div>
+                        const isSpouse = ['SPOUSE', 'HUSBAND', 'WIFE'].includes(rel);
+                        const isChild = ['SON', 'DAUGHTER', 'CHILD', 'GRANDSON', 'GRANDDAUGHTER', 'GRANDCHILD', 'NEPHEW', 'NIECE'].includes(rel);
+                        const isParent = ['FATHER', 'MOTHER', 'PARENT', 'GRANDFATHER', 'GRANDMOTHER', 'GRANDPARENT', 'UNCLE', 'AUNT'].includes(rel);
 
-                          {/* Row 2: DOB | Relation */}
-                          {/* Row 2: DOB | Relation | Occupation */}
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 px-4 pt-3">
-                            <div>
-                              <label className="label text-[10px] font-bold text-gray-500 uppercase tracking-wider">DOB</label>
-                              <DatePicker
-                                className="input w-full mt-1"
-                                value={member.dob}
-                                onChange={val => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, dob: val } : m))}
-                              />
-                            </div>
-                            <div>
-                              <label className="label text-[10px] font-bold text-gray-500 uppercase tracking-wider">Relation</label>
-                              <select
-                                className="input w-full mt-1"
-                                value={['SPOUSE', 'SON', 'DAUGHTER', 'FATHER', 'MOTHER', 'Spouse', 'Son', 'Daughter', 'Father', 'Mother', 'Brother', 'Sister', 'Child', ''].includes(member.relation) ? member.relation : 'OTHER'}
-                                onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, relation: e.target.value } : m))}
-                              >
-                                <option value="">Select</option>
-                                <option value="SPOUSE">Spouse</option>
-                                <option value="SON">Son</option>
-                                <option value="DAUGHTER">Daughter</option>
-                                <option value="FATHER">Father</option>
-                                <option value="MOTHER">Mother</option>
-                                <option value="OTHER">Other</option>
-                              </select>
-                              {(member.relation === 'OTHER' || member.relation === 'Other' || (member.relation && !['SPOUSE', 'SON', 'DAUGHTER', 'FATHER', 'MOTHER', 'Spouse', 'Son', 'Daughter', 'Father', 'Mother', 'Brother', 'Sister', 'Child', ''].includes(member.relation))) && (
-                                <div className="mt-1.5 animate-fadeIn">
-                                  <input
-                                    type="text"
-                                    className="input w-full text-xs"
-                                    placeholder="Specify Relation..."
-                                    value={['OTHER', 'Other'].includes(member.relation) ? '' : member.relation}
-                                    onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, relation: e.target.value || 'OTHER' } : m))}
-                                  />
+                        const cardBorder = isSpouse
+                          ? 'border-purple-200 hover:border-purple-300'
+                          : isChild
+                          ? 'border-emerald-200 hover:border-emerald-300'
+                          : isParent
+                          ? 'border-amber-200 hover:border-amber-300'
+                          : 'border-blue-200 hover:border-blue-300';
+
+                        const headerGradient = isSpouse
+                          ? 'from-purple-600 to-indigo-700'
+                          : isChild
+                          ? 'from-emerald-600 to-teal-700'
+                          : isParent
+                          ? 'from-amber-600 to-orange-700'
+                          : 'from-blue-600 to-slate-700';
+
+                        return (
+                          <div
+                            key={idx}
+                            tabIndex={0}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                if (e.ctrlKey || e.metaKey) {
+                                  if (member.contactId) {
+                                    openContactInNewTab(member.contactId, {
+                                      parentContactId: editContactId || loadedContact?.id,
+                                      returnTab: 'Family',
+                                    });
+                                  } else {
+                                    const contactId = editContactId || loadedContact?.id;
+                                    if (contactId) {
+                                      openFamilyMemberInNewTab(contactId, idx, {
+                                        parentContactId: contactId,
+                                        returnTab: 'Family',
+                                      });
+                                    }
+                                  }
+                                } else {
+                                  if (member.contactId) {
+                                    navigateToContact({ id: member.contactId, contactId: member.contactId });
+                                  } else {
+                                    openEditFamilyMemberModal(idx);
+                                  }
+                                }
+                              }
+                            }}
+                            className={`overflow-hidden rounded-2xl border ${cardBorder} bg-white shadow-xs hover:shadow-md transition-all relative outline-none focus-within:ring-2 focus-within:ring-blue-400`}
+                          >
+                            {/* Card Header (Clicking card opens family member in same tab; Ctrl+Click or Ctrl+Enter opens in new tab) */}
+                            <div
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (e.ctrlKey || e.metaKey) {
+                                  if (member.contactId) {
+                                    openContactInNewTab(member.contactId, {
+                                      parentContactId: editContactId || loadedContact?.id,
+                                      returnTab: 'Family',
+                                    });
+                                  } else {
+                                    const contactId = editContactId || loadedContact?.id;
+                                    if (contactId) {
+                                      openFamilyMemberInNewTab(contactId, idx, {
+                                        parentContactId: contactId,
+                                        returnTab: 'Family',
+                                      });
+                                    }
+                                  }
+                                  return;
+                                }
+                                if (member.contactId) {
+                                  navigateToContact({ id: member.contactId, contactId: member.contactId });
+                                } else {
+                                  openEditFamilyMemberModal(idx);
+                                }
+                              }}
+                              className={`flex items-center justify-between bg-gradient-to-r ${headerGradient} px-4 py-3 cursor-pointer select-none`}
+                              title="Click to view full contact profile with all tabs in same tab (Ctrl+Click or Ctrl+Enter to open in new tab)"
+                            >
+                              <div className="flex items-center gap-3 min-w-0 flex-1">
+                                <div className="w-7 h-7 rounded-lg bg-white/20 backdrop-blur-sm flex items-center justify-center text-white shrink-0 font-black text-xs">
+                                  {idx + 1}
                                 </div>
-                              )}
-                            </div>
-                            <div>
-                              <label className="label text-[10px] font-bold text-gray-500 uppercase tracking-wider">Occupation</label>
-                              <select
-                                className="input w-full mt-1"
-                                value={['SALARIED', 'SELF_EMPLOYED', 'BUSINESS', 'STUDENT', 'HOMEMAKER', 'RETIRED', 'Salaried', 'Self Employed', 'Business', 'Student', 'Homemaker', 'Retired', ''].includes(member.occupation) ? member.occupation : 'OTHER'}
-                                onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, occupation: e.target.value } : m))}
-                              >
-                                <option value="">Select Type</option>
-                                <option value="SALARIED">Salaried</option>
-                                <option value="SELF_EMPLOYED">Self Employed</option>
-                                <option value="BUSINESS">Business</option>
-                                <option value="STUDENT">Student</option>
-                                <option value="HOMEMAKER">Homemaker</option>
-                                <option value="RETIRED">Retired</option>
-                                <option value="OTHER">Other</option>
-                              </select>
-                              {(member.occupation === 'OTHER' || member.occupation === 'Other' || (member.occupation && !['SALARIED', 'SELF_EMPLOYED', 'BUSINESS', 'STUDENT', 'HOMEMAKER', 'RETIRED', 'Salaried', 'Self Employed', 'Business', 'Student', 'Homemaker', 'Retired', ''].includes(member.occupation))) && (
-                                <div className="mt-1.5 animate-fadeIn">
-                                  <input
-                                    type="text"
-                                    className="input w-full text-xs"
-                                    placeholder="Specify Occupation..."
-                                    value={['OTHER', 'Other'].includes(member.occupation) ? '' : member.occupation}
-                                    onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, occupation: e.target.value || 'OTHER' } : m))}
-                                  />
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="px-2 py-0.5 rounded-full bg-white/20 text-white font-black text-[10px] tracking-wider uppercase">
+                                      {relLabel}
+                                    </span>
+                                    <h4 className="text-white font-extrabold text-xs sm:text-sm truncate">
+                                      {fullName}
+                                    </h4>
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-3 text-white/80 text-[11px] font-medium mt-0.5">
+                                    {ageVal ? <span>Age: <strong className="text-white">{ageVal} yrs</strong></span> : null}
+                                    {dobVal ? <span>DOB: <strong className="text-white">{dobVal}</strong></span> : null}
+                                    {member.gender ? <span>Gender: <strong className="text-white">{member.gender}</strong></span> : null}
+                                  </div>
                                 </div>
-                              )}
-                            </div>
-                          </div>
+                              </div>
 
-                          {/* Row 3: Whatsapp | Calling Number | Education */}
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 px-4 pt-3">
-                            <div>
-                              <label className="label text-[10px] font-bold text-gray-500 uppercase tracking-wider">Whatsapp</label>
-                              <div className="flex border border-slate-200 rounded-xl overflow-hidden bg-white focus-within:ring-2 focus-within:ring-blue-500/10 focus-within:border-blue-500 transition-all mt-1">
-                                <span className="bg-slate-50 px-2.5 py-1.5 text-xs border-r border-slate-200 text-slate-500 font-bold">+91</span>
-                                <input
-                                  type="tel"
-                                  className="px-3 py-1.5 text-xs w-full outline-none bg-transparent"
-                                  placeholder="Number"
-                                  maxLength={10}
-                                  value={member.whatsapp}
-                                  onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, whatsapp: e.target.value.replace(/\D/g, '') } : m))}
-                                />
-                              </div>
-                            </div>
-                            <div>
-                              <label className="label text-[10px] font-bold text-gray-500 uppercase tracking-wider">Calling Number</label>
-                              <div className="mt-1">
-                                <CountryPhoneInput
-                                  value={member.callingNumber || ''}
-                                  onChange={(value: string) => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, callingNumber: value } : m))}
-                                />
-                              </div>
-                            </div>
-                            <div>
-                              <label className="label text-[10px] font-bold text-gray-500 uppercase tracking-wider">Education</label>
-                              <select
-                                className="input w-full mt-1"
-                                value={['HighSchool', 'Graduate', 'PostGraduate', 'Professional', 'Below 10th', '10th Pass', '12th Pass', ''].includes(member.education) ? member.education : 'OTHER'}
-                                onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, education: e.target.value } : m))}
-                              >
-                                <option value="">Select Type</option>
-                                <option value="HighSchool">High School</option>
-                                <option value="Graduate">Graduate</option>
-                                <option value="PostGraduate">Post Graduate</option>
-                                <option value="Professional">Professional</option>
-                                <option value="OTHER">Other</option>
-                              </select>
-                              {(member.education === 'OTHER' || member.education === 'Other' || (member.education && !['HighSchool', 'Graduate', 'PostGraduate', 'Professional', 'Below 10th', '10th Pass', '12th Pass', ''].includes(member.education))) && (
-                                <div className="mt-1.5 animate-fadeIn">
-                                  <input
-                                    type="text"
-                                    className="input w-full text-xs"
-                                    placeholder="Specify Education..."
-                                    value={['OTHER', 'Other'].includes(member.education) ? '' : member.education}
-                                    onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, education: e.target.value || 'OTHER' } : m))}
-                                  />
-                                </div>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* Row 4: Medical History */}
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 px-4 pt-3 pb-3">
-                            {/* Generic Medical History */}
-                            <div className="col-span-3">
-                              <label className="label text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-2">Medical History (Select if applicable)</label>
-                              <div className="flex flex-wrap gap-x-6 gap-y-2">
-                                {['BP', 'Sugar', 'Heart', 'Thyroid', 'Others'].map((condition) => {
-                                  const isOthers = condition === 'Others';
-                                  const current = member.medicalHistory || [];
-                                  const isSelected = isOthers
-                                    ? current.some((c: string) => !['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c))
-                                    : current.includes(condition);
-                                  return (
-                                    <label key={condition} className="flex flex-wrap items-center gap-1.5 cursor-pointer select-none">
-                                      <input
-                                        type="checkbox"
-                                        className="accent-blue-600 w-3.5 h-3.5"
-                                        checked={isSelected}
-                                        onChange={() => {
-                                          setFamilyMembers(prev => prev.map((m, i) => {
-                                            if (i !== idx) return m;
-                                            const list: string[] = m.medicalHistory || [];
-                                            if (isOthers) {
-                                              if (isSelected) {
-                                                return {
-                                                  ...m,
-                                                  medicalHistory: list.filter((c: string) => ['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c))
-                                                };
-                                              } else {
-                                                return {
-                                                  ...m,
-                                                  medicalHistory: [...list, '']
-                                                };
-                                              }
-                                            } else {
-                                              return {
-                                                ...m,
-                                                medicalHistory: isSelected
-                                                  ? list.filter((c: string) => c !== condition)
-                                                  : [...list, condition]
-                                              };
-                                            }
-                                          }));
-                                        }}
-                                      />
-                                      <span className="text-xs text-slate-600 font-medium">{condition}</span>
-                                    </label>
-                                  );
-                                })}
-                              </div>
-                              {(member.medicalHistory || []).some((c: string) => !['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c)) && (
-                                <div className="mt-2 animate-fadeIn">
-                                  <input
-                                    type="text"
-                                    className="input w-full text-xs py-1 px-2.5"
-                                    placeholder="Type medical conditions..."
-                                    value={(member.medicalHistory || []).find((c: string) => !['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c)) || ''}
-                                    onChange={e => {
-                                      const val = e.target.value;
-                                      setFamilyMembers(prev => prev.map((m, i) => {
-                                        if (i !== idx) return m;
-                                        const current: string[] = m.medicalHistory || [];
-                                        const baseVal = current.filter((c: string) => ['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c));
-                                        return {
-                                          ...m,
-                                          medicalHistory: [...baseVal, val]
-                                        };
-                                      }));
+                              {/* Actions on Card Header */}
+                              <div className="flex items-center gap-1.5 shrink-0 ml-2" onClick={e => e.stopPropagation()}>
+                                {member.contactId && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (e.ctrlKey || e.metaKey) {
+                                        openContactInNewTab(member.contactId, {
+                                          parentContactId: editContactId || loadedContact?.id,
+                                          returnTab: 'Family',
+                                        });
+                                        return;
+                                      }
+                                      navigateToContact({ id: member.contactId, contactId: member.contactId });
                                     }}
-                                  />
-                                </div>
-                              )}
-                            </div>
-
-                            {/* Declared Medical History */}
-                            <div className="col-span-3">
-                              <label className="label text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-2">Declared Medical History</label>
-                              <div className="flex flex-wrap gap-x-6 gap-y-2">
-                                {['BP', 'Sugar', 'Heart', 'Thyroid', 'Others'].map((condition) => {
-                                  const isOthers = condition === 'Others';
-                                  const current = member.declaredMedicalHistory || [];
-                                  const isSelected = isOthers
-                                    ? current.some((c: string) => !['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c))
-                                    : current.includes(condition);
-                                  return (
-                                    <label key={condition} className="flex flex-wrap items-center gap-1.5 cursor-pointer select-none">
-                                      <input
-                                        type="checkbox"
-                                        className="accent-blue-600 w-3.5 h-3.5"
-                                        checked={isSelected}
-                                        onChange={() => {
-                                          setFamilyMembers(prev => prev.map((m, i) => {
-                                            if (i !== idx) return m;
-                                            const list: string[] = m.declaredMedicalHistory || [];
-                                            if (isOthers) {
-                                              if (isSelected) {
-                                                return {
-                                                  ...m,
-                                                  declaredMedicalHistory: list.filter((c: string) => ['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c))
-                                                };
-                                              } else {
-                                                return {
-                                                  ...m,
-                                                  declaredMedicalHistory: [...list, '']
-                                                };
-                                              }
-                                            } else {
-                                              return {
-                                                ...m,
-                                                declaredMedicalHistory: isSelected
-                                                  ? list.filter((c: string) => c !== condition)
-                                                  : [...list, condition]
-                                              };
-                                            }
-                                          }));
-                                        }}
-                                      />
-                                      <span className="text-xs text-slate-600 font-medium">{condition}</span>
-                                    </label>
-                                  );
-                                })}
-                              </div>
-                              {(member.declaredMedicalHistory || []).some((c: string) => !['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c)) && (
-                                <div className="mt-2 animate-fadeIn">
-                                  <input
-                                    type="text"
-                                    className="input w-full text-xs py-1 px-2.5"
-                                    placeholder="Type medical conditions..."
-                                    value={(member.declaredMedicalHistory || []).find((c: string) => !['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c)) || ''}
-                                    onChange={e => {
-                                      const val = e.target.value;
-                                      setFamilyMembers(prev => prev.map((m, i) => {
-                                        if (i !== idx) return m;
-                                        const current: string[] = m.declaredMedicalHistory || [];
-                                        const baseVal = current.filter((c: string) => ['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c));
-                                        return {
-                                          ...m,
-                                          declaredMedicalHistory: [...baseVal, val]
-                                        };
-                                      }));
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        if (e.ctrlKey || e.metaKey) {
+                                          openContactInNewTab(member.contactId, {
+                                            parentContactId: editContactId || loadedContact?.id,
+                                            returnTab: 'Family',
+                                          });
+                                        } else {
+                                          navigateToContact({ id: member.contactId, contactId: member.contactId });
+                                        }
+                                      }
                                     }}
-                                  />
-                                </div>
-                              )}
-                            </div>
-
-                            {/* NOT Declared Medical History */}
-                            <div className="col-span-3">
-                              <label className="label text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-2">NOT Declared Medical History</label>
-                              <div className="flex flex-wrap gap-x-6 gap-y-2">
-                                {['BP', 'Sugar', 'Heart', 'Thyroid', 'Others'].map((condition) => {
-                                  const isOthers = condition === 'Others';
-                                  const current = member.notDeclaredMedicalHistory || [];
-                                  const isSelected = isOthers
-                                    ? current.some((c: string) => !['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c))
-                                    : current.includes(condition);
-                                  return (
-                                    <label key={condition} className="flex flex-wrap items-center gap-1.5 cursor-pointer select-none">
-                                      <input
-                                        type="checkbox"
-                                        className="accent-orange-500 w-3.5 h-3.5"
-                                        checked={isSelected}
-                                        onChange={() => {
-                                          setFamilyMembers(prev => prev.map((m, i) => {
-                                            if (i !== idx) return m;
-                                            const list: string[] = m.notDeclaredMedicalHistory || [];
-                                            if (isOthers) {
-                                              if (isSelected) {
-                                                return {
-                                                  ...m,
-                                                  notDeclaredMedicalHistory: list.filter((c: string) => ['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c))
-                                                };
-                                              } else {
-                                                return {
-                                                  ...m,
-                                                  notDeclaredMedicalHistory: [...list, '']
-                                                };
-                                              }
-                                            } else {
-                                              return {
-                                                ...m,
-                                                notDeclaredMedicalHistory: isSelected
-                                                  ? list.filter((c: string) => c !== condition)
-                                                  : [...list, condition]
-                                              };
-                                            }
-                                          }));
-                                        }}
-                                      />
-                                      <span className="text-xs text-slate-600 font-medium">{condition}</span>
-                                    </label>
-                                  );
-                                })}
+                                    className="px-2.5 py-1 rounded-lg bg-white/20 hover:bg-white/30 text-white font-bold text-[10px] flex items-center gap-1 transition-all cursor-pointer"
+                                    title="Open this family member's direct Contact Form in same tab (Ctrl+Click or Ctrl+Enter to open in new tab)"
+                                  >
+                                    <ExternalLink size={12} />
+                                    <span className="hidden sm:inline">Open Contact</span>
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    if (e.ctrlKey || e.metaKey) {
+                                      e.preventDefault();
+                                      if (member.contactId) {
+                                        openContactInNewTab(member.contactId, {
+                                          parentContactId: editContactId || loadedContact?.id,
+                                          returnTab: 'Family',
+                                        });
+                                      } else {
+                                        const contactId = editContactId || loadedContact?.id;
+                                        if (contactId) openFamilyMemberInNewTab(contactId, idx);
+                                      }
+                                      return;
+                                    }
+                                    openEditFamilyMemberModal(idx);
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      if (e.ctrlKey || e.metaKey) {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        if (member.contactId) {
+                                          openContactInNewTab(member.contactId, {
+                                            parentContactId: editContactId || loadedContact?.id,
+                                            returnTab: 'Family',
+                                          });
+                                        } else {
+                                          const contactId = editContactId || loadedContact?.id;
+                                          if (contactId) openFamilyMemberInNewTab(contactId, idx);
+                                        }
+                                        return;
+                                      }
+                                    }
+                                  }}
+                                  className="p-1.5 rounded-lg bg-white/15 hover:bg-white/30 text-white font-bold text-xs flex items-center gap-1 transition-all cursor-pointer"
+                                  title="Edit Family Member Details in Popup (Ctrl+Click or Ctrl+Enter to open full profile in new tab)"
+                                >
+                                  <Pencil size={13} />
+                                  <span className="text-[11px]">Edit</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteFamilyMember(idx)}
+                                  className="p-1.5 rounded-lg bg-white/15 hover:bg-red-500 text-white transition-all cursor-pointer"
+                                  title="Remove Member"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
                               </div>
-                              {(member.notDeclaredMedicalHistory || []).some((c: string) => !['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c)) && (
-                                <div className="mt-2 animate-fadeIn">
-                                  <input
-                                    type="text"
-                                    className="input w-full text-xs py-1 px-2.5"
-                                    placeholder="Type medical conditions..."
-                                    value={(member.notDeclaredMedicalHistory || []).find((c: string) => !['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c)) || ''}
-                                    onChange={e => {
-                                      const val = e.target.value;
-                                      setFamilyMembers(prev => prev.map((m, i) => {
-                                        if (i !== idx) return m;
-                                        const current: string[] = m.notDeclaredMedicalHistory || [];
-                                        const baseVal = current.filter((c: string) => ['BP', 'Sugar', 'Heart', 'Thyroid'].includes(c));
-                                        return {
-                                          ...m,
-                                          notDeclaredMedicalHistory: [...baseVal, val]
-                                        };
-                                      }));
-                                    }}
-                                  />
-                                </div>
-                              )}
                             </div>
 
-                            {/* Details of Medical History */}
-                            <div className="col-span-3">
-                              <label className="label text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">Details of Medical History</label>
-                              <textarea
-                                className="input w-full resize-none"
-                                rows={2}
-                                placeholder="Add any additional medical history details..."
-                                value={member.medicalHistoryDetails || ''}
-                                onChange={e => setFamilyMembers(prev => prev.map((m, i) => i === idx ? { ...m, medicalHistoryDetails: e.target.value } : m))}
-                              />
+                            {/* Card Body Summary */}
+                            <div
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (e.ctrlKey || e.metaKey) {
+                                  if (member.contactId) {
+                                    openContactInNewTab(member.contactId, {
+                                      parentContactId: editContactId || loadedContact?.id,
+                                      returnTab: 'Family',
+                                    });
+                                  } else {
+                                    const contactId = editContactId || loadedContact?.id;
+                                    if (contactId) {
+                                      openFamilyMemberInNewTab(contactId, idx, {
+                                        parentContactId: contactId,
+                                        returnTab: 'Family',
+                                      });
+                                    }
+                                  }
+                                  return;
+                                }
+                                if (member.contactId) {
+                                  navigateToContact({ id: member.contactId, contactId: member.contactId });
+                                } else {
+                                  openEditFamilyMemberModal(idx);
+                                }
+                              }}
+                              className="p-3.5 bg-slate-50/40 hover:bg-slate-50/80 transition-colors cursor-pointer grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs text-slate-600"
+                              title="Click to view full contact profile with all tabs in same tab (Ctrl+Click or Ctrl+Enter to open in new tab)"
+                            >
+                              <div>
+                                <span className="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">Contact</span>
+                                <p className="font-semibold text-slate-800 flex items-center gap-1.5 truncate">
+                                  <Phone size={12} className="text-blue-500 shrink-0" />
+                                  {phoneVal || <span className="text-slate-400 font-normal">Not specified</span>}
+                                </p>
+                                {member.email && (
+                                  <p className="text-[11px] text-slate-500 truncate mt-0.5">
+                                    {member.email}
+                                  </p>
+                                )}
+                              </div>
+
+                              <div>
+                                <span className="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">Occupation &amp; Income</span>
+                                <p className="font-semibold text-slate-800 truncate">
+                                  {member.occupation || member.occupationType || 'Not specified'}
+                                </p>
+                                {(member.companyName || member.annualIncome) && (
+                                  <p className="text-[11px] text-slate-500 truncate mt-0.5">
+                                    {member.companyName ? member.companyName : ''} {member.annualIncome ? `• ₹${member.annualIncome}` : ''}
+                                  </p>
+                                )}
+                              </div>
+
+                              <div>
+                                <span className="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">Health &amp; Medical</span>
+                                {declaredCount > 0 ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-200 text-[11px] font-bold">
+                                    <Shield size={11} className="text-blue-600" />
+                                    {declaredCount} condition{declaredCount > 1 ? 's' : ''} declared
+                                  </span>
+                                ) : (
+                                  <span className="text-[11px] text-slate-400 font-medium">
+                                    No medical conditions declared
+                                  </span>
+                                )}
+                                {addressVal && (
+                                  <p className="text-[11px] text-slate-500 truncate mt-1">
+                                    📍 {addressVal}
+                                  </p>
+                                )}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </fieldset>
+                        );
+                      })}
+
+                      {/* Add Another Member Button */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          if (e.ctrlKey || e.metaKey) {
+                            e.preventDefault();
+                            const contactId = editContactId || loadedContact?.id;
+                            if (contactId) openFamilyMemberInNewTab(contactId);
+                            return;
+                          }
+                          openAddFamilyMemberModal();
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const contactId = editContactId || loadedContact?.id;
+                            if (contactId) openFamilyMemberInNewTab(contactId);
+                          }
+                        }}
+                        className="w-full mt-2 py-3 rounded-2xl border-2 border-dashed border-blue-300 hover:border-blue-500 bg-blue-50/40 hover:bg-blue-50 text-blue-600 hover:text-blue-700 text-xs font-extrabold flex items-center justify-center gap-2 transition-all cursor-pointer group"
+                        title="Add Another Family Member in same tab (Ctrl+Click or Ctrl+Enter to open in new tab)"
+                      >
+                        <Plus size={15} />
+                        + Add Another Family Member
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
-            {activeLeadTab === 'Policy' && (
-              <div className="h-full flex flex-col gap-3">
-                {editContactId && (
-                  <div className="bg-slate-50 border border-slate-200 text-slate-500 px-3.5 py-2.5 rounded-xl text-xs font-bold flex-shrink-0 shadow-2xs">
-                    <span>Contact details are read-only. Edit them in the Contacts module.</span>
-                  </div>
-                )}
-                <div className="flex items-center justify-between flex-shrink-0">
-                  <h3 className="text-base font-bold text-gray-800 text-sm">Policy Details</h3>
-                  {!editContactId && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveLeadTab('Policy');
-                        setPolicies(prev => [...prev, { policyType: 'Health', entries: [{ company: '', planName: '', policyNo: '', startDate: '', duration: '1 Year', endDate: '', premium: '', sumInsured: '', deductible: '', sumAssured: '', maturityDate: '', paymentTerm: '', entryType: 'New' }] }]);
-                      }}
-                      className="flex flex-wrap items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg cursor-pointer transition-colors"
-                    >
-                      + Add Policy
-                    </button>
-                  )}
-                </div>
+            {activeLeadTab === 'Policy' && (() => {
+              // Collect all connected family contact IDs
+              const connectedContactIds = new Set<string>();
+              if (loadedContact?.id) connectedContactIds.add(String(loadedContact.id));
+              if (loadedContact?.contactId) connectedContactIds.add(String(loadedContact.contactId));
+              if (editContactId) connectedContactIds.add(String(editContactId));
 
-                <fieldset disabled={!!editContactId} className="flex-1 overflow-y-auto pr-0.5 min-h-0">
-                  <div className="space-y-4">
-                    {policies.length === 0 ? (
-                      <div className="flex items-center justify-center border border-dashed border-gray-200 rounded-xl bg-gray-50/50" style={{ minHeight: '120px' }}>
-                        <p className="text-xs text-gray-400 font-medium">No policies found for this contact.</p>
-                      </div>
-                    ) : (
-                      policies.map((pGroup, gIdx) => (
-                        <div key={gIdx} className="border border-gray-200 rounded-xl bg-white shadow-sm overflow-hidden">
-                          <div className="flex items-center justify-between px-4 py-2 bg-slate-50 border-b border-gray-100">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-xs font-extrabold text-slate-600">Type:</span>
-                              <select
-                                value={pGroup.policyType}
-                                onChange={e => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, policyType: e.target.value } : pg))}
-                                className="bg-transparent border-none text-xs font-extrabold text-blue-600 focus:ring-0 cursor-pointer p-0"
-                              >
-                                <option value="Health">Health</option>
-                                <option value="Life">Life</option>
-                              </select>
-                            </div>
-                            {!editContactId && (
-                              <button
-                                type="button"
-                                onClick={() => setPolicies(prev => prev.filter((_, gi) => gi !== gIdx))}
-                                className="text-xs text-red-500 hover:text-red-700 font-bold"
-                              >
-                                Remove Card
-                              </button>
-                            )}
-                          </div>
+              (loadedContact?.relatedTo || []).forEach((r: any) => {
+                if (r.primaryContactId) connectedContactIds.add(String(r.primaryContactId));
+                if (r.primaryContact?.id) connectedContactIds.add(String(r.primaryContact.id));
+              });
 
-                          <div className="p-3 space-y-3">
-                            {pGroup.entries.map((entry: any, eIdx: number) => (
-                              <div key={eIdx} className="p-3 bg-slate-50/50 border border-slate-100 rounded-xl space-y-3">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-[10px] font-bold text-slate-400">Entry #{eIdx + 1}</span>
-                                  {pGroup.entries.length > 1 && !editContactId && (
-                                    <button
-                                      type="button"
-                                      onClick={() => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, entries: pg.entries.filter((_: any, ei: number) => ei !== eIdx) } : pg))}
-                                      className="text-[10px] text-red-500 hover:underline"
-                                    >
-                                      Remove Entry
-                                    </button>
-                                  )}
-                                </div>
+              (loadedContact?.relationships || []).forEach((r: any) => {
+                if (r.relatedContactId) connectedContactIds.add(String(r.relatedContactId));
+                if (r.relatedContact?.id) connectedContactIds.add(String(r.relatedContact.id));
+                if (r.primaryContactId) connectedContactIds.add(String(r.primaryContactId));
+                if (r.primaryContact?.id) connectedContactIds.add(String(r.primaryContact.id));
+              });
 
-                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                                  <div>
-                                    <label className="label text-[10px]">Company</label>
-                                    <input
-                                      type="text"
-                                      className="input w-full mt-1 text-xs"
-                                      placeholder="Company name"
-                                      value={entry.company}
-                                      onChange={e => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, entries: pg.entries.map((en: any, ei: number) => ei === eIdx ? { ...en, company: e.target.value } : en) } : pg))}
-                                    />
-                                  </div>
-                                  <div>
-                                    <label className="label text-[10px]">Plan Name</label>
-                                    <input
-                                      type="text"
-                                      className="input w-full mt-1 text-xs"
-                                      placeholder="Plan name"
-                                      value={entry.planName}
-                                      onChange={e => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, entries: pg.entries.map((en: any, ei: number) => ei === eIdx ? { ...en, planName: e.target.value } : en) } : pg))}
-                                    />
-                                  </div>
-                                  <div>
-                                    <label className="label text-[10px]">Policy Number</label>
-                                    <input
-                                      type="text"
-                                      className="input w-full mt-1 text-xs"
-                                      placeholder="Policy No"
-                                      value={entry.policyNo}
-                                      onChange={e => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, entries: pg.entries.map((en: any, ei: number) => ei === eIdx ? { ...en, policyNo: e.target.value } : en) } : pg))}
-                                    />
-                                  </div>
-                                  <div>
-                                    <label className="label text-[10px]">Start Date</label>
-                                    <DatePicker
-                                      className="input w-full mt-1 text-xs"
-                                      value={entry.startDate}
-                                      onChange={val => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? {
-                                        ...pg,
-                                        entries: pg.entries.map((en: any, ei: number) => {
-                                          if (ei !== eIdx) return en;
-                                          const updatedTenure = calculateTenureFromDates(val, en.endDate) || en.duration;
-                                          return { ...en, startDate: val, duration: updatedTenure };
-                                        })
-                                      } : pg))}
-                                    />
-                                  </div>
-                                  <div>
-                                    <label className="label text-[10px]">End Date</label>
-                                    <DatePicker
-                                      className="input w-full mt-1 text-xs"
-                                      value={entry.endDate}
-                                      onChange={val => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? {
-                                        ...pg,
-                                        entries: pg.entries.map((en: any, ei: number) => {
-                                          if (ei !== eIdx) return en;
-                                          const updatedTenure = calculateTenureFromDates(en.startDate, val) || en.duration;
-                                          return { ...en, endDate: val, duration: updatedTenure };
-                                        })
-                                      } : pg))}
-                                    />
-                                  </div>
-                                  <div>
-                                    <label className="label text-[10px]">{pGroup.policyType === 'Health' ? 'Premium (₹)' : 'Premium (₹)'}</label>
-                                    <input
-                                      type="number"
-                                      className="input w-full mt-1 text-xs"
-                                      placeholder="Premium"
-                                      value={entry.premium}
-                                      onChange={e => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, entries: pg.entries.map((en: any, ei: number) => ei === eIdx ? { ...en, premium: e.target.value } : en) } : pg))}
-                                    />
-                                  </div>
-                                  <div>
-                                    <label className="label text-[10px]">{pGroup.policyType === 'Health' ? 'Sum Insured (₹)' : 'Sum Assured (₹)'}</label>
-                                    <select
-                                      className="input w-full mt-1 text-xs bg-white"
-                                      value={pGroup.policyType === 'Health' ? entry.sumInsured : entry.sumAssured}
-                                      onChange={e => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, entries: pg.entries.map((en: any, ei: number) => ei === eIdx ? { ...en, [pGroup.policyType === 'Health' ? 'sumInsured' : 'sumAssured']: e.target.value } : en) } : pg))}
-                                    >
-                                      <option value="">Select Sum Insured</option>
-                                      {SUM_INSURED_OPTIONS.map(opt => (
-                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
-                                      ))}
-                                    </select>
-                                  </div>
-                                  <div>
-                                    <label className="label text-[10px]">Deductible (₹) <span className="text-red-500">*</span></label>
-                                    <input
-                                      type="number"
-                                      step="any"
-                                      required
-                                      className="input w-full mt-1 text-xs"
-                                      placeholder="Enter deductible"
-                                      value={entry.deductible || ''}
-                                      onChange={e => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, entries: pg.entries.map((en: any, ei: number) => ei === eIdx ? { ...en, deductible: e.target.value } : en) } : pg))}
-                                    />
-                                  </div>
-                                  <div>
-                                    <label className="label text-[10px]">Riders / Add-ons</label>
-                                    <select
-                                      className="input w-full mt-1 text-xs bg-white"
-                                      value={entry.riders || ''}
-                                      onChange={e => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, entries: pg.entries.map((en: any, ei: number) => ei === eIdx ? { ...en, riders: e.target.value } : en) } : pg))}
-                                    >
-                                      <option value="">Select Rider / Add-on</option>
-                                      {RIDER_OPTIONS.map(r => (
-                                        <option key={r} value={r}>{r}</option>
-                                      ))}
-                                    </select>
-                                  </div>
-                                  <div>
-                                    <label className="label text-[10px]">Policy Tenure</label>
-                                    <input
-                                      type="text"
-                                      className="input w-full mt-1 text-xs"
-                                      placeholder="e.g. 1 Year"
-                                      value={entry.duration || ''}
-                                      onChange={e => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, entries: pg.entries.map((en: any, ei: number) => ei === eIdx ? { ...en, duration: e.target.value } : en) } : pg))}
-                                    />
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                            {!editContactId && (
-                              <button
-                                type="button"
-                                onClick={() => setPolicies(prev => prev.map((pg, gi) => gi === gIdx ? { ...pg, entries: [...pg.entries, { company: '', planName: '', policyNo: '', startDate: '', duration: '1 Year', endDate: '', premium: '', sumInsured: '', deductible: '', sumAssured: '', maturityDate: '', paymentTerm: '', entryType: 'New' }] } : pg))}
-                                className="w-full py-2 border border-dashed border-slate-300 hover:border-slate-400 rounded-xl text-xs font-semibold text-slate-600 hover:text-slate-700 bg-white"
-                              >
-                                + Add Entry
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </fieldset>
-              </div>
-            )}
+              familyMembers.forEach((m: any) => {
+                if (m.contactId) connectedContactIds.add(String(m.contactId));
+                if (m.id) connectedContactIds.add(String(m.id));
+              });
 
-            {activeLeadTab === 'Claims' && (() => {
-              // 1. Gather all policy IDs for current contact
-              const directPolicies = loadedContact?.policies || [];
-              const mapPol1 = loadedContact?.id ? (policyMap[loadedContact.id] || []) : [];
-              const mapPol2 = loadedContact?.contactId ? (policyMap[loadedContact.contactId] || []) : [];
-              const mapPol3 = editContactId ? (policyMap[editContactId] || []) : [];
-              const contactPolicyIds = new Set(
-                [...directPolicies, ...mapPol1, ...mapPol2, ...mapPol3]
-                  .map((p: any) => p?.id)
-                  .filter(Boolean)
-              );
+              const direct = loadedContact?.policies || [];
+              const mappedFromPolicyMap = Array.from(connectedContactIds).flatMap(cid => policyMap[cid] || []);
+
+              // Also match by contact full name & contact number in policyListArray
+              const contactFullName = [
+                loadedContact?.firstName || personalFields?.firstName || '',
+                loadedContact?.middleName || personalFields?.middleName || '',
+                loadedContact?.lastName || personalFields?.lastName || ''
+              ].filter(Boolean).join(' ').trim().toLowerCase();
 
               const contactPhone = (
                 loadedContact?.phone ||
-                personalFields?.callingNumber ||
                 personalFields?.whatsappNumber ||
+                personalFields?.callingNumber ||
                 ''
-              ).trim();
+              ).replace(/\D/g, '').slice(-10);
 
-              const contactFullName = `${loadedContact?.firstName || personalFields?.firstName || ''} ${loadedContact?.lastName || personalFields?.lastName || ''}`.trim().toLowerCase();
+              // Gather connected family members' full names & contact numbers
+              const familyClusters: Array<{ fullName: string; phone: string }> = [];
+              if (contactFullName && contactPhone && contactPhone.length >= 7) {
+                familyClusters.push({ fullName: contactFullName, phone: contactPhone });
+              }
+              familyMembers.forEach((m: any) => {
+                const famFullName = (
+                  m.name ||
+                  [m.firstName, m.middleName, m.lastName].filter(Boolean).join(' ')
+                ).trim().toLowerCase();
+                const famPhone = (m.phone || m.mobile || m.contactNo || '').replace(/\D/g, '').slice(-10);
+                if (famFullName && famPhone && famPhone.length >= 7) {
+                  familyClusters.push({ fullName: famFullName, phone: famPhone });
+                }
+              });
+
+              const matchedFromAllPolicies = policyListArray.filter((p: any) => {
+                const pContactId = String(p.contactId || p.contact?.id || p.contact?.contactId || '');
+                if (pContactId && connectedContactIds.has(pContactId)) return true;
+
+                if (Array.isArray(p.members)) {
+                  const hasMemberId = p.members.some((m: any) => m.contactId && connectedContactIds.has(String(m.contactId)));
+                  if (hasMemberId) return true;
+                }
+
+                // Match ONLY when BOTH full name AND contact number match together
+                const pContactFullName = [
+                  p.contact?.firstName || '',
+                  p.contact?.middleName || '',
+                  p.contact?.lastName || ''
+                ].filter(Boolean).join(' ').trim().toLowerCase();
+                const pPhone = String(p.contact?.phone || '').replace(/\D/g, '').slice(-10);
+
+                if (contactFullName && contactPhone && contactPhone.length >= 7) {
+                  if (pContactFullName === contactFullName && pPhone === contactPhone) {
+                    return true;
+                  }
+                }
+
+                if (familyClusters.length > 0 && pContactFullName && pPhone && pPhone.length >= 7) {
+                  const matchesFamily = familyClusters.some(fc => fc.fullName === pContactFullName && fc.phone === pPhone);
+                  if (matchesFamily) return true;
+                }
+
+                return false;
+              });
+
+              const combined = [...direct, ...mappedFromPolicyMap, ...matchedFromAllPolicies];
+              const uniqueMap = new Map();
+              combined.forEach(p => { if (p && p.id) uniqueMap.set(p.id, p); });
+              const displayedPolicies = Array.from(uniqueMap.values());
+
+              const isPolicyActive = (p: any) => {
+                const statusUpper = (p.status || 'ACTIVE').toUpperCase();
+                if (['EXPIRED', 'LAPSED', 'CANCELLED', 'INACTIVE'].includes(statusUpper)) {
+                  return false;
+                }
+                if (p.endDate && new Date(p.endDate) < new Date()) {
+                  return false;
+                }
+                return true;
+              };
+
+              const activePolicies = displayedPolicies.filter(isPolicyActive);
+              const historicalPolicies = displayedPolicies.filter(p => !isPolicyActive(p));
+
+              const renderPolicyCard = (policy: any) => {
+                const isExpanded = !!expandedPolicyIds[policy.id];
+                const type = (policy.plan?.category || 'OTHER').toUpperCase();
+                const typeLabel = type === 'HEALTH' ? 'Health' : type === 'LIFE' ? 'Life' : type.charAt(0) + type.slice(1).toLowerCase();
+                const isActive = isPolicyActive(policy);
+                const displayStatus = policy.status || (isActive ? 'ACTIVE' : 'EXPIRED');
+                const borderTone = isActive
+                  ? (type === 'HEALTH' ? 'border-emerald-200' : type === 'LIFE' ? 'border-blue-200' : 'border-slate-200')
+                  : 'border-amber-200 opacity-90';
+                const headerTone = isActive
+                  ? (type === 'HEALTH' ? 'from-emerald-500 to-teal-600' : type === 'LIFE' ? 'from-blue-500 to-indigo-600' : 'from-slate-600 to-slate-700')
+                  : 'from-amber-600 to-orange-700';
+                const statusTone = isActive ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-amber-50 text-amber-700 border-amber-100';
+
+                return (
+                  <div
+                    key={policy.id}
+                    className={`overflow-hidden rounded-2xl border ${borderTone} bg-white shadow-sm hover:shadow-md hover:border-blue-300 transition-all pointer-events-auto relative z-10`}
+                  >
+                    {/* Header / Minimized Summary Bar (Clicking card opens Policy Form in View Mode) */}
+                    <div
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (e.ctrlKey || e.metaKey) {
+                          const contactId = editContactId || loadedContact?.id;
+                          if (contactId && policy?.id) {
+                            openPolicyInNewTab(contactId, policy.id);
+                          }
+                          return;
+                        }
+                        if (policy) {
+                          setPolicyToEdit(policy);
+                          setCreatePolicyModalOpen(true);
+                        }
+                      }}
+                      className={`flex items-center justify-between bg-gradient-to-r ${headerTone} px-4 py-3 cursor-pointer select-none`}
+                      title="Click to open Policy Form in View Mode (Ctrl+Click to open in new tab)"
+                    >
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <div className="w-8 h-8 rounded-xl bg-white/15 backdrop-blur-sm flex items-center justify-center text-white shrink-0">
+                          <Shield size={16} />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-[10px] font-black uppercase tracking-[0.22em] text-white/80">{typeLabel}</span>
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wide border ${statusTone}`}>{displayStatus}</span>
+                          </div>
+                          <p className="text-white font-extrabold text-sm truncate mt-0.5">{policy.policyNumber || 'Policy Number'}</p>
+                        </div>
+                      </div>
+
+                      {/* Expand / Collapse toggle button for inline card summary */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setExpandedPolicyIds(prev => ({ ...prev, [policy.id]: !prev[policy.id] }));
+                        }}
+                        className="p-1.5 rounded-xl bg-white/15 hover:bg-white/25 backdrop-blur-sm text-white transition-all cursor-pointer shrink-0 ml-1.5"
+                        title={isExpanded ? 'Collapse inline summary' : 'Expand inline summary'}
+                      >
+                        {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                      </button>
+                    </div>
+
+                    {/* Expanded Details Section */}
+                    {isExpanded && (
+                      <div className="p-4 space-y-4 border-t border-slate-100 bg-slate-50/40">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div className="rounded-xl bg-white p-3 border border-slate-100 shadow-2xs">
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Company</p>
+                            <p className="text-xs font-bold text-slate-800 truncate mt-0.5">{policy.plan?.company?.name || policy.plan?.name || 'Insurance Co.'}</p>
+                          </div>
+                          <div className="rounded-xl bg-white p-3 border border-slate-100 shadow-2xs">
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Plan</p>
+                            <p className="text-xs font-bold text-slate-800 truncate mt-0.5">{policy.plan?.name || 'Standard Plan'}</p>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-slate-600">
+                          <div className="rounded-xl border border-slate-100 bg-white p-2.5 shadow-2xs">
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sum Assured</p>
+                            <p className="text-xs font-extrabold text-slate-900 mt-0.5">₹{(policy.sumAssured || 0).toLocaleString('en-IN')}</p>
+                          </div>
+                          <div className="rounded-xl border border-slate-100 bg-white p-2.5 shadow-2xs">
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Premium</p>
+                            <p className="text-xs font-extrabold text-emerald-700 mt-0.5">₹{(policy.premiumAmount || 0).toLocaleString('en-IN')}</p>
+                          </div>
+                          <div className="rounded-xl border border-slate-100 bg-white p-2.5 shadow-2xs">
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Frequency</p>
+                            <p className="text-xs font-bold text-slate-700 mt-0.5">{policy.paymentFrequency || 'Yearly'}</p>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-slate-600">
+                          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-100 bg-white p-2.5 shadow-2xs">
+                            <Calendar size={13} className="text-slate-400 shrink-0" />
+                            <div>
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Start</p>
+                              <p className="text-xs font-semibold text-slate-700">{policy.startDate ? new Date(policy.startDate).toLocaleDateString('en-IN') : '—'}</p>
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-100 bg-slate-50/70 px-3 py-2.5">
+                            <Calendar size={13} className="text-slate-400 shrink-0" />
+                            <div>
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">End</p>
+                              <p className="text-xs font-semibold text-slate-700">{policy.endDate ? new Date(policy.endDate).toLocaleDateString('en-IN') : '—'}</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Connected Persons / Covered Members on this Policy */}
+                        {(() => {
+                          const pMembers: any[] = [];
+                          const seenPM = new Set<string>();
+                          if (Array.isArray(policy.members)) {
+                            policy.members.forEach((m: any) => {
+                              const name = (m.name || `${m.firstName || ''} ${m.lastName || ''}`).trim();
+                              if (name && !seenPM.has(name.toLowerCase())) {
+                                seenPM.add(name.toLowerCase());
+                                pMembers.push({
+                                  id: m.id,
+                                  name,
+                                  relationship: m.relationship || 'Member',
+                                  phone: m.phone || m.contactNo || '',
+                                });
+                              }
+                            });
+                          }
+                          if (policy.notes) {
+                            policy.notes.split('\n').forEach((line: string, i: number) => {
+                              if (line.startsWith('Connected Person')) {
+                                const nameM = line.match(/Name:\s*([^,]+)/);
+                                const relM = line.match(/Relationship:\s*([^,]+)/);
+                                const contactM = line.match(/Contact:\s*([^,]+)/);
+                                if (nameM) {
+                                  const name = nameM[1].trim();
+                                  if (name && !seenPM.has(name.toLowerCase())) {
+                                    seenPM.add(name.toLowerCase());
+                                    pMembers.push({
+                                      id: `note-m-${i}`,
+                                      name,
+                                      relationship: relM ? relM[1].trim() : 'Member',
+                                      phone: contactM && contactM[1].trim() !== 'N/A' ? contactM[1].trim() : '',
+                                    });
+                                  }
+                                }
+                              }
+                            });
+                          }
+                          if (pMembers.length === 0 && Array.isArray(familyMembers) && familyMembers.length > 0) {
+                            familyMembers.forEach((fm: any, i: number) => {
+                              const name = (fm.name || `${fm.firstName || ''} ${fm.lastName || ''}`).trim();
+                              if (name && !seenPM.has(name.toLowerCase())) {
+                                seenPM.add(name.toLowerCase());
+                                pMembers.push({
+                                  id: fm.id || fm.contactId || `fm-${i}`,
+                                  name,
+                                  relationship: fm.relation || fm.relationship || 'Member',
+                                  phone: fm.phone || fm.contactNo || fm.whatsapp || '',
+                                });
+                              }
+                            });
+                          }
+                          if (pMembers.length === 0 && Array.isArray(loadedContact?.relationships) && loadedContact.relationships.length > 0) {
+                            loadedContact.relationships.forEach((rel: any, i: number) => {
+                              const target = rel.relatedContact || rel.contact || rel;
+                              const name = (target?.name || `${target?.firstName || ''} ${target?.lastName || ''}`).trim();
+                              if (name && !seenPM.has(name.toLowerCase())) {
+                                seenPM.add(name.toLowerCase());
+                                pMembers.push({
+                                  id: target?.id || rel.id || `rel-${i}`,
+                                  name,
+                                  relationship: rel.relationshipType || rel.relation || target?.relation || 'Member',
+                                  phone: target?.phone || target?.contactNo || '',
+                                });
+                              }
+                            });
+                          }
+                          if (pMembers.length === 0) return null;
+                          return (
+                            <div className="rounded-xl border border-blue-100 bg-blue-50/30 p-2.5 shadow-2xs">
+                              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                                <Users size={12} className="text-blue-600" /> Connected Persons ({pMembers.length})
+                              </p>
+                              <div className="flex flex-wrap gap-2">
+                                {pMembers.map((m, mIdx) => (
+                                  <div
+                                    key={m.id || mIdx}
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-slate-200 shadow-2xs text-xs font-semibold text-slate-800"
+                                  >
+                                    <span>{m.name}</span>
+                                    {m.relationship && (
+                                      <span className="text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">
+                                        {m.relationship}
+                                      </span>
+                                    )}
+                                    {m.phone && (
+                                      <span className="text-[10px] text-slate-400 font-normal">
+                                        · {m.phone}
+                                      </span>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                        <div className="flex justify-end pt-2 border-t border-slate-200/80 mt-2">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (e.ctrlKey || e.metaKey) {
+                                const contactId = editContactId || loadedContact?.id;
+                                if (contactId && policy?.id) {
+                                  openPolicyInNewTab(contactId, policy.id);
+                                }
+                                return;
+                              }
+                              if (policy) {
+                                setPolicyToEdit(policy);
+                                setCreatePolicyModalOpen(true);
+                              }
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors cursor-pointer"
+                            title="Open Policy Form (Ctrl+Click to open in new tab)"
+                          >
+                            <FileText size={13} /> Open Policy Form
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              };
+
+              return (
+                <div className="h-full flex flex-col">
+                  {/* Action buttons */}
+                  <div className="flex items-center justify-between gap-3 mb-3 flex-shrink-0">
+                    <p className="text-[11px] text-slate-500 font-semibold">
+                      Policies are created in the main policy form and will appear here after saving.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        const contactId = editContactId || loadedContact?.id;
+                        if (!contactId) {
+                          toast.error('Please save the contact details first before adding a policy.');
+                          return;
+                        }
+                        if (e.ctrlKey || e.metaKey) {
+                          openPolicyInNewTab(contactId);
+                          return;
+                        }
+                        setPolicyToEdit(null);
+                        setCreatePolicyModalOpen(true);
+                      }}
+                      className="flex items-center justify-center gap-2 px-4 py-2.5 border-2 border-blue-400 text-blue-600 text-xs font-semibold rounded-lg hover:bg-blue-50 cursor-pointer transition-colors"
+                      title="Add New Policy (Ctrl+Click to open in new tab)"
+                    >
+                      + Add New Policy
+                    </button>
+                  </div>
+
+                  <div className="space-y-5 mb-3 overflow-y-auto max-h-[60vh] custom-scrollbar pr-1">
+                    {displayedPolicies.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-6 py-10 text-center min-h-[180px]">
+                        <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mb-3">
+                          <FileText size={18} />
+                        </div>
+                        <p className="text-sm font-bold text-slate-700">No policies linked yet</p>
+                        <p className="text-[11px] text-slate-500 mt-1 max-w-[280px]">
+                          Add a policy from the main policy form and it will show up here as a summary card.
+                        </p>
+                      </div>
+                    ) : (
+                      <>
+                        {/* Active Policies Section */}
+                        {activePolicies.length > 0 && (
+                          <div className="space-y-2.5">
+                            <div className="flex items-center gap-2 px-1">
+                              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0" />
+                              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                                Active / Current Policies ({activePolicies.length})
+                              </h4>
+                            </div>
+                            <div className="grid gap-3">
+                              {activePolicies.map(renderPolicyCard)}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Historical / Expired Policies Section */}
+                        {historicalPolicies.length > 0 && (
+                          <div className="space-y-2.5 pt-2">
+                            <div className="flex items-center gap-2 px-1">
+                              <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shrink-0" />
+                              <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider">
+                                Historical / Expired Policies ({historicalPolicies.length})
+                              </h4>
+                            </div>
+                            <div className="grid gap-3">
+                              {historicalPolicies.map(renderPolicyCard)}
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {activeLeadTab === 'Claims' && (() => {
+              // 1. Gather all policy IDs for current contact & family members
+              const directPolicies = loadedContact?.policies || [];
+              const familyContactIds = new Set<string>([
+                loadedContact?.id,
+                loadedContact?.contactId,
+                editContactId
+              ].filter(Boolean));
+
+              (loadedContact?.relationships || []).forEach((r: any) => {
+                if (r.relatedContactId) familyContactIds.add(r.relatedContactId);
+                if (r.relatedContact?.id) familyContactIds.add(r.relatedContact.id);
+              });
+              (loadedContact?.relatedTo || []).forEach((r: any) => {
+                if (r.primaryContactId) familyContactIds.add(r.primaryContactId);
+                if (r.primaryContact?.id) familyContactIds.add(r.primaryContact.id);
+              });
+              familyMembers.forEach(m => {
+                if (m.contactId) familyContactIds.add(m.contactId);
+                if (m.id && typeof m.id === 'string' && /^[0-9a-fA-F]{24}$/.test(m.id)) familyContactIds.add(m.id);
+              });
+
+              const allPolList: any[] = [...directPolicies];
+              familyContactIds.forEach(cId => {
+                if (policyMap[cId]) allPolList.push(...policyMap[cId]);
+              });
+
+              const contactPolicyIds = new Set(
+                allPolList.map((p: any) => p?.id).filter(Boolean)
+              );
+
+              const contactPhones = new Set<string>();
+              if (loadedContact?.phone) contactPhones.add(loadedContact.phone.trim());
+              if (personalFields?.callingNumber) contactPhones.add(personalFields.callingNumber.trim());
+              if (personalFields?.whatsappNumber) contactPhones.add(personalFields.whatsappNumber.trim());
+              familyMembers.forEach(m => {
+                if (m.whatsapp) contactPhones.add(m.whatsapp.trim());
+                if (m.callingNumber) contactPhones.add(m.callingNumber.trim());
+              });
 
               // 2. Direct contact claims & mapped claims
               const directClaims = loadedContact?.claims || [];
-              const mapClaim1 = loadedContact?.id ? (claimMap[loadedContact.id] || []) : [];
-              const mapClaim2 = loadedContact?.contactId ? (claimMap[loadedContact.contactId] || []) : [];
-              const mapClaim3 = editContactId ? (claimMap[editContactId] || []) : [];
+              const mappedClaims: any[] = [];
+              familyContactIds.forEach(cId => {
+                if (claimMap[cId]) mappedClaims.push(...claimMap[cId]);
+              });
 
               // 3. Additional policy, phone & name matching across all loaded claims
+              const contactFullName = `${loadedContact?.firstName || personalFields?.firstName || ''} ${loadedContact?.lastName || personalFields?.lastName || ''}`.trim().toLowerCase();
+              const familyFullNames = familyMembers.map(m => `${m.firstName || ''} ${m.lastName || ''}`.trim().toLowerCase()).filter(Boolean);
+
               const matchedByPolicyOrPhone = claimListArray.filter((c: any) => {
                 if (c?.policyId && contactPolicyIds.has(c.policyId)) return true;
                 if (c?.policy?.id && contactPolicyIds.has(c.policy.id)) return true;
-                if (contactPhone && (c?.contact?.phone === contactPhone || c?.phone === contactPhone)) return true;
+                const claimPhone = (c?.contact?.phone || c?.phone || '').trim();
+                if (claimPhone && contactPhones.has(claimPhone)) return true;
 
                 const claimFullName = `${c?.contact?.firstName || ''} ${c?.contact?.lastName || ''}`.trim().toLowerCase();
                 if (contactFullName && claimFullName && (contactFullName === claimFullName || contactFullName.includes(claimFullName) || claimFullName.includes(contactFullName))) return true;
+                if (familyFullNames.some(fn => fn && claimFullName && (fn === claimFullName || fn.includes(claimFullName) || claimFullName.includes(fn)))) return true;
 
                 if (contactFullName && c?.notes && typeof c.notes === 'string' && c.notes.toLowerCase().includes(contactFullName)) return true;
 
@@ -5573,7 +6218,7 @@ export default function Leads() {
               });
 
               const uniqueClaimsMap = new Map();
-              [...directClaims, ...mapClaim1, ...mapClaim2, ...mapClaim3, ...matchedByPolicyOrPhone].forEach(c => {
+              [...directClaims, ...mappedClaims, ...matchedByPolicyOrPhone].forEach(c => {
                 if (c && c.id) uniqueClaimsMap.set(c.id, c);
               });
               const displayedContactClaims = Array.from(uniqueClaimsMap.values());
@@ -5763,46 +6408,6 @@ export default function Leads() {
               </div>
             )}
 
-            {activeLeadTab === 'WA Campaign' && (
-              <div className="space-y-4">
-                {editContactId && (
-                  <div className="bg-slate-50 border border-slate-200 text-slate-500 px-3.5 py-2.5 rounded-xl text-xs font-bold mb-4 shadow-2xs">
-                    <span>Contact campaigns are read-only. Edit them in the Contacts module.</span>
-                  </div>
-                )}
-                <div>
-                  <h3 className="text-xs font-semibold text-gray-800">Select Campaigns</h3>
-                  <p className="text-[11px] text-gray-500 mt-1">Choose which WhatsApp campaigns this lead should be part of:</p>
-                </div>
-                <fieldset disabled={!!editContactId} className="space-y-2 mt-3">
-                  {[
-                    'Health Awareness',
-                    'New Year Offer',
-                    'Pension Plan',
-                    'Monsoon Safety',
-                    'Term Insurance Promo',
-                    'Family Health Package'
-                  ].map((campaign) => (
-                    <label
-                      key={campaign}
-                      className="flex flex-wrap items-center gap-3 p-3 bg-gray-50/50 border border-gray-150 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors"
-                    >
-                      <input
-                        type="checkbox"
-                        className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                        checked={selectedCampaigns.includes(campaign)}
-                        onChange={() => {
-                          setSelectedCampaigns(prev =>
-                            prev.includes(campaign) ? prev.filter(c => c !== campaign) : [...prev, campaign]
-                          );
-                        }}
-                      />
-                      <span className="text-xs font-semibold text-gray-700">{campaign}</span>
-                    </label>
-                  ))}
-                </fieldset>
-              </div>
-            )}
 
             {activeLeadTab === 'History' && (
               <div className="space-y-4">
@@ -6228,6 +6833,63 @@ export default function Leads() {
         open={!!selectedClaimDetail}
         claim={selectedClaimDetail}
         onClose={() => setSelectedClaimDetail(null)}
+      />
+
+      <CreatePolicyModal
+        open={createPolicyModalOpen}
+        policyToEdit={policyToEdit}
+        onClose={() => {
+          setPolicyToEdit(null);
+          setCreatePolicyModalOpen(false);
+          qc.invalidateQueries({ queryKey: ['contacts-policies-list'] });
+          qc.invalidateQueries({ queryKey: ['policies'] });
+          if (editContactId) {
+            qc.invalidateQueries({ queryKey: ['contact', editContactId] });
+            loadContactById(editContactId);
+            setActiveLeadTab('Policy');
+          }
+        }}
+        contactId={editContactId || loadedContact?.id}
+        contactName={loadedContact ? [loadedContact.firstName, loadedContact.middleName, loadedContact.lastName].filter(Boolean).join(' ').trim() : undefined}
+        initialData={{
+          ...(loadedContact || {}),
+          familyMembers: familyMembers.length > 0 ? familyMembers : (loadedContact?.relationships || []),
+          relationships: loadedContact?.relationships || [],
+        }}
+        onSuccess={() => {
+          setPolicyToEdit(null);
+          qc.invalidateQueries({ queryKey: ['contacts-policies-list'] });
+          qc.invalidateQueries({ queryKey: ['policies'] });
+          qc.invalidateQueries({ queryKey: ['leads'] });
+          if (editContactId) {
+            qc.invalidateQueries({ queryKey: ['contact', editContactId] });
+            loadContactById(editContactId);
+          }
+        }}
+      />
+
+      <FamilyMemberModal
+        open={familyMemberModalOpen}
+        onClose={() => {
+          setFamilyMemberModalOpen(false);
+          setEditingFamilyMemberIdx(null);
+          setSelectedFamilyMemberForModal(null);
+        }}
+        initialData={selectedFamilyMemberForModal}
+        isEditing={editingFamilyMemberIdx !== null}
+        primaryContact={{
+          gender: personalFields.gender,
+          phone: personalFields.callingNumber || personalFields.whatsappNumber,
+          whatsappNumber: personalFields.whatsappNumber,
+          state: personalFields.state,
+          district: personalFields.district,
+          city: personalFields.city,
+          pincode: personalFields.pincode,
+          streetAddress: personalFields.streetAddress,
+          fullName: [personalFields.firstName, personalFields.middleName, personalFields.lastName].filter(Boolean).join(' ').trim(),
+        }}
+        employeesList={employeesList}
+        onSave={handleSaveFamilyMemberFromModal}
       />
 
     </div>

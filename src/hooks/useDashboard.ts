@@ -85,3 +85,12 @@ export function useRecentContacts() {
     staleTime: 2 * 60_000,
   });
 }
+
+export function useDashboardAnalytics() {
+  return useQuery({
+    queryKey:  ['dashboard', 'analytics'],
+    queryFn:   dashboardService.analytics,
+    staleTime: 60_000,
+  });
+}
+

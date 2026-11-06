@@ -453,7 +453,7 @@ export default function FamilyMemberModal({
       relation: val,
       gender: inferredGender || prev.gender,
       isDependent: prev.isDependent || isChild,
-      guardianWhatsapp: isChild && !prev.guardianWhatsapp ? (primaryContact.whatsappNumber || primaryContact.phone || '') : prev.guardianWhatsapp,
+      guardianWhatsapp: prev.guardianWhatsapp || '',
     }));
   };
 
@@ -494,16 +494,18 @@ export default function FamilyMemberModal({
     }
 
     const fullName = [formData.firstName, formData.middleName, formData.lastName].filter(Boolean).join(' ').trim();
+    const famPhone = formData.whatsappNumber || formData.whatsapp || formData.phone || formData.contactNo || '';
+    const famCall = formData.sameAsWhatsapp ? famPhone : (formData.callingNumber || formData.alternatePhone || '');
     const finalData = {
       ...formData,
       name: fullName,
       fullName,
-      whatsapp: formData.whatsappNumber || formData.whatsapp || formData.phone || formData.contactNo || formData.guardianWhatsapp || formData.dependentNo || '',
-      whatsappNumber: formData.whatsappNumber || formData.whatsapp || formData.phone || formData.contactNo || formData.guardianWhatsapp || formData.dependentNo || '',
-      phone: formData.whatsappNumber || formData.whatsapp || formData.phone || formData.contactNo || formData.guardianWhatsapp || formData.dependentNo || '',
-      contactNo: formData.whatsappNumber || formData.whatsapp || formData.phone || formData.contactNo || formData.guardianWhatsapp || formData.dependentNo || '',
-      callingNumber: formData.sameAsWhatsapp ? (formData.whatsappNumber || formData.whatsapp || formData.phone || formData.contactNo || formData.guardianWhatsapp || formData.dependentNo || '') : (formData.callingNumber || formData.alternatePhone || ''),
-      alternatePhone: formData.sameAsWhatsapp ? (formData.whatsappNumber || formData.whatsapp || formData.phone || formData.contactNo || formData.guardianWhatsapp || formData.dependentNo || '') : (formData.callingNumber || formData.alternatePhone || ''),
+      whatsapp: famPhone,
+      whatsappNumber: famPhone,
+      phone: famPhone,
+      contactNo: famPhone,
+      callingNumber: famCall,
+      alternatePhone: famCall,
       pan: (formData.pan || formData.panNumber || '').toUpperCase(),
       panNumber: (formData.panNumber || formData.pan || '').toUpperCase(),
       dob: formData.dob || formData.dateOfBirth || '',
